@@ -33,18 +33,82 @@ const productMoments = [
   },
 ]
 
-const analystCards = [
+// Demo company profiles for the analyst-brief preview card.
+// Synthetic sample data only — none of these are real businesses.
+// The default (first) profile is an HVAC shop for the trades wedge.
+// Add or reorder profiles here to change what the sales team can pitch.
+const demoProfiles = [
   {
-    label: 'Biggest concern',
-    value: 'Follow-up speed is leaking warm demand before quotes turn into closed work.',
+    key: 'hvac',
+    label: 'HVAC',
+    companyName: 'Copperline Heating & Air',
+    industryLine: 'HVAC · 8 techs · Residential + light commercial',
+    healthScore: 74,
+    ratingLabel: 'Fair',
+    summary:
+      'Revenue is steady, but profit can improve if the team fixes follow-up speed and protects the best lead sources.',
+    cards: [
+      {
+        label: 'Biggest concern',
+        value: 'Follow-up speed is leaking warm demand before quotes turn into closed work.',
+      },
+      {
+        label: 'Best opportunity',
+        value: 'Referral leads are producing the highest-margin jobs and deserve more investment.',
+      },
+      {
+        label: 'This week',
+        value: 'Clear the overdue estimate queue and inspect parts spend before margin slips further.',
+      },
+    ],
   },
   {
-    label: 'Best opportunity',
-    value: 'Referral leads are producing the highest-margin revenue and deserve more investment.',
+    key: 'plumbing',
+    label: 'Plumbing',
+    companyName: 'Blue Torch Plumbing Co.',
+    industryLine: 'Plumbing · 5 techs · Emergency + scheduled',
+    healthScore: 88,
+    ratingLabel: 'Strong',
+    summary:
+      'A healthy book of repeat customers and strong emergency margins — the risk is technician capacity on peak days.',
+    cards: [
+      {
+        label: 'Biggest concern',
+        value: 'Emergency calls are crowding out scheduled installs on peak days, pushing revenue into overtime.',
+      },
+      {
+        label: 'Best opportunity',
+        value: 'Maintenance-plan members convert to full replacements at 3x the rate of one-off callers.',
+      },
+      {
+        label: 'This week',
+        value: 'Block two install days and rebook the oldest open quotes before they go cold.',
+      },
+    ],
   },
   {
-    label: 'This week',
-    value: 'Clear the overdue lead queue and inspect materials spend before margin slips further.',
+    key: 'electrical',
+    label: 'Electrical',
+    companyName: 'Amp & Anchor Electric',
+    industryLine: 'Electrical · 6 techs · Residential + light commercial',
+    healthScore: 66,
+    ratingLabel: 'Needs work',
+    summary:
+      'Top-line growth is outpacing collections — tightening the estimate-to-invoice loop would unlock real cash.',
+    cards: [
+      {
+        label: 'Biggest concern',
+        value: 'Aging receivables: 31% of invoices sit past 30 days while material costs keep climbing.',
+      },
+      {
+        label: 'Best opportunity',
+        value: 'Panel upgrades carry the best margin in the book and close fastest from safety-inspection leads.',
+      },
+      {
+        label: 'This week',
+        value: 'Send payment reminders on the 12 overdue invoices and require deposits on jobs over $2,500.',
+      },
+    ],
   },
 ]
 
@@ -221,6 +285,14 @@ export default function MarketingHome() {
   const [scrolled, setScrolled] = useState(false)
   const [openFaq, setOpenFaq] = useState(null)
 
+  // Demo company profile for the analyst-brief preview card.
+  // Honors ?demo=<key> (e.g. ?demo=plumbing) so a pitch can be deep-linked.
+  const [profileKey, setProfileKey] = useState(() => {
+    const fromQuery = new URLSearchParams(window.location.search).get('demo')
+    return demoProfiles.some((p) => p.key === fromQuery) ? fromQuery : demoProfiles[0].key
+  })
+  const profile = demoProfiles.find((p) => p.key === profileKey) ?? demoProfiles[0]
+
   useEffect(() => {
     const handler = () => setScrolled(window.scrollY > 18)
     window.addEventListener('scroll', handler, { passive: true })
@@ -313,23 +385,42 @@ export default function MarketingHome() {
             <div className="absolute -inset-8 rounded-[2.8rem] bg-[radial-gradient(circle_at_top_right,rgba(37,99,235,0.22),transparent_34%),radial-gradient(circle_at_bottom_left,rgba(15,23,42,0.2),transparent_32%)] blur-3xl" />
             <div className="relative overflow-hidden rounded-[2.2rem] border border-white/70 bg-[linear-gradient(180deg,#08101d_0%,#0f172a_58%,#162340_100%)] p-5 shadow-[0_45px_110px_-52px_rgba(15,23,42,0.95)]">
               <div className="rounded-[1.7rem] border border-white/10 bg-[radial-gradient(circle_at_top_right,rgba(96,165,250,0.24),transparent_28%),linear-gradient(135deg,#0f172a_0%,#111827_48%,#1d4ed8_100%)] p-5 text-white">
+                <div className="mb-4 flex flex-wrap items-center gap-2" role="group" aria-label="Demo company profile">
+                  <span className="text-[0.68rem] font-semibold uppercase tracking-[0.26em] text-blue-100/55">Demo profile</span>
+                  {demoProfiles.map((p) => (
+                    <button
+                      key={p.key}
+                      type="button"
+                      aria-pressed={p.key === profile.key}
+                      onClick={() => { setProfileKey(p.key); trackCta('demo_profile_switch', p.key) }}
+                      className={`rounded-full px-3 py-1 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70 ${
+                        p.key === profile.key
+                          ? 'bg-white text-slate-900'
+                          : 'border border-white/15 bg-white/10 text-blue-100/70 hover:bg-white/20'
+                      }`}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                  <span className="rounded-full border border-white/15 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-blue-100/55">Sample data</span>
+                </div>
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                   <div>
                     <div className="text-[0.68rem] font-semibold uppercase tracking-[0.26em] text-blue-100/55">Analyst Brief Preview</div>
-                    <div className="mt-2 text-2xl font-semibold tracking-tight">6ix Bio Composites Inc</div>
-                    <div className="mt-2 text-sm leading-6 text-blue-100/72">Connected accounting and CRM activity.</div>
+                    <div className="mt-2 text-2xl font-semibold tracking-tight">{profile.companyName}</div>
+                    <div className="mt-2 text-sm leading-6 text-blue-100/72">{profile.industryLine}</div>
                   </div>
                   <div className="rounded-[1.25rem] border border-white/15 bg-white/10 px-4 py-3 text-right backdrop-blur">
                     <div className="text-[11px] uppercase tracking-[0.18em] text-blue-100/58">Health Score</div>
-                    <div className="mt-1 text-4xl font-semibold tracking-tight">81</div>
-                    <div className="text-sm text-blue-100/72">Strong</div>
+                    <div className="mt-1 text-4xl font-semibold tracking-tight">{profile.healthScore}</div>
+                    <div className="text-sm text-blue-100/72">{profile.ratingLabel}</div>
                   </div>
                 </div>
                 <div className="mt-5 rounded-[1.45rem] border border-white/10 bg-white/10 p-4 text-sm leading-7 text-blue-50/88">
-                  Revenue is steady, but profit can improve if the team fixes follow-up speed and protects the best lead sources.
+                  {profile.summary}
                 </div>
                 <div className="mt-5 grid gap-3 md:grid-cols-3">
-                  {analystCards.map((item) => (
+                  {profile.cards.map((item) => (
                     <div key={item.label} className="rounded-[1.25rem] border border-white/10 bg-white/8 p-4 backdrop-blur-sm">
                       <div className="text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-blue-100/50">{item.label}</div>
                       <div className="mt-3 text-sm leading-6 text-white">{item.value}</div>
