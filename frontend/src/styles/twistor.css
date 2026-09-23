@@ -98,8 +98,17 @@
   animation-play-state: paused;
 }
 
-/* ---- reduced-motion kill switch: no ambient animation, reveals snap in ---- */
-@media (prefers-reduced-motion: reduce) {
+/* ---- story arc progress rail (TW-165; active state driven imperatively via
+ * data-active so no React state runs on the scroll path) ---- */
+.story-rail-btn[data-active='true'] {
+  background: rgb(245 185 66 / 0.15);
+  color: var(--tt-gold-300);
+}
+.story-rail-btn[data-active='true'] .story-rail-index {
+  color: rgb(248 205 122 / 0.7);
+}
+
+/* ---- reduced-motion kill switch: no ambient animation, reveals snap in ---- */@media (prefers-reduced-motion: reduce) {
   .marquee-track {
     animation: none;
   }

@@ -118,3 +118,12 @@ export function Download(props) {
     </Base>
   )
 }
+
+/** Phone — missed-call / "the leak" story beat. */
+export function Phone(props) {
+  return (
+    <Base {...props}>
+      <path d="M5 4h4l1.5 4.5L8 10.5a12 12 0 0 0 5.5 5.5l2-2.5L20 15v4a1.5 1.5 0 0 1-1.6 1.5C10.7 20 4 13.3 3.5 5.6A1.5 1.5 0 0 1 5 4Z" />
+    </Base>
+  )
+}

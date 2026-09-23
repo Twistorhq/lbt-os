@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '@clerk/clerk-react'
 import { Ambient, DepthStage, DriftImage, Parallax, Reveal, ScrollScale } from '../components/motion'
 import SampleCharts from '../components/marketing/SampleCharts'
+import StoryArc from '../components/StoryArc'
 import {
   ArrowRight,
   Check,
@@ -271,8 +272,8 @@ function Hero({ onCta, ctaUrl }) {
       </Ambient>
       <div className="relative mx-auto grid max-w-7xl items-center gap-14 px-6 pb-24 pt-16 sm:pt-20 lg:grid-cols-2 xl:px-8">
         <Parallax mode="copy">
-          <div className="inline-flex items-center gap-2 whitespace-nowrap rounded-full border border-white/15 bg-white/5 px-4 py-2 text-gold-300">
-            <span className="h-1.5 w-1.5 rounded-full bg-gold-400" aria-hidden="true" />
+          <div className="inline-flex max-w-full flex-wrap items-center justify-center gap-2 rounded-full border border-white/15 bg-white/5 px-4 py-2 text-gold-300">
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-gold-400" aria-hidden="true" />
             <span className="tt-kicker">Built for home-service businesses</span>
           </div>
           <h1 id="hero-heading" className="mt-6 max-w-2xl text-5xl font-bold leading-[1.02] tracking-tight sm:text-6xl xl:text-7xl">
@@ -767,6 +768,7 @@ export default function MarketingHome() {
       <Header onCta={trackCta} ctaUrl={ctaUrl} />
       <main>
         <Hero onCta={trackCta} ctaUrl={ctaUrl} />
+        <StoryArc onCta={trackCta} ctaUrl={ctaUrl} />
         <RoadmapMarquee />
         <HowItWorks />
         <LivePreview onCta={trackCta} ctaUrl={ctaUrl} />
