@@ -133,12 +133,29 @@ export function buildAgentPrompt(userAsk) {
   ].join('\n')
 }
 
-/** Validate an agent-emitted spec against this catalog. Returns { ok, issues }. */
+/**
+ * Validate an agent-emitted spec against this catalog.
+ * Enforces the documented contract: every key referenced in a "children"
+ * array must exist in "elements" (the catalog-level zod check alone does
+ * not cover cross-references). Returns { ok, issues }.
+ */
 export function validateAgentSpec(spec) {
+  const issues = []
   const result = twistorCatalog.validate(spec)
-  return {
-    ok: result.success === true,
-    issues: result.error ? result.error.issues ?? [] : [],
-    raw: result,
+  if (result.success !== true) {
+    if (result.error) issues.push(...(result.error.issues ?? []))
+    return { ok: false, issues, raw: result }
   }
+  const elements = spec?.elements ?? {}
+  for (const [key, el] of Object.entries(elements)) {
+    for (const childKey of el?.children ?? []) {
+      if (!Object.prototype.hasOwnProperty.call(elements, childKey)) {
+        issues.push({
+          code: 'dangling_child',
+          message: `Element "${key}" references missing child "${childKey}".`,
+        })
+      }
+    }
+  }
+  return { ok: issues.length === 0, issues, raw: result }
 }

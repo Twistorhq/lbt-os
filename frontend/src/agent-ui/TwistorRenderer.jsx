@@ -24,36 +24,44 @@ function FallbackCard({ reason }) {
   )
 }
 
-function renderElement(spec, key, registry, propsByType, onAction, seen) {
+/** Maximum spec-tree depth — defense against pathological non-cyclic chains. */
+const MAX_DEPTH = 25
+
+function renderElement(spec, key, registry, propsByType, onAction, seen, depth) {
+  if (depth > MAX_DEPTH) {
+    console.warn(`[TwistorRenderer] max depth exceeded at "${key}" — skipping`)
+    return null
+  }
   if (seen.has(key)) {
     console.warn(`[TwistorRenderer] cycle detected at element "${key}" — skipping`)
     return null
   }
-  const el = spec.elements?.[key]
-  if (!el) {
+  const root = spec.elements?.[key]
+  if (!root) {
     console.warn(`[TwistorRenderer] missing element "${key}" — skipping`)
     return null
   }
-  const Impl = registry[el.type]
+  const Impl = registry[root.type]
   if (!Impl) {
-    return <FallbackCard key={key} reason={`Unknown component type "${el.type}".`} />
+    return <FallbackCard key={key} reason={`Unknown component type "${root.type}".`} />
   }
-  const zodSchema = propsByType[el.type]
+  let props = root.props ?? {}
+  const zodSchema = propsByType[root.type]
   if (zodSchema) {
-    const parsed = zodSchema.safeParse(el.props ?? {})
+    const parsed = zodSchema.safeParse(props)
     if (!parsed.success) {
-      console.warn(`[TwistorRenderer] invalid props for "${el.type}" (${key}):`, parsed.error.issues)
-      return <FallbackCard key={key} reason={`"${el.type}" received invalid data.`} />
+      console.warn(`[TwistorRenderer] invalid props for "${root.type}" (${key}):`, parsed.error.issues)
+      return <FallbackCard key={key} reason={`"${root.type}" received invalid data.`} />
     }
-    el = { ...el, props: parsed.data }
+    props = parsed.data
   }
   const nextSeen = new Set(seen)
   nextSeen.add(key)
-  const children = (el.children ?? [])
-    .map((childKey) => renderElement(spec, childKey, registry, propsByType, onAction, nextSeen))
+  const children = (root.children ?? [])
+    .map((childKey) => renderElement(spec, childKey, registry, propsByType, onAction, nextSeen, depth + 1))
     .filter(Boolean)
   const emit = (actionId) => onAction && onAction(actionId, key)
-  return <Impl key={key} props={el.props ?? {}} emit={emit}>{children}</Impl>
+  return <Impl key={key} props={props} emit={emit}>{children}</Impl>
 }
 
 export default function TwistorRenderer({ spec, onAction }) {
@@ -75,7 +83,7 @@ export default function TwistorRenderer({ spec, onAction }) {
 
   return (
     <div className="twistor-agent-ui">
-      {renderElement(spec, spec.root, componentRegistry, propsByType, onAction, new Set())}
+      {renderElement(spec, spec.root, componentRegistry, propsByType, onAction, new Set(), 0)}
     </div>
   )
 }
