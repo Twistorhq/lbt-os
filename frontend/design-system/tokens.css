@@ -2,6 +2,10 @@
  * Twistor Trades design tokens (TW-175).
  * Machine-readable companion to frontend/DESIGN.md.
  * Mirrors the open-design design-system package shape (tokens.css).
+ *
+ * NOTE: this file is intentionally NOT imported by the app — it is a
+ * reference for agents and tooling generating brand-conformant UI.
+ * Runtime styling uses Tailwind utilities (see tailwind.config.js).
  */
 
 :root {
