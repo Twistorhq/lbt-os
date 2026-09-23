@@ -54,6 +54,13 @@
   border: 1px solid rgba(245, 185, 66, 0.35);
 }
 
+/* sample badge on light backgrounds */
+.tt-sample-badge.on-light {
+  background: #d18f1d1f;
+  color: #a86e12;
+  border-color: #d18f1d4d;
+}
+
 /* ---- scroll reveal (driven by IntersectionObserver in motion.jsx) ---- */
 .reveal {
   opacity: 0;

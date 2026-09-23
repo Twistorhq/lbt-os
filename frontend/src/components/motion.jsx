@@ -143,6 +143,24 @@ export function DepthStage({ className = '', children, style, ...rest }) {
 }
 
 /**
+ * Ambient — slow background parallax for decorative blobs. translateY is a
+ * fraction of scrollY; purely decorative, always aria-hidden by callers.
+ */
+export function Ambient({ speed = 0.05, className = '', children, style, ...rest }) {
+  const ref = useRef(null)
+  useScrollEffect(() => {
+    const el = ref.current
+    if (!el) return
+    el.style.transform = `translate3d(0, ${(window.scrollY * speed).toFixed(1)}px, 0)`
+  })
+  return (
+    <div ref={ref} data-motion className={className} style={{ willChange: 'transform', ...style }} {...rest}>
+      {children}
+    </div>
+  )
+}
+
+/**
  * Reveal — IntersectionObserver-driven entrance. Adds .is-visible once the
  * element crosses the threshold, then unobserves. Renders without the reveal
  * class entirely under reduced motion (content just shows).
