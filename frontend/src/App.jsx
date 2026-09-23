@@ -18,6 +18,7 @@ import Admin from './pages/Admin'
 import Strategy from './pages/Strategy'
 import Messages from './pages/Messages'
 import RevenueIntelligence from './pages/RevenueIntelligence'
+import AgentUIDemo from './pages/AgentUIDemo'
 import NotFound from './pages/NotFound'
 
 function AuthSync() {
@@ -87,6 +88,9 @@ export default function App() {
       <AuthSync />
       <Routes>
         <Route path="/" element={<MarketingHome />} />
+
+        {/* TW-181: agent-generated dashboard demo (sample data, public) */}
+        <Route path="/agent-ui-demo" element={<AgentUIDemo />} />
 
         {/* Clerk auth pages — hash routing avoids redirect loop in dev */}
         <Route
