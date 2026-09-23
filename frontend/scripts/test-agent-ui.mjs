@@ -21,6 +21,7 @@ const frontendDir = join(dirname(fileURLToPath(import.meta.url)), '..')
 const testSrc = `
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import TestRenderer, { act } from 'react-test-renderer'
 import TwistorRenderer from './src/agent-ui/TwistorRenderer.jsx'
 import { validateAgentSpec } from './src/agent-ui/catalog.js'
 import sampleSpec from './src/agent-ui/sampleSpec.json'
@@ -85,11 +86,36 @@ check('deep chain capped', () => {
   assert(typeof html === 'string' && html.length > 0, 'no html returned')
 })
 
-// 7. Action emission reaches the host
+// 7. Action emission reaches the host with (actionId, elementKey)
 check('action button emits to host', () => {
   let seen = null
-  const html = render({ root: 'b', elements: { b: { type: 'ActionButton', props: { label: 'Go', action: 'do_thing' }, children: [] } } }, (a) => { seen = a })
-  assert(html.includes('Go'), 'button missing')
+  const spec = { root: 'b', elements: { b: { type: 'ActionButton', props: { label: 'Go', action: 'do_thing' }, children: [] } } }
+  let comp = null
+  act(() => {
+    comp = TestRenderer.create(
+      React.createElement(TwistorRenderer, { spec, onAction: (a, k) => { seen = [a, k] } })
+    )
+  })
+  try {
+    const button = comp.root.findByType('button')
+    act(() => { button.props.onClick() })
+    assert(
+      seen !== null && seen[0] === 'do_thing' && seen[1] === 'b',
+      'expected onAction("do_thing", "b"), got ' + JSON.stringify(seen)
+    )
+  } finally {
+    comp.unmount()
+  }
+})
+
+// 7b. Non-array children (string / object / number) cannot crash the render
+check('non-array children are ignored safely', () => {
+  for (const bad of ['c1', { 0: 'c1' }, 42]) {
+    const html = render({ root: 'a', elements: {
+      a: { type: 'DashboardSection', props: { title: 'A' }, children: bad },
+    } })
+    assert(html.includes('A'), 'parent missing for children=' + JSON.stringify(bad))
+  }
 })
 
 // 8. Validator: sample spec ok

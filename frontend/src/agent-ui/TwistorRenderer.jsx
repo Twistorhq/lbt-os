@@ -57,7 +57,11 @@ function renderElement(spec, key, registry, propsByType, onAction, seen, depth) 
   }
   const nextSeen = new Set(seen)
   nextSeen.add(key)
-  const children = (root.children ?? [])
+  const childKeys = Array.isArray(root.children) ? root.children : []
+  if (root.children != null && !Array.isArray(root.children)) {
+    console.warn(`[TwistorRenderer] "children" of "${key}" is not an array — ignoring`)
+  }
+  const children = childKeys
     .map((childKey) => renderElement(spec, childKey, registry, propsByType, onAction, nextSeen, depth + 1))
     .filter(Boolean)
   const emit = (actionId) => onAction && onAction(actionId, key)
