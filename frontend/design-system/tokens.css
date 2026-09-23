@@ -1,0 +1,35 @@
+/**
+ * Twistor Trades design tokens (TW-175).
+ * Machine-readable companion to frontend/DESIGN.md.
+ * Mirrors the open-design design-system package shape (tokens.css).
+ */
+
+:root {
+  /* Surfaces — near-black scale */
+  --tw-near-black: #07070d;
+  --tw-ink: #09111f;
+  --tw-surface: #0d0d17;
+
+  /* Accents — indigo-violet scale */
+  --tw-violet: #8b5cf6;
+  --tw-violet-deep: #7c3aed;
+  --tw-fuchsia: #d946ef;
+
+  /* Text on dark */
+  --tw-text: #ffffff;
+  --tw-text-dim: rgba(255, 255, 255, 0.6);
+  --tw-text-faint: rgba(255, 255, 255, 0.4);
+
+  /* Semantic */
+  --tw-positive: #6ee7b7;
+  --tw-negative: #fda4af;
+  --tw-warning: #fcd34d;
+
+  /* Shape */
+  --tw-radius-card: 1rem;
+  --tw-radius-pill: 9999px;
+
+  /* Type */
+  --tw-font-display: "Space Grotesk", Inter, system-ui, sans-serif;
+  --tw-font-body: Inter, system-ui, sans-serif;
+}

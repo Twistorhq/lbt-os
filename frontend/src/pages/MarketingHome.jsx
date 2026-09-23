@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '@clerk/clerk-react'
 import { trackVisitorEvent } from '../lib/analytics'
+import LeakCalloutBand from '../components/LeakCalloutBand'
 
 const proof = [
   'Connect QuickBooks and CRM tools in minutes',
@@ -384,8 +385,10 @@ export default function MarketingHome() {
           ))}
         </section>
 
-        {/* How it works */}
-        <section id="how-it-works" className="mt-24 grid gap-5 lg:grid-cols-[0.78fr_1.22fr] lg:items-start">
+        {/* Revenue leak callout (TW-175: generated via twistor-ui skill) */}
+        <LeakCalloutBand />
+
+        {/* How it works */}        <section id="how-it-works" className="mt-24 grid gap-5 lg:grid-cols-[0.78fr_1.22fr] lg:items-start">
           <div className="pt-2">
             <div className="section-kicker">How It Works</div>
             <h2 className="mt-3 max-w-lg text-3xl font-semibold tracking-tight text-slate-950">
