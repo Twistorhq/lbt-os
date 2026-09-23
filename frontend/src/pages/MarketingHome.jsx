@@ -312,7 +312,7 @@ function Hero({ onCta, ctaUrl }) {
         </Parallax>
 
         <Parallax mode="visual" className="relative">
-          <div className="relative overflow-hidden rounded-[2rem] border border-white/12 shadow-[0_50px_120px_-40px_rgba(0,0,0,0.8)]">
+          <div className="relative overflow-hidden rounded-[2rem] border border-white/10 shadow-[0_50px_120px_-40px_rgba(0,0,0,0.8)]">
             <DriftImage
               src="/img/hvac-tech.jpg"
               alt="HVAC technician installing a compressor on a heating and cooling unit"
@@ -356,7 +356,7 @@ function Hero({ onCta, ctaUrl }) {
 
 function RoadmapMarquee() {
   return (
-    <div className="marquee relative overflow-hidden border-y border-white/8 bg-sofrito-950 py-5" aria-label="Trades on our roadmap">
+    <div className="marquee relative overflow-hidden border-y border-white/10 bg-sofrito-950 py-5" aria-label="Trades on our roadmap">
       <div className="marquee-track" aria-hidden="true">
         {[0, 1].map((copy) => (
           <div key={copy} className="flex shrink-0 items-center">
@@ -477,7 +477,7 @@ function LivePreview({ onCta, ctaUrl }) {
                   <div>
                     <div className="tt-kicker text-white/45">Shop health</div>
                     <div
-                      className="mt-3 h-2 w-48 overflow-hidden rounded-full bg-white/12 sm:w-56"
+                      className="mt-3 h-2 w-48 overflow-hidden rounded-full bg-white/10 sm:w-56"
                       role="img"
                       aria-label={`Shop health score ${trade.health} out of 100`}
                     >
