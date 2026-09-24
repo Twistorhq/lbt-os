@@ -4,17 +4,33 @@ All endpoints require a valid auth token (any plan). The brief is read-only
 for customer data; it additionally records the org's own private benchmark
 metrics (consent-gated server-side) so the cohort engine gets smarter.
 """
+import time
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from ..auth import AuthContext, get_auth
 from ..database import get_db
-from ..leak_engine import all_detectors, run_leak_scan, vertical_for_industry
+from ..leak_engine import all_detectors, run_leak_scan, vertical_for_org
 from ..limiter import enforce_user_limit, limiter
+from ..services import analytics as usage
 from ..services import benchmarks as bm
 
 router = APIRouter(prefix="/leaks", tags=["leaks"])
+
+
+def _analytics_vertical(db, org_id: str) -> str:
+    """Best-effort vertical for analytics TAGGING only — never product data.
+
+    A failed org lookup degrades to "unknown" rather than failing the
+    endpoint or (worse) tagging the event with the wrong vertical. Product
+    paths (e.g. benchmark_compare) use the strict vertical_for_org and
+    surface DB failures honestly.
+    """
+    try:
+        return vertical_for_org(db, org_id)
+    except Exception:
+        return "unknown"
 
 
 def should_record_benchmarks(brief: dict) -> bool:
@@ -35,7 +51,9 @@ def leak_brief(
 ):
     """Morning brief: findings grouped by question-ladder rung."""
     db = get_db()
+    started = time.perf_counter()
     brief = run_leak_scan(db, auth.org_id)
+    duration_ms = int((time.perf_counter() - started) * 1000)
     # Feed the benchmark pipeline (no-op without the org's explicit consent).
     # Skipped when a detector errored so a partial brief never seeds cohort
     # aggregates with leak_findings: 0 (TW-204).
@@ -49,6 +67,15 @@ def leak_brief(
                 "dollars_at_stake": float(brief["totals"]["dollars_at_stake"]),
             },
         )
+    # TW-209: usage metadata only — no finding contents, no dollar amounts.
+    # Emitted AFTER the endpoint's work so result:"ok" is truthful.
+    usage.emit_event(
+        db,
+        org_id=auth.org_id,
+        vertical=brief.get("vertical") or "hvac",
+        feature_key="leak_brief.viewed",
+        context={"result": "ok", "duration_ms": duration_ms, "source": "api"},
+    )
     return brief
 
 
@@ -60,6 +87,17 @@ def leak_detectors(
     _user_limit: Annotated[None, Depends(enforce_user_limit("60/hour"))],  # TW-078: per-verified-user
 ):
     """Registry listing — which leak patterns are live for this org's vertical."""
+    db = get_db()
+    # Analytics tagging only — a failed lookup degrades to "unknown" and the
+    # endpoint still serves. (The emit below is the last statement before
+    # the return, so result:"ok" is truthful by construction.)
+    usage.emit_event(
+        db,
+        org_id=auth.org_id,
+        vertical=_analytics_vertical(db, auth.org_id),
+        feature_key="detectors.listed",
+        context={"result": "ok", "source": "api", "count": len(all_detectors())},
+    )
     return {
         "detectors": [
             {"name": d.name, "vertical": d.vertical, "inputs": d.requires}
@@ -80,14 +118,17 @@ def benchmark_compare(
     if metric not in bm.METRIC_ALLOWLIST:
         raise HTTPException(status_code=400, detail=f"unknown metric '{metric}'")
     db = get_db()
-    org = (
-        db.table("organizations")
-        .select("industry")
-        .eq("id", auth.org_id)
-        .limit(1)
-        .execute()
-        .data
-        or [{}]
+    # Strict: a failed org lookup raises (500) instead of silently serving an
+    # empty "unknown" cohort as if it were the org's real comparison. This
+    # restores the pre-TW-209 behavior — an honest failure beats wrong data.
+    vertical = vertical_for_org(db, auth.org_id)
+    result = bm.get_cohort_comparison(db, auth.org_id, vertical, metric)
+    # TW-209: usage metadata only — metric NAME (allowlisted), never values.
+    usage.emit_event(
+        db,
+        org_id=auth.org_id,
+        vertical=vertical,
+        feature_key="benchmark.compare",
+        context={"result": "ok", "source": "api", "metric": metric},
     )
-    vertical = vertical_for_industry(org[0].get("industry"))
-    return bm.get_cohort_comparison(db, auth.org_id, vertical, metric)
+    return result
