@@ -34,16 +34,16 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _parse_dt(s: str | None) -> datetime | None:
-    if not s:
-        return None
-    try:
-        return datetime.fromisoformat(str(s).replace("Z", "+00:00"))
-    except Exception:
-        return None
+def vertical_for_industry(industry: str | None) -> str:
+    """Map organizations.industry to a leak-engine vertical.
+
+    Defaults to hvac for the pilot: an org with no industry set still gets
+    the beachhead detectors rather than an empty brief.
+    """
+    return _INDUSTRY_VERTICAL.get((industry or "").strip().lower(), "hvac")
 
 
-def _vertical_for(db, org_id: str) -> str | None:
+def _vertical_for(db, org_id: str) -> str:
     try:
         rows = (
             db.table("organizations")
@@ -55,9 +55,9 @@ def _vertical_for(db, org_id: str) -> str | None:
             or []
         )
     except Exception:
-        return None
-    industry = (rows[0].get("industry") or "").strip().lower() if rows else ""
-    return _INDUSTRY_VERTICAL.get(industry)
+        return "hvac"
+    industry = rows[0].get("industry") if rows else None
+    return vertical_for_industry(industry)
 
 
 def _tables_available(db, tables: list[str]) -> list[str]:

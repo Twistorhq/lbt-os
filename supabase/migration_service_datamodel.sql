@@ -6,6 +6,8 @@
 -- New entities: technicians, service_assets, service_plans, jobs,
 -- appointments, quotes. Plus additive customers columns the HVAC
 -- detectors need (property_type, home_age_year).
+
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 --
 -- Rules: additive only (IF NOT EXISTS), gen_random_uuid() PKs,
 -- org_id scoping, RLS + updated_at triggers like the base schema.

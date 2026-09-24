@@ -298,3 +298,59 @@ class BenchmarkTest(unittest.TestCase):
         self.assertEqual(result["yours"], 22.0)
         self.assertEqual(result["cohort_median"], 34.0)
         self.assertEqual(result["cohort_size"], 7)
+
+
+from app.leak_engine import detectors_for, vertical_for_industry  # noqa: E402
+
+
+class ProductionShapeRegressionTest(unittest.TestCase):
+    """Rosa B1/B2: fixtures must match production data shapes."""
+
+    def test_naive_date_install_date_does_not_raise(self):
+        # PostgREST DATE columns arrive as naive "YYYY-MM-DD" (Rosa B1).
+        db = _db(service_assets=[
+            {"id": "ax", "org_id": ORG, "customer_id": "c1",
+             "customer_name": "Naive", "asset_type": "furnace",
+             "brand": "Carrier", "install_date": "2005-01-15",
+             "expected_life_years": 18},
+        ])
+        brief = run_leak_scan(db, ORG)  # must not raise, must not error
+        self.assertNotIn("equipment-age-graveyard",
+                         brief["data_status"].get("errors", []))
+        grave = [f for f in brief["what_happened"]
+                 if f["detector"] == "equipment-age-graveyard"]
+        self.assertEqual(len(grave), 1)
+        self.assertIn("Naive", str(grave[0]["entities"]))
+
+    def test_canonical_air_conditioner_value_matches(self):
+        # The documented import contract says "air_conditioner" (Rosa B2).
+        db = _db(service_assets=[
+            {"id": "ax", "org_id": ORG, "customer_id": "c1",
+             "customer_name": "Cool", "asset_type": "air_conditioner",
+             "brand": "Trane", "install_date": _days_ago(int(11 * 365)),
+             "expected_life_years": 15},
+        ])
+        findings = run_leak_scan(db, ORG)["what_happened"]
+        grave = [f for f in findings
+                 if f["detector"] == "equipment-age-graveyard"]
+        self.assertEqual(len(grave), 1)
+        self.assertIn("Cool", str(grave[0]["entities"]))
+
+
+class VerticalMappingTest(unittest.TestCase):
+    def test_industry_maps_to_vertical(self):
+        self.assertEqual(vertical_for_industry("hvac"), "hvac")
+        self.assertEqual(vertical_for_industry("electrician"), "electrical")
+        self.assertEqual(vertical_for_industry(None), "hvac")  # pilot default
+        self.assertEqual(vertical_for_industry("nonsense"), "hvac")
+
+    def test_detectors_filter_by_vertical(self):
+        hvac_detectors = detectors_for("hvac")
+        self.assertTrue(all(d.vertical == "hvac" for d in hvac_detectors))
+        self.assertGreater(len(hvac_detectors), 0)
+        dental_detectors = detectors_for("dental")
+        self.assertEqual(len(dental_detectors), 0)  # no dental detectors yet
+
+    def test_dollars_at_stake_aggregates(self):
+        brief = run_leak_scan(_db(), ORG)
+        self.assertGreaterEqual(brief["totals"]["dollars_at_stake"], 12000.0)

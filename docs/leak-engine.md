@@ -47,11 +47,11 @@ question ladder:
 - `organizations.benchmark_consent BOOLEAN DEFAULT FALSE` — explicit opt-in, set during onboarding/pilot setup. No consent, no aggregation. Ever.
 - `benchmark_org_metrics` — per-org, private: `(org_id, vertical, metric_name, metric_value, sample_size, period)`. Raw material, never exposed cross-org.
 - `benchmark_cohort_stats` — the only cross-org table: `(cohort_key, metric_name, p50, mean, n_orgs, period)`. Written only when `n_orgs >= 5` (k-anonymity). Powers "shops shaped like yours close 34%; you're at 22%".
-- v1 ships schema + consent + per-org capture + the cohort read API (returns `insufficient_cohort_data` until k is met). The scheduled cross-org aggregation job lands post-launch.
+- v1 ships schema + consent + per-org capture + the cohort read API (returns `insufficient_cohort_data` until k is met). Capture is wired: `GET /api/v1/leaks/brief` records the org's own metrics via `record_org_metrics` (no-op without consent). The scheduled cross-org aggregation job lands post-launch.
 
 ## API
 
-- `GET /api/v1/leaks/brief` — the morning brief, grouped by ladder rung. Auth required, rate-limited.
+- `GET /api/v1/leaks/brief` — the morning brief, grouped by ladder rung. Auth required, rate-limited. Also records the org's private benchmark metrics (consent-gated, no-op without opt-in).
 - `GET /api/v1/leaks/detectors` — registry listing (name, vertical, inputs). For the frontend and debugging.
 
 ## Non-goals for Oct 2

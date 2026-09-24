@@ -19,6 +19,16 @@ from typing import Any
 
 K_ANONYMITY = 5
 
+# Metrics the cohort API will compare. Unknown names are rejected at the edge.
+METRIC_ALLOWLIST = frozenset({
+    "leak_findings",
+    "dollars_at_stake",
+    "quote_close_rate",
+    "quote_resurrection_value",
+    "plan_churn_rate",
+    "equipment_replacement_pipeline",
+})
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()

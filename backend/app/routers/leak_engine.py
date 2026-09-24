@@ -1,15 +1,16 @@
 """
 Leak-engine endpoints — the morning brief (question ladder) and detector registry.
-All endpoints require a valid auth token (any plan). Read-only: the engine
-never writes customer data.
+All endpoints require a valid auth token (any plan). The brief is read-only
+for customer data; it additionally records the org's own private benchmark
+metrics (consent-gated server-side) so the cohort engine gets smarter.
 """
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from ..auth import AuthContext, get_auth
 from ..database import get_db
-from ..leak_engine import all_detectors, run_leak_scan
+from ..leak_engine import all_detectors, run_leak_scan, vertical_for_industry
 from ..limiter import limiter
 from ..services import benchmarks as bm
 
@@ -20,7 +21,19 @@ router = APIRouter(prefix="/leaks", tags=["leaks"])
 @limiter.limit("30/hour")
 def leak_brief(request: Request, auth: Annotated[AuthContext, Depends(get_auth)]):
     """Morning brief: findings grouped by question-ladder rung."""
-    return run_leak_scan(get_db(), auth.org_id)
+    db = get_db()
+    brief = run_leak_scan(db, auth.org_id)
+    # Feed the benchmark pipeline (no-op without the org's explicit consent).
+    bm.record_org_metrics(
+        db,
+        auth.org_id,
+        brief.get("vertical") or "hvac",
+        {
+            "leak_findings": float(brief["totals"]["findings"]),
+            "dollars_at_stake": float(brief["totals"]["dollars_at_stake"]),
+        },
+    )
+    return brief
 
 
 @router.get("/detectors")
@@ -43,8 +56,11 @@ def benchmark_compare(
     metric: str = Query(..., min_length=1, max_length=64),
 ):
     """Compare this org against its anonymized cohort (k-anonymity enforced)."""
+    if metric not in bm.METRIC_ALLOWLIST:
+        raise HTTPException(status_code=400, detail=f"unknown metric '{metric}'")
+    db = get_db()
     org = (
-        get_db().table("organizations")
+        db.table("organizations")
         .select("industry")
         .eq("id", auth.org_id)
         .limit(1)
@@ -52,5 +68,5 @@ def benchmark_compare(
         .data
         or [{}]
     )
-    vertical = (org[0].get("industry") or "hvac").strip().lower()
-    return bm.get_cohort_comparison(get_db(), auth.org_id, vertical, metric)
+    vertical = vertical_for_industry(org[0].get("industry"))
+    return bm.get_cohort_comparison(db, auth.org_id, vertical, metric)

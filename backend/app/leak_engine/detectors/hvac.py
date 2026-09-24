@@ -13,6 +13,7 @@ from ..registry import Detector, register
 _TYPE_LIFE_FLOOR = {
     "furnace": 15,
     "ac": 10,
+    "air_conditioner": 10,  # canonical import value (docs/service-data-model.md)
     "heat_pump": 10,
     "boiler": 20,
     "water_heater": 8,
@@ -30,9 +31,14 @@ def _parse_dt(s: str | None) -> datetime | None:
     if not s:
         return None
     try:
-        return datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(str(s).replace("Z", "+00:00"))
     except Exception:
         return None
+    # B1 (Rosa): production DATE columns arrive as naive "YYYY-MM-DD".
+    # Treat naive as UTC so aware-minus-naive never raises TypeError.
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def _age_days(installed: str | None) -> float | None:
@@ -198,9 +204,11 @@ def _plan_churn_run(db, org_id: str) -> list[dict[str, Any]]:
 # quote-resurrection
 # ---------------------------------------------------------------------------
 
+# Valid quote statuses per migration_service_datamodel.sql
+# (draft|sent|follow_up|won|lost|expired). "sent" and "follow_up" are open.
 _STALLED_QUOTE_DAYS = 14
 _QUIET_FOLLOWUP_DAYS = 7
-_OPEN_QUOTE = {"sent", "proposal"}
+_OPEN_QUOTE = {"sent", "follow_up"}
 
 
 def _quote_resurrection_run(db, org_id: str) -> list[dict[str, Any]]:
