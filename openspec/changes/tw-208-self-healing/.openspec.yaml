@@ -1,0 +1,13 @@
+# TW-208 self-healing pipeline standard
+# No spec corpus exists in openspec/specs/ yet, so there is no baseline to
+# delta against. Requirements for this change live in proposal.md, design.md,
+# and the 20 RED-first tests in backend/tests/test_self_healing.py.
+schema: spec-driven
+created: 2026-09-24
+goal: Self-healing pipeline standard for leak engine + CSV ingestion (per-item isolation, backoff retries, DLQ, partial reporting)
+affected_areas:
+  - backend/app/self_healing.py
+  - backend/app/services/manual_import.py
+  - backend/app/leak_engine/engine.py
+  - backend/app/services/benchmarks.py
+skip_specs: true
