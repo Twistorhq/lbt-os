@@ -4,9 +4,8 @@ All endpoints require a valid auth token (any plan). The brief is read-only
 for customer data; it additionally records the org's own private benchmark
 metrics (consent-gated server-side) so the cohort engine gets smarter.
 """
-from typing import Annotated
-
 import time
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
