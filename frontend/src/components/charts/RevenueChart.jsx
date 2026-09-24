@@ -11,6 +11,14 @@ import { format, parseISO } from 'date-fns'
 
 const fmt = (v) => `$${(v || 0).toLocaleString()}`
 
+// TW-195 (Rosa nit): recharts animations are JS-driven, so the CSS
+// prefers-reduced-motion kill-switch does not cover them. Disable the Area
+// animation for reduced-motion users; API unchanged.
+const reduceMotion =
+  typeof window !== 'undefined' &&
+  typeof window.matchMedia === 'function' &&
+  window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
 export default function RevenueChart({ data = [] }) {
   if (!data.length) {
     return (
@@ -52,7 +60,7 @@ export default function RevenueChart({ data = [] }) {
             boxShadow: '0 16px 40px -24px rgba(15,23,42,0.45)',
           }}
         />
-        <Area type="monotone" dataKey="revenue" stroke="#2563eb" strokeWidth={2.5} fill="url(#revGrad)" />
+        <Area type="monotone" dataKey="revenue" stroke="#2563eb" strokeWidth={2.5} fill="url(#revGrad)" isAnimationActive={!reduceMotion} />
       </AreaChart>
     </ResponsiveContainer>
   )

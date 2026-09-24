@@ -100,6 +100,8 @@ function EstimateBars({ data }) {
  */
 export default function SampleCharts({ tradeKey, tradeLabel }) {
   const series = useMemo(() => buildSeries(tradeKey), [tradeKey])
+  // Rosa nit (TW-195 review): "a HVAC shop" -> "an HVAC shop".
+  const article = tradeLabel === 'Plumbing' ? 'a' : 'an'
   const withLabels = useMemo(
     () =>
       series.map((p) => ({
@@ -123,7 +125,7 @@ export default function SampleCharts({ tradeKey, tradeLabel }) {
             The charts are the product.
           </h3>
           <p className="mt-3 max-w-xl text-[15px] leading-7 text-slate-600">
-            No paywalled parts hiding. Every chart here runs on sample data for a {tradeLabel} shop —
+            No paywalled parts hiding. Every chart here runs on sample data for {article} {tradeLabel} shop —
             connect your tools and these become your numbers.
           </p>
         </div>
