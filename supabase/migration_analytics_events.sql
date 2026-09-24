@@ -18,6 +18,8 @@
 -- the Supabase free tier: two tables, three indexes, no partitions (yet).
 -- Cross-vertical from day one: `vertical` is on every event row.
 
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 -- The event log. One row per feature interaction.
 CREATE TABLE IF NOT EXISTS analytics_feature_events (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
