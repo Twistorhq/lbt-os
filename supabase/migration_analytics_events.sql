@@ -6,12 +6,23 @@
 --     * no job / quote / invoice contents or counts-as-money
 --     * no customer PII (no names, emails, phones, addresses)
 --     * no financial amounts (no dollars_at_stake, no revenue)
---     * no free-text columns at all
---   The `context` JSONB column accepts ONLY the allowlisted metadata keys
---   defined in backend/app/services/analytics.py (result, duration_ms,
---   source, metric, detector, ladder, count). emit_event() drops anything
---   else BEFORE the write, so a careless caller cannot leak PII into this
---   schema by accident.
+--   TEXT columns and their caller contracts (enforced in
+--   backend/app/services/analytics.py, which drops anything else BEFORE the
+--   write so a careless caller cannot leak PII into this schema by accident):
+--     * vertical    — leak-engine vertical from the org lookup (e.g. 'hvac')
+--     * feature_key — dotted lowercase path, validated by FEATURE_KEY_RE
+--     * actor_role  — enum-ish: 'owner' | 'admin' | 'tech'; NEVER a user id
+--     * session_id  — opaque token only; PII-shaped values (emails, blocked
+--                     fragments, overlong) degrade to NULL at emit time
+--     * context     — JSONB with allowlisted metadata keys only (result,
+--                     duration_ms, source, metric, detector, ladder, count);
+--                     string values are screened for PII-shaped content and
+--                     metric/detector values must match identifier shape
+--     * catalog description — maintainer-written reference text, never user
+--                     input
+--   The exact column sets are pinned by tests in
+--   backend/tests/test_analytics_events.py — no PII-shaped column can sneak
+--   in later without failing the suite.
 --
 -- ML / aggregate rollups (TW-209 Phase 3) read ONLY these tables. They must
 -- NEVER query production tables. This schema is intentionally lean to fit
@@ -52,6 +63,9 @@ CREATE TABLE IF NOT EXISTS analytics_feature_catalog (
 
 -- Seed the catalog with the features instrumented in Phase 1. More rows land
 -- with Phase 2 wiring; the catalog is reference data, safe to extend.
+-- NOTE: ON CONFLICT DO NOTHING means re-running this migration silently
+-- ignores future description updates — descriptions are updated by a
+-- dedicated migration, not by re-seeding.
 INSERT INTO analytics_feature_catalog (feature_key, name, ladder_rung, description)
 VALUES
     ('leak_brief.viewed',  'Morning Brief',          'happened',    'Daily leak-detection brief (question ladder)'),

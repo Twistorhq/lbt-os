@@ -43,21 +43,35 @@ def vertical_for_industry(industry: str | None) -> str:
     return _INDUSTRY_VERTICAL.get((industry or "").strip().lower(), "hvac")
 
 
-def _vertical_for(db, org_id: str) -> str:
-    try:
-        rows = (
-            db.table("organizations")
-            .select("industry")
-            .eq("id", org_id)
-            .limit(1)
-            .execute()
-            .data
-            or []
-        )
-    except Exception:
-        return "hvac"
+def vertical_for_org(db, org_id: str) -> str:
+    """Strict org → vertical lookup. Raises on DB failure.
+
+    Product paths use this directly so a DB blip surfaces as a 500 instead
+    of silently serving the wrong cohort (TW-209 fix round, Rosa). Forgiving
+    wrappers build on top and document their fallback explicitly:
+      * engine._vertical_for → "hvac" (the brief: pilot orgs with no industry
+        still get the beachhead detectors rather than an empty brief)
+      * routers.leak_engine._analytics_vertical → "unknown" (analytics
+        tagging only — never product data)
+    """
+    rows = (
+        db.table("organizations")
+        .select("industry")
+        .eq("id", org_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
     industry = rows[0].get("industry") if rows else None
     return vertical_for_industry(industry)
+
+
+def _vertical_for(db, org_id: str) -> str:
+    try:
+        return vertical_for_org(db, org_id)
+    except Exception:
+        return "hvac"
 
 
 def _tables_available(db, tables: list[str]) -> list[str]:

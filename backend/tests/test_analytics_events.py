@@ -48,6 +48,11 @@ class _FakeTable:
         self._rows = self._rows[:n]
         return self
 
+    def order(self, col, desc=False):
+        self._rows = sorted(self._rows, key=lambda r: (r.get(col) is None, r.get(col)),
+                            reverse=desc)
+        return self
+
     def insert(self, row):
         self._db.writes.append((self._name, row))
         return self
@@ -121,6 +126,43 @@ class SanitizeContextTest(unittest.TestCase):
         self.assertEqual(analytics.sanitize_context(None), {})
         self.assertEqual(analytics.sanitize_context("result=ok"), {})
 
+    def test_pii_shaped_values_dropped(self):
+        # Rosa (TW-209 fix round): keys were policed, values were not.
+        ctx = analytics.sanitize_context({
+            "result": "ok",
+            "metric": "user@example.com",      # email-shaped metric name
+            "detector": "555-123-4567",        # phone-shaped detector name
+            "source": "my api_key is xyz",    # blocked fragment in value
+        })
+        self.assertEqual(ctx, {"result": "ok"})
+
+    def test_identifier_shape_enforced_on_metric_and_detector(self):
+        good = analytics.sanitize_context({
+            "metric": "quote_close_rate",
+            "detector": "equipment_graveyard",
+        })
+        self.assertEqual(good["metric"], "quote_close_rate")
+        self.assertEqual(good["detector"], "equipment_graveyard")
+        bad = analytics.sanitize_context({
+            "metric": "UPPER.CASE",            # must start lowercase
+            "detector": "has space!",          # not identifier-shaped
+        })
+        self.assertEqual(bad, {})
+
+    def test_non_identifier_keys_keep_loose_string_values(self):
+        # result/source/ladder are free-form-ish metadata; the PII screen
+        # still applies, but no identifier shape is required.
+        ctx = analytics.sanitize_context({"result": "error", "source": "ui",
+                                          "ladder": "will_happen"})
+        self.assertEqual(ctx["ladder"], "will_happen")
+
+    def test_allowlist_blocked_fragments_disjoint(self):
+        # _key_is_blocked is unreachable-after-allowlist today; pin that the
+        # two sets can never overlap so a future allowlist addition can't
+        # trip the belt-and-suspenders check.
+        for key in analytics.ALLOWED_CONTEXT_KEYS:
+            self.assertFalse(analytics._key_is_blocked(key), key)
+
 
 # ---------------------------------------------------------------------------
 # emit_event
@@ -179,6 +221,27 @@ class EmitEventTest(unittest.TestCase):
                              context={"metric": "quote_close_rate"})
         written_tables = {t for t, _ in db.writes}
         self.assertEqual(written_tables, {"analytics_feature_events"})
+
+    def test_pii_shaped_session_id_degrades_to_null(self):
+        # Privacy-safe default: store less, never the PII. The event itself
+        # still lands — a careless caller loses a session tag, not the data.
+        db = FakeDb()
+        for bad_sid in ("user@example.com", "sess_token_abc", "x" * 200):
+            ok = analytics.emit_event(
+                db, org_id="o", vertical="hvac", feature_key="leak_brief.viewed",
+                session_id=bad_sid, context={"result": "ok"})
+            self.assertTrue(ok, bad_sid)
+        for _, row in db.writes:
+            self.assertIsNone(row["session_id"])
+
+    def test_good_session_id_kept(self):
+        db = FakeDb()
+        ok = analytics.emit_event(
+            db, org_id="o", vertical="hvac", feature_key="leak_brief.viewed",
+            session_id="sess_9f2c1a", context={"result": "ok"})
+        self.assertTrue(ok)
+        _, row = db.writes[0]
+        self.assertEqual(row["session_id"], "sess_9f2c1a")
 
 
 # ---------------------------------------------------------------------------
@@ -277,6 +340,76 @@ class RouterWiringTest(unittest.TestCase):
         self.assertEqual(event["context"]["result"], "ok")
         # No production-table writes happened through this path.
         self.assertEqual({t for t, _ in db.writes}, {"analytics_feature_events"})
+
+    def _client_with_db(self, db):
+        real_get_db = le_router.get_db
+        le_router.get_db = lambda: db
+        app.dependency_overrides[get_auth] = lambda: AuthContext("user_1", "org-9", "pro")
+        self.addCleanup(setattr, le_router, "get_db", real_get_db)
+        self.addCleanup(app.dependency_overrides.clear)
+        return TestClient(app)
+
+    def test_brief_endpoint_emits_after_success(self):
+        db = FakeDb({"organizations": [{"id": "org-9", "industry": "hvac"}]})
+        resp = self._client_with_db(db).get("/api/v1/leaks/brief")
+        self.assertEqual(resp.status_code, 200)
+
+        event_writes = [row for t, row in db.writes if t == "analytics_feature_events"]
+        self.assertEqual(len(event_writes), 1)
+        event = event_writes[0]
+        self.assertEqual(event["org_id"], "org-9")
+        self.assertEqual(event["vertical"], "hvac")
+        self.assertEqual(event["feature_key"], "leak_brief.viewed")
+        self.assertEqual(event["context"]["result"], "ok")
+        self.assertIn("duration_ms", event["context"])
+
+    def test_compare_endpoint_emits_metric_name_only(self):
+        db = FakeDb({"organizations": [{"id": "org-9", "industry": "hvac"}]})
+        resp = self._client_with_db(db).get(
+            "/api/v1/leaks/benchmarks/compare?metric=quote_close_rate")
+        self.assertEqual(resp.status_code, 200)
+
+        event_writes = [row for t, row in db.writes if t == "analytics_feature_events"]
+        self.assertEqual(len(event_writes), 1)
+        event = event_writes[0]
+        self.assertEqual(event["feature_key"], "benchmark.compare")
+        self.assertEqual(event["vertical"], "hvac")
+        # Metric NAME (allowlisted), never values.
+        self.assertEqual(event["context"]["metric"], "quote_close_rate")
+
+    def test_compare_org_lookup_failure_raises_not_silent_cohort(self):
+        # Rosa (TW-209 fix round): the product path is STRICT. A failed org
+        # lookup must surface (500 in prod) — never a silent empty "unknown"
+        # cohort presented as the org's real comparison.
+        class LookupFailDb(FakeDb):
+            def table(self, name):
+                if name == "organizations":
+                    raise RuntimeError("organizations read failed")
+                return super().table(name)
+
+        db = LookupFailDb()
+        with self.assertRaises(RuntimeError):
+            self._client_with_db(db).get(
+                "/api/v1/leaks/benchmarks/compare?metric=quote_close_rate")
+        # No analytics event for a failed product path — nothing succeeded.
+        self.assertEqual([t for t, _ in db.writes], [])
+
+    def test_detectors_endpoint_survives_org_lookup_failure(self):
+        # The analytics-tagging path is FORGIVING: a failed org lookup
+        # degrades the tag to "unknown" and the endpoint still serves.
+        class LookupFailDb(FakeDb):
+            def table(self, name):
+                if name == "organizations":
+                    raise RuntimeError("organizations read failed")
+                return super().table(name)
+
+        db = LookupFailDb()
+        resp = self._client_with_db(db).get("/api/v1/leaks/detectors")
+        self.assertEqual(resp.status_code, 200)
+
+        event_writes = [row for t, row in db.writes if t == "analytics_feature_events"]
+        self.assertEqual(len(event_writes), 1)
+        self.assertEqual(event_writes[0]["vertical"], "unknown")
 
 
 if __name__ == "__main__":
