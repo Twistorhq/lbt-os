@@ -228,3 +228,73 @@ class EngineTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+from app.services import benchmarks as bm  # noqa: E402
+
+
+class BenchmarkDB(FakeDB):
+    def __init__(self, tables):
+        super().__init__(tables)
+        self.inserted = []
+
+    def table(self, name):
+        if name == "benchmark_org_metrics":
+            return _InsertCapture(self, name)
+        return super().table(name)
+
+
+class _InsertCapture(FakeQuery):
+    def __init__(self, db, name):
+        super().__init__(db._tables.get(name, []))
+        self._db = db
+        self._name = name
+
+    def insert(self, rows):
+        self._db.inserted.extend(rows if isinstance(rows, list) else [rows])
+        return self
+
+
+class BenchmarkTest(unittest.TestCase):
+    def test_no_consent_means_no_recording(self):
+        db = BenchmarkDB({"organizations": [{"id": ORG, "benchmark_consent": False}]})
+        result = bm.record_org_metrics(db, ORG, "hvac", {"quote_close_rate": 24.0})
+        self.assertEqual(result["recorded"], 0)
+        self.assertEqual(result["reason"], "no_consent")
+        self.assertEqual(db.inserted, [])
+
+    def test_consent_records_private_metrics(self):
+        db = BenchmarkDB({"organizations": [{"id": ORG, "benchmark_consent": True}]})
+        result = bm.record_org_metrics(db, ORG, "hvac", {"quote_close_rate": 24.0})
+        self.assertEqual(result["recorded"], 1)
+        self.assertEqual(db.inserted[0]["org_id"], ORG)
+        self.assertEqual(db.inserted[0]["metric_name"], "quote_close_rate")
+
+    def test_small_cohort_reports_insufficient(self):
+        db = _db()
+        db._tables["benchmark_org_metrics"] = [
+            {"org_id": ORG, "metric_name": "quote_close_rate",
+             "metric_value": 22.0, "computed_at": _days_ago(1)}
+        ]
+        db._tables["benchmark_cohort_stats"] = [
+            {"cohort_key": "hvac:smb", "metric_name": "quote_close_rate",
+             "p50": 34.0, "mean": 33.1, "n_orgs": 3, "period": "30d"}
+        ]
+        result = bm.get_cohort_comparison(db, ORG, "hvac", "quote_close_rate")
+        self.assertEqual(result["status"], "insufficient_cohort_data")
+
+    def test_full_cohort_compares_without_leaking(self):
+        db = _db()
+        db._tables["benchmark_org_metrics"] = [
+            {"org_id": ORG, "metric_name": "quote_close_rate",
+             "metric_value": 22.0, "computed_at": _days_ago(1)}
+        ]
+        db._tables["benchmark_cohort_stats"] = [
+            {"cohort_key": "hvac:smb", "metric_name": "quote_close_rate",
+             "p50": 34.0, "mean": 33.1, "n_orgs": 7, "period": "30d"}
+        ]
+        result = bm.get_cohort_comparison(db, ORG, "hvac", "quote_close_rate")
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["yours"], 22.0)
+        self.assertEqual(result["cohort_median"], 34.0)
+        self.assertEqual(result["cohort_size"], 7)
