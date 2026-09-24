@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import random
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -35,8 +36,21 @@ _TRANSIENT_KEYWORDS = (
     "connection timed out", "network", "socket", "econn",
     "service unavailable", "too many requests", "rate limit", "ratelimit",
     "throttl", "deadlock", "lock timeout",
-    "429", "502", "503", "504",
 )
+# HTTP status codes match only as standalone tokens ("503" yes, "15035" no).
+# Heuristic limit, documented: a message like "Row 503 invalid" still matches
+# and will be retried as transient. That errs toward retrying, which is the
+# safe direction for a self-healing pipeline — a wasted retry is just slower,
+# while a dropped batch is silent data loss.
+_TRANSIENT_CODE_RE = re.compile(r"\b(?:429|502|503|504)\b")
+
+# Email/phone-shaped values are redacted from DLQ previews so row PII never
+# lands in logs or the import-log JSONB. Previews are debugging samples, not
+# primary data — over-redaction here is the correct bias.
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+_PHONE_RE = re.compile(r"\+?\d[\d\s().\-]{7,}\d")
+_PII_KEYS = {"email", "phone", "phone_number", "mobile", "cell",
+             "email_address"}
 
 
 def is_transient(exc: BaseException) -> bool:
@@ -47,7 +61,10 @@ def is_transient(exc: BaseException) -> bool:
     if any(k in name for k in ("timeout", "connection", "network", "socket",
                                "temporary", "unavailable", "throttl", "ratelimit")):
         return True
-    return any(k in str(exc).lower() for k in _TRANSIENT_KEYWORDS)
+    msg = str(exc).lower()
+    if _TRANSIENT_CODE_RE.search(msg):
+        return True
+    return any(k in msg for k in _TRANSIENT_KEYWORDS)
 
 
 def mark_permanent(exc: BaseException) -> BaseException:
@@ -69,18 +86,18 @@ def retry_with_backoff(
 
     Permanent failures raise immediately — retrying a poison record is just
     a slower way to fail. After `attempts` total tries the last error raises.
+    The jitter multiplier (0.5x-1.5x) is applied before the `max_delay` cap,
+    so `max_delay` is a true ceiling on every sleep.
     """
     if sleep is None:
         sleep = time.sleep
-    last: BaseException | None = None
     for i in range(max(1, attempts)):
         try:
             return fn()
         except Exception as exc:  # noqa: BLE001 - classification decides
-            last = exc
             if not is_transient(exc) or i >= attempts - 1:
                 raise
-            delay = min(max_delay, base_delay * (2 ** i)) * (0.5 + random.random())
+            delay = min(max_delay, base_delay * (2 ** i) * (0.5 + random.random()))
             log.warning(
                 "self-healing: transient failure (%s), retry %d/%d in %.2fs: %s",
                 type(exc).__name__, i + 1, attempts - 1, delay, exc,
@@ -88,8 +105,6 @@ def retry_with_backoff(
             if on_retry is not None:
                 on_retry(exc, i + 1, delay)
             sleep(delay)
-    assert last is not None
-    raise last
 
 
 @dataclass
@@ -100,8 +115,19 @@ class SkippedItem:
     error: str
 
 
+def _redact_value(value: Any) -> Any:
+    if isinstance(value, str) and (_EMAIL_RE.search(value) or _PHONE_RE.search(value)):
+        return "[redacted]"
+    return value
+
+
 def _preview(item: Any, limit: int = 120) -> str:
     try:
+        if isinstance(item, dict):
+            item = {
+                k: ("[redacted]" if str(k).lower() in _PII_KEYS else _redact_value(v))
+                for k, v in item.items()
+            }
         text = str(item)
     except Exception:  # noqa: BLE001 - preview must never raise
         text = f"<unprintable {type(item).__name__}>"
@@ -127,8 +153,9 @@ def run_isolated(
             results.append(fn(item))
         except Exception as exc:  # noqa: BLE001 - isolation is the point
             err = f"{type(exc).__name__}: {exc}"
-            skipped.append(SkippedItem(index=i, preview=preview_fn(item), error=err))
-            log.warning("self-healing: skipped item %d (%s): %s", i, preview_fn(item), err)
+            text = preview_fn(item)
+            skipped.append(SkippedItem(index=i, preview=text, error=err))
+            log.warning("self-healing: skipped item %d (%s): %s", i, text, err)
     return results, skipped
 
 
@@ -169,6 +196,10 @@ def health_check(db: Any, tables: list[str]) -> dict[str, str]:
 
     A cheap pre-flight: pipelines call this before doing real work so a dead
     database degrades honestly instead of mid-batch.
+
+    Assumes every probed table has an `id` column — the probe is
+    `select("id").limit(1)`. True for every lbt-os table today; revisit if a
+    probed table ever drops its id column.
     """
     report: dict[str, str] = {}
     for t in tables:

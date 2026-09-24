@@ -8,6 +8,14 @@ per-row inserts so one DB-level poison row can't sink the other 499.
 
 Whole-file problems (too large, not UTF-8, no headers, no rows, unknown
 entity type) are still honest 400s — those are bad requests, not poison rows.
+
+At-least-once insert semantics (explicit trade-off): chunk retries and the
+per-row fallback can re-insert rows when a failure is ambiguous — e.g. the
+server committed the chunk but the response was lost, and the timeout was
+(classified) transient. A retried duplicate is visible (in the `imported`
+count and the table) and dedupe-able; a dropped batch is silent data loss,
+so this pipeline retries rather than risks dropping. Rows rejected by
+validation before insert are never retried.
 """
 from __future__ import annotations
 
@@ -131,14 +139,20 @@ def _log_import(
         db.table("csv_import_logs").insert(extended).execute()
         return
     except Exception as exc:
-        # Pre-migration DBs reject the new columns: retry the legacy shape.
-        if "details" not in str(exc).lower() and "skipped_rows" not in str(exc).lower():
-            return
+        # Any failure of the extended insert (missing columns on a
+        # pre-migration DB, or a transient DB blip) falls through to the
+        # legacy shape — an import log that loses its details is better
+        # than no import log at all.
+        log.warning(
+            "self-healing: extended import-log insert failed (%s); "
+            "trying legacy shape", type(exc).__name__)
     try:
         legacy = {k: v for k, v in extended.items() if k not in ("skipped_rows", "details")}
         db.table("csv_import_logs").insert(legacy).execute()
-    except Exception:
-        pass
+    except Exception as exc:
+        # Both shapes failed: log loudly. A lost import log must never be
+        # silent — the morning standup reads these.
+        log.error("self-healing: import logging failed entirely: %s", exc)
 
 
 def list_import_history(db: Client, org_id: str, limit: int = 30) -> list[dict[str, Any]]:

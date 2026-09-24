@@ -249,6 +249,41 @@ class RetryTest(unittest.TestCase):
         self.assertFalse(sh.is_transient(ValueError("bad value")))
         self.assertFalse(sh.is_transient(KeyError("missing")))
 
+    def test_transient_status_codes_need_word_boundaries(self):
+        self.assertTrue(sh.is_transient(RuntimeError("503 service unavailable")))
+        self.assertFalse(sh.is_transient(RuntimeError("job 15035 failed")))
+        self.assertFalse(sh.is_transient(ValueError("row id 1503 invalid")))
+
+    def test_mark_permanent_opts_out_of_retry(self):
+        sleeps = []
+        calls = []
+
+        def fn():
+            calls.append(1)
+            raise sh.mark_permanent(TimeoutError("connection timed out"))
+
+        with self.assertRaises(TimeoutError):
+            sh.retry_with_backoff(fn, attempts=3, base_delay=0.01, sleep=sleeps.append)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(sleeps, [])
+        self.assertFalse(sh.is_transient(sh.mark_permanent(TimeoutError("x"))))
+
+    def test_retry_delay_never_exceeds_max_delay(self):
+        sleeps = []
+        attempts = []
+
+        def fn():
+            attempts.append(1)
+            if len(attempts) < 3:
+                raise ConnectionError("connection reset by peer")
+            return "ok"
+
+        sh.retry_with_backoff(fn, attempts=3, base_delay=10.0,
+                              max_delay=1.0, sleep=sleeps.append)
+        self.assertEqual(len(sleeps), 2)
+        for s in sleeps:
+            self.assertLessEqual(s, 1.0)
+
 
 class IsolatedBatchTest(unittest.TestCase):
     def test_poison_item_skipped_rest_complete(self):
@@ -279,6 +314,43 @@ class DeadLetterTest(unittest.TestCase):
         self.assertEqual(summary["skipped"], 2)
         self.assertEqual(len(summary["sample"]), 2)
         self.assertEqual(summary["sample"][0]["index"], 3)
+
+    def test_preview_redacts_pii_shaped_values(self):
+        text = sh._preview({
+            "name": "Adaeze",
+            "email": "ada@example.com",
+            "phone": "303-555-0142",
+            "note": "call 555 back",
+        })
+        self.assertIn("Adaeze", text)          # not PII-shaped: kept
+        self.assertIn("call 555 back", text)   # short digit run: kept
+        self.assertIn("[redacted]", text)
+        self.assertNotIn("ada@example.com", text)
+        self.assertNotIn("555-0142", text)
+
+    def test_dlq_logs_error_with_redacted_preview(self):
+        dlq = sh.DeadLetterQueue("csv-import")
+        with self.assertLogs("twistor.self_healing", level="ERROR") as cm:
+            dlq.collect(2, {"name": "Adaeze", "email": "ada@example.com",
+                            "phone": "+1 (303) 555-0142"},
+                        ValueError("bad amount"))
+        self.assertEqual(len(cm.output), 1)
+        msg = cm.output[0]
+        self.assertIn("Adaeze", msg)
+        self.assertIn("[redacted]", msg)
+        self.assertNotIn("ada@example.com", msg)
+        self.assertNotIn("555-0142", msg)
+        preview = dlq.summarize()["sample"][0]["preview"]
+        self.assertNotIn("ada@example.com", preview)
+        self.assertNotIn("555-0142", preview)
+
+
+class HealthCheckTest(unittest.TestCase):
+    def test_health_check_reports_unreachable_tables(self):
+        db = FakeDB({"leads": []})
+        report = sh.health_check(db, ["leads", "nope"])
+        self.assertEqual(report["leads"], "ok")
+        self.assertTrue(report["nope"].startswith("unreachable:"))
 
 
 # ---------------------------------------------------------------------------

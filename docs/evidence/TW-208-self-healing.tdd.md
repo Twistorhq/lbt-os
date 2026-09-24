@@ -37,7 +37,38 @@ tasks.md) — `openspec validate --changes`: **1 passed, 0 failed**.
   `pytest tests/ -q` → **92 passed, 8 subtests passed**.
 - **Lint**: `python3 -m ruff check app tests` → **All checks passed!**
 - Two lint fixes during GREEN were real code issues (unused locals in tests,
-  unsorted import block), fixed by deletion/reordering — no suppressions.
+  unsorted import block), fixed by deletion/reordering. Separately, the diff
+  intentionally adds ~10 `# noqa` directives (broad `except Exception`
+  markers in the self-healing machinery): each is commented, and broad-except
+  *is* the mechanism here — isolation, classification, and DLQ capture only
+  work by catching broadly. Ruff is clean with those documented exceptions.
+
+## Fix round (Rosa REQUEST_CHANGES → this commit)
+
+Rosa's review found three majors plus nits; all fixed here:
+
+1. **Evidence-doc accuracy** — the first version claimed "zero new ignores"
+   (false: ~10 commented `# noqa`), "200-char" preview truncation (actual:
+   120), and an ERROR-log assertion test that didn't exist. All corrected; a
+   real ERROR-log test now exists (`test_dlq_logs_error_with_redacted_preview`).
+2. **At-least-once insert semantics** — documented explicitly in the module
+   docstring and design.md: ambiguous chunk failures (committed server-side,
+   response lost) can re-insert rows on retry. A visible, dedupe-able
+   duplicate beats silent data loss, so the pipeline retries rather than
+   risks dropping; validation-rejected rows are never retried.
+3. **PII redaction in DLQ previews** — `_preview` now redacts email/phone-shaped
+   values (key- and pattern-based) before they reach logs or JSONB; covered
+   by `test_preview_redacts_pii_shaped_values` and the ERROR-log assertion test.
+4. **Nits** — jitter applied before the `max_delay` cap (true ceiling, pinned
+   by `test_retry_delay_never_exceeds_max_delay`); removed unreachable
+   `assert/raise` tail; status codes match as word-boundary tokens
+   (`test_transient_status_codes_need_word_boundaries`); `run_isolated`
+   caches the preview; `health_check` documents its `id`-column assumption
+   and has a dedicated test; `_log_import` tries the legacy shape on *any*
+   extended-insert failure and logs loudly if both fail; design.md synced to
+   the implementation (signature, `"unreachable:"`, 120 chars).
+- New tests in the fix round: 6 (26 total). `pytest tests/ -q` →
+  **98 passed, 8 subtests passed**; `ruff check app tests` clean.
 
 ## Guarantees
 
@@ -55,6 +86,11 @@ tasks.md) — `openspec validate --changes`: **1 passed, 0 failed**.
 | 10 | Nothing else broke | `pytest tests/ -q` (CI dummy env) | CI | PASS | `92 passed, 8 subtests passed` |
 | 11 | Style gate | `ruff check app tests` | CI | PASS | `All checks passed!` |
 | 12 | Spec artifacts valid | `openspec validate --changes` | manual | PASS | `1 passed, 0 failed` |
+| 13 | DLQ previews never carry raw email/phone | `test_preview_redacts_pii_shaped_values`, `test_dlq_logs_error_with_redacted_preview` | unit | PASS | `[redacted]` in preview + ERROR log; raw values absent |
+| 14 | Retry delay never exceeds `max_delay` | `test_retry_delay_never_exceeds_max_delay` | unit | PASS | all sleeps ≤ 1.0 with base 10.0 / cap 1.0 |
+| 15 | Status codes classify as tokens, not substrings | `test_transient_status_codes_need_word_boundaries` | unit | PASS | "503" transient, "15035" not |
+| 16 | Permanent opt-out skips retries | `test_mark_permanent_opts_out_of_retry` | unit | PASS | 1 call, 0 sleeps |
+| 17 | Health check reports dead tables honestly | `test_health_check_reports_unreachable_tables` | unit | PASS | `unreachable: RuntimeError: ...` |
 
 ## Coverage and known gaps
 
@@ -63,8 +99,10 @@ tasks.md) — `openspec validate --changes`: **1 passed, 0 failed**.
   tests — the pre-migration fallback path is tested instead, and the
   migration itself is a plain `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`.
 - Retry sleeps are patched out in tests; real backoff timing is not exercised.
-- DLQ preview truncation (200 chars) and ERROR-log emission are covered by
-  `test_dead_letter_queue_collects_structured_items` (caplog assertion).
+- DLQ previews truncate to 120 chars and redact email/phone-shaped values;
+  ERROR-log emission is covered by `test_dlq_logs_error_with_redacted_preview`
+  (assertLogs assertion, added in the fix round as documentation of existing
+  behavior).
 - **Intentional gaps (deferred, not covered):** notification-path retries/DLQ
   and the repo-wide pipeline rollout — follow-up ticket after Rosa's review
   of this slice.
@@ -84,5 +122,6 @@ tasks.md) — `openspec validate --changes`: **1 passed, 0 failed**.
   `git status` + diff inspection on `feature/tw-208-self-healing`; the
   branch contains only TW-208 files (no TW-209 analytics files).
 - No secrets, credentials, or PII in the diff. No new network/subprocess/file
-  operations beyond the existing Supabase calls. No suppressions added
-  (`ruff` clean with zero new ignores).
+  operations beyond the existing Supabase calls. The `# noqa` directives in
+  the diff are intentional, commented broad-except markers (isolation and
+  classification require catching broadly) — `ruff` is clean with them.

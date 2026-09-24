@@ -8,17 +8,22 @@
   (connection/timeout/network/lock/deadlock/temporarily-unavailable/rate
   limit) plus an opt-out `mark_permanent(exc)` flag so a detector bug is
   never retried as if it were a blip.
-- `retry_with_backoff(fn, *, attempts=3, base_delay=0.5, max_delay=30.0, jitter=0.1)`
-  — exponential delay, jitter, cap; sleeps are patchable in tests so the
-  suite never actually waits.
+- `retry_with_backoff(fn, *, attempts=3, base_delay=0.5, max_delay=8.0,
+  sleep=None, on_retry=None)` — exponential delay with a built-in 0.5x–1.5x
+  jitter multiplier applied *before* the `max_delay` cap, so `max_delay` is a
+  true ceiling; sleeps are patchable in tests so the suite never actually
+  waits.
 - `run_isolated(items, fn)` — maps each item independently, returns
   `(ok, [SkippedItem(index, preview, error)])`; `SkippedItem.preview` is
-  truncated to 200 chars so logs can't leak full records.
+  truncated to 120 chars so logs can't carry full records.
 - `DeadLetterQueue(pipeline)` — `collect(index, item, exc)` logs loudly at
   ERROR with index + preview + error, stores a structured record, and
   `summarize(sample_size=20)` returns a JSON-serializable dict for import
-  logs / brief payloads.
-- `health_check(db, tables)` — per-table `"ok"` / `"missing: <reason>"` probe.
+  logs / brief payloads. Previews are PII-redacted: dict values under
+  email/phone-shaped keys, or matching email/phone patterns, become
+  `"[redacted]"` before they reach logs or JSONB.
+- `health_check(db, tables)` — per-table `"ok"` / `"unreachable: <reason>"`
+  probe. Assumes every probed table has an `id` column.
 
 ## CSV ingestion retrofit (`backend/app/services/manual_import.py`)
 
@@ -31,9 +36,15 @@
 - Inserts go in 500-row chunks via `retry_with_backoff`; a chunk that still
   fails falls back to per-row inserts, so one DB-level poison row can't sink
   the other 499.
+- **At-least-once insert semantics (explicit):** when a chunk failure is
+  ambiguous (committed server-side, response lost), the retry can re-insert
+  rows. A visible, dedupe-able duplicate beats silent data loss, so the
+  pipeline retries rather than risks dropping. Rows rejected by validation
+  before insert are never retried.
 - `_log_import` persists `skipped_rows` + a `details` JSONB dead-letter
-  summary, falling back to the legacy column set when the migration hasn't
-  applied yet (detected by the DB error naming the missing column).
+  summary, falling back to the legacy column set when the extended insert
+  fails for any reason (pre-migration schema, transient blip). If both shapes
+  fail, an ERROR log fires — a lost import log is never silent.
 - Import status: `"failed"` on whole-file error, `"partial"` when rows were
   skipped, `"success"` when clean.
 - Migration `supabase/migration_csv_import_logs_self_healing.sql` adds the
