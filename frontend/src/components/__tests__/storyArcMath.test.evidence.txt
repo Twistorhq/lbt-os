@@ -1,0 +1,25 @@
+# TW-165 scroll-math test evidence
+# Run: node frontend/src/components/__tests__/storyArcMath.test.mjs
+# Date: 2026-09-24T14:59:14Z
+# Node: v24.20.0
+
+ok - clamp clamps low
+ok - clamp clamps high
+ok - clamp passes through
+ok - centered panel: opacity 1, no offset, full scale, interactive
+ok - panel holds opacity 1 at 0.3 off-center
+ok - panel fully faded at 0.5 off-center
+ok - panel midpoint fade at 0.4 off-center
+ok - panel non-interactive when opacity <= 0.4 (inert follows this)
+ok - panel interactive at opacity 0.5
+ok - panel above center rises negatively (fine pointer)
+ok - coarse pointers get the gentle 40px rise, no scale
+ok - rise clamps at 0.6 * rise for far stages
+ok - far stage: opacity 0, non-interactive
+ok - stageStyles returns no dead active field
+ok - background fully visible at center
+ok - background still half-visible where panels are gone (rel 0.5)
+ok - background fades 0.4 -> 0.6 off-center
+
+17 assertions passed
+exit=0

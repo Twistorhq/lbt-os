@@ -108,7 +108,8 @@
   color: rgb(248 205 122 / 0.7);
 }
 
-/* ---- reduced-motion kill switch: no ambient animation, reveals snap in ---- */@media (prefers-reduced-motion: reduce) {
+/* ---- reduced-motion kill switch: no ambient animation, reveals snap in ---- */
+@media (prefers-reduced-motion: reduce) {
   .marquee-track {
     animation: none;
   }

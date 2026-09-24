@@ -1,6 +1,7 @@
 import { useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { usePrefersReducedMotion, useScrollEffect } from './motion'
+import { stageStyles, bgStyles, clamp } from './storyArcMath'
 import { ArrowRight, Check, Gauge, Lightning, Phone } from './icons'
 
 /* TW-165: scroll-narrative story arc ("Bramble" pattern) built from the
@@ -45,38 +46,7 @@ const STAGES = [
   },
 ]
 
-function clamp(v, min, max) {
-  return Math.min(max, Math.max(min, v))
-}
-
-/**
- * Pure scroll-math for the story arc — exported for unit testing.
- * stagePos: 0..3 (stage i centered at i + 0.5). Returns the style values
- * for a foreground panel at `index`.
- */
-export function stageStyles(stagePos, index, isCoarse) {
-  const rel = stagePos - (index + 0.5)
-  const abs = Math.abs(rel)
-  const opacity = clamp(1 - (abs - 0.3) / 0.2, 0, 1)
-  const rise = isCoarse ? 40 : 90
-  const y = clamp(rel, -0.6, 0.6) * rise
-  const scale = isCoarse ? 1 : 1 - Math.min(abs, 0.5) * 0.05
-  return {
-    opacity,
-    transform: `translate3d(0, ${y.toFixed(1)}px, 0) scale(${scale.toFixed(4)})`,
-    pointerEvents: opacity > 0.4,
-    active: Math.floor(clamp(stagePos, 0, 2.999)) === index,
-  }
-}
-
-/**
- * Background-layer opacity — wider overlap than panels so the world never
- * goes blank between stages.
- */
-export function bgStyles(stagePos, index) {
-  const rel = stagePos - (index + 0.5)
-  return { opacity: clamp(1 - (Math.abs(rel) - 0.4) / 0.2, 0, 1) }
-}
+/* Scroll-math lives in ./storyArcMath.js (pure, unit-tested). */
 
 function LeakVisual() {
   return (
@@ -241,6 +211,10 @@ function AnimatedArc({ onCta, ctaUrl }) {
       el.style.opacity = st.opacity.toFixed(3)
       el.style.transform = st.transform
       el.style.pointerEvents = st.pointerEvents ? '' : 'none'
+      // TW-165 keyboard-trap fix: an invisible panel must not be tabbable.
+      // pointer-events:none does not remove elements from the tab order;
+      // inert does (and also hides them from assistive tech).
+      el.inert = !st.pointerEvents
     })
 
     bgRefs.current.forEach((el, i) => {
@@ -306,7 +280,12 @@ function AnimatedArc({ onCta, ctaUrl }) {
         {STAGES.map((s, i) => (
           <div
             key={s.key}
-            ref={(el) => (panelRefs.current[i] = el)}
+            ref={(el) => {
+              panelRefs.current[i] = el
+              // Initial state matches the initial aria-hidden: only the
+              // first panel is interactive before the first scroll tick.
+              if (el) el.inert = i !== 0
+            }}
             role="group"
             aria-label={s.label}
             aria-hidden={i === 0 ? 'false' : 'true'}
