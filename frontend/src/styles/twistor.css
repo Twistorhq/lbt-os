@@ -1,0 +1,121 @@
+/* TW-159: Twistor Trades marketing design system.
+ * Cinematic scroll motion — transform/opacity only, single rAF-throttled
+ * scroll listener (see components/motion.jsx). All motion honors
+ * prefers-reduced-motion via the kill-switch below and the usePrefersReducedMotion
+ * hook (motion primitives skip scroll effects entirely when reduced motion is on).
+ */
+
+:root {
+  --tt-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --tt-gold-300: #f8cd7a;
+  --tt-gold-400: #f5b942;
+  --tt-sofrito-950: #0a0a18;
+}
+
+/* ---- typographic helpers ---- */
+.tt-kicker {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+}
+
+.tt-h2 {
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.05;
+}
+
+.tt-gradient-word {
+  background: linear-gradient(100deg, #8b8bf7 0%, #c9b8ff 45%, var(--tt-gold-400) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* ---- surfaces ---- */
+.tt-card-dark {
+  background: #ffffff0a;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 1.5rem;
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+
+.tt-sample-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 9999px;
+  padding: 0.3rem 0.8rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: #f5b94229;
+  color: var(--tt-gold-300);
+  border: 1px solid rgba(245, 185, 66, 0.35);
+}
+
+/* sample badge on light backgrounds */
+.tt-sample-badge.on-light {
+  background: #d18f1d1f;
+  color: #a86e12;
+  border-color: #d18f1d4d;
+}
+
+/* ---- scroll reveal (driven by IntersectionObserver in motion.jsx) ---- */
+.reveal {
+  opacity: 0;
+  transform: translateY(30px);
+  transition: opacity 0.9s var(--tt-ease-out), transform 0.9s var(--tt-ease-out);
+  transition-delay: var(--reveal-delay, 0ms);
+  will-change: opacity, transform;
+}
+
+.reveal.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* ---- 3D depth stage (translateZ children via [data-depth]) ---- */
+.depth-stage {
+  perspective: 1200px;
+  perspective-origin: 50% 40%;
+}
+
+/* ---- trade marquee ---- */
+@keyframes marquee {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+.marquee-track {
+  display: flex;
+  width: -moz-max-content;
+  width: max-content;
+  animation: marquee 38s linear infinite;
+}
+
+.marquee:hover .marquee-track {
+  animation-play-state: paused;
+}
+
+/* ---- story arc progress rail (TW-165; active state driven imperatively via
+ * data-active so no React state runs on the scroll path) ---- */
+.story-rail-btn[data-active='true'] {
+  background: rgb(245 185 66 / 0.15);
+  color: var(--tt-gold-300);
+}
+.story-rail-btn[data-active='true'] .story-rail-index {
+  color: rgb(248 205 122 / 0.7);
+}
+
+/* ---- reduced-motion kill switch: no ambient animation, reveals snap in ---- */
+@media (prefers-reduced-motion: reduce) {
+  .marquee-track {
+    animation: none;
+  }
+  .reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}

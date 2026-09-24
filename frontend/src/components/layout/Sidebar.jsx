@@ -3,6 +3,7 @@ import { NavLink } from 'react-router-dom'
 import { useOrganization, UserButton } from '@clerk/clerk-react'
 import { useQuery } from '@tanstack/react-query'
 import { orgApi } from '../../lib/api'
+import { TwistorMark } from '../icons'
 
 const navGroups = [
   {
@@ -63,12 +64,17 @@ export default function Sidebar() {
   return (
     <aside className="sticky top-0 flex h-screen w-64 shrink-0 flex-col border-r border-slate-900/5 bg-slate-950 text-white">
       {/* Logo */}
-      <div className="border-b border-white/8 px-5 py-5">
-        <div className="inline-flex rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-white/45">
-          LBT OS
+      <div className="border-b border-white/10 px-5 py-5">
+        <div className="flex items-center gap-2.5">
+          <TwistorMark className="h-9 w-9" />
+          <div>
+            <div className="text-[15px] font-bold tracking-tight">
+              Twistor <span className="font-medium text-white/60">Trades</span>
+            </div>
+            <div className="text-[11px] text-white/45">Operating system</div>
+          </div>
         </div>
-        <div className="mt-4 text-lg font-semibold tracking-tight">Command Center</div>
-        <div className="mt-1 text-xs text-white/50">{organization?.name || 'Your Business'}</div>
+        <div className="mt-4 text-[13px] font-medium text-white/60">{organization?.name || 'Your Business'}</div>
         <div className={`mt-3 inline-flex rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${modeStyles[mode] || modeStyles.blank}`}>
           {modeLabel}
         </div>
@@ -81,7 +87,7 @@ export default function Sidebar() {
             <button
               type="button"
               onClick={() => toggleGroup(group.label)}
-              className="mb-2 flex w-full items-center justify-between rounded-lg px-3 py-1.5 text-left text-[10px] font-semibold uppercase tracking-[0.2em] text-white/34 transition-colors hover:bg-white/5 hover:text-white/62"
+              className="mb-2 flex w-full items-center justify-between rounded-lg px-3 py-1.5 text-left text-[10px] font-semibold uppercase tracking-[0.2em] text-white/35 transition-colors hover:bg-white/5 hover:text-white/60"
               aria-expanded={!collapsedGroups[group.label]}
               aria-controls={`sidebar-group-${group.label.toLowerCase().replace(/\s+/g, '-')}`}
             >
@@ -96,21 +102,27 @@ export default function Sidebar() {
                     to={to}
                     end={to === '/app'}
                     className={({ isActive }) =>
-                      `group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${
+                      `group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${
                         isActive
                           ? 'bg-white/10 text-white'
-                          : 'text-white/52 hover:bg-white/6 hover:text-white/84'
+                          : 'text-white/50 hover:bg-white/10 hover:text-white/80'
                       }`
                     }
                   >
                     {({ isActive }) => (
                       <>
-                        <span className={`flex h-8 w-8 items-center justify-center rounded-lg text-sm transition-colors ${isActive ? 'bg-white/10 text-white' : 'bg-white/4 text-white/55 group-hover:bg-white/8 group-hover:text-white/80'}`}>
+                        {isActive && (
+                          <span
+                            className="absolute left-0 top-1/2 h-6 w-1 -translate-y-1/2 rounded-full bg-gold-400"
+                            aria-hidden="true"
+                          />
+                        )}
+                        <span className={`flex h-8 w-8 items-center justify-center rounded-lg text-sm transition-colors ${isActive ? 'bg-gold-400/15 text-gold-300' : 'bg-white/5 text-white/55 group-hover:bg-white/10 group-hover:text-white/80'}`}>
                           {icon}
                         </span>
                         <span>{label}</span>
                         {pro && (
-                          <span className="ml-auto rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-white/42">
+                          <span className="ml-auto rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-white/40">
                             Pro
                           </span>
                         )}

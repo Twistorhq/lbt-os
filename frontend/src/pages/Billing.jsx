@@ -195,8 +195,8 @@ export default function Billing() {
           const isCurrent = subscriptionActive && org?.plan === plan.key
           const actionLabel = subscriptionActive ? `Switch to ${plan.name}` : `Start ${plan.name}`
           return (
-            <div key={plan.key} className={`group relative overflow-hidden card-surface p-6 ${plan.key === 'pro' ? 'ring-2 ring-brand-500/40' : ''}`}>
-              <div className={`absolute inset-x-0 top-0 h-1 ${plan.key === 'pro' ? 'bg-[linear-gradient(90deg,#2563eb_0%,#60a5fa_100%)]' : 'bg-[linear-gradient(90deg,rgba(148,163,184,0.15),rgba(148,163,184,0.55),rgba(148,163,184,0.15))]'}`} />
+            <div key={plan.key} className={`group relative overflow-hidden card-surface p-6 ${plan.key === 'pro' ? 'ring-2 ring-gold-400/60 shadow-[0_24px_60px_-30px_rgba(245,185,66,0.45)]' : ''}`}>
+              <div className={`absolute inset-x-0 top-0 h-1 ${plan.key === 'pro' ? 'bg-[linear-gradient(90deg,#6366f1_0%,#f5b942_100%)]' : 'bg-[linear-gradient(90deg,rgba(148,163,184,0.15),rgba(148,163,184,0.55),rgba(148,163,184,0.15))]'}`} />
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="text-[0.7rem] font-semibold uppercase tracking-[0.22em] text-slate-400">{plan.name}</div>
@@ -204,7 +204,7 @@ export default function Billing() {
                   <div className="mt-2 text-sm leading-6 text-slate-500">{plan.description}</div>
                 </div>
                 {plan.key === 'pro' && (
-                  <div className="animate-glowPulse rounded-full bg-brand-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-700">
+                  <div className="animate-glowPulse rounded-full bg-gold-400/20 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-gold-600 ring-1 ring-gold-400/50">
                     Recommended
                   </div>
                 )}
@@ -212,7 +212,7 @@ export default function Billing() {
               <div className="mt-6 space-y-3">
                 {plan.features.map((feature) => (
                   <div key={feature} className="flex items-start gap-3 text-sm leading-6 text-slate-600">
-                    <div className={`mt-2 h-2.5 w-2.5 rounded-full ${plan.key === 'pro' ? 'bg-brand-500' : plan.key === 'premium' ? 'bg-violet-500' : 'bg-emerald-500'}`} />
+                    <div className={`mt-2 h-2.5 w-2.5 rounded-full ${plan.key === 'pro' ? 'bg-gold-500' : plan.key === 'premium' ? 'bg-violet-500' : 'bg-emerald-500'}`} />
                     <span>{feature}</span>
                   </div>
                 ))}
