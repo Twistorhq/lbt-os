@@ -14,10 +14,15 @@ Privacy design (from day one):
 v1 ships: schema + consent + per-org capture + cohort read. The scheduled
 cross-org aggregation job lands post-launch.
 """
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
+from .. import self_healing as sh
+
 K_ANONYMITY = 5
+
+log = logging.getLogger("twistor.self_healing")
 
 # Metrics the cohort API will compare. Unknown names are rejected at the edge.
 METRIC_ALLOWLIST = frozenset({
@@ -37,16 +42,29 @@ def _now_iso() -> str:
 def record_org_metrics(
     db, org_id: str, vertical: str, metrics: dict[str, float], period: str = "30d"
 ) -> dict[str, Any]:
-    """Store this org's private leak-metric snapshot. Requires consent."""
-    org = (
-        db.table("organizations")
-        .select("benchmark_consent")
-        .eq("id", org_id)
-        .limit(1)
-        .execute()
-        .data
-        or []
-    )
+    """Store this org's private leak-metric snapshot. Requires consent.
+
+    TW-208: never raises. A transient DB failure retries with backoff; a
+    persistent failure degrades to {"recorded": 0, "reason": "db_error"} and
+    logs loudly. The brief endpoint calls this inline — a benchmark write
+    must never 500 the morning brief.
+    """
+    try:
+        org = sh.retry_with_backoff(
+            lambda: (
+                db.table("organizations")
+                .select("benchmark_consent")
+                .eq("id", org_id)
+                .limit(1)
+                .execute()
+                .data
+                or []
+            ),
+            attempts=2, base_delay=0.2,
+        )
+    except Exception as exc:  # noqa: BLE001 - degrade, don't raise
+        log.error("self-healing: benchmark consent read failed after retries: %s", exc)
+        return {"recorded": 0, "reason": "db_error"}
     if not org or not org[0].get("benchmark_consent"):
         return {"recorded": 0, "reason": "no_consent"}
     rows = [
@@ -60,8 +78,16 @@ def record_org_metrics(
         }
         for name, value in metrics.items()
     ]
-    if rows:
-        db.table("benchmark_org_metrics").insert(rows).execute()
+    if not rows:
+        return {"recorded": 0}
+    try:
+        sh.retry_with_backoff(
+            lambda: db.table("benchmark_org_metrics").insert(rows).execute(),
+            attempts=3, base_delay=0.3,
+        )
+    except Exception as exc:  # noqa: BLE001 - degrade, don't raise
+        log.error("self-healing: benchmark metric write failed after retries: %s", exc)
+        return {"recorded": 0, "reason": "db_error"}
     return {"recorded": len(rows)}
 
 

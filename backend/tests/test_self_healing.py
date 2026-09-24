@@ -10,14 +10,12 @@ CSV ingestion, the leak engine, and benchmark recording:
 """
 import asyncio
 import unittest
-from datetime import datetime, timezone
 
 from app import self_healing as sh
 from app.leak_engine import engine as leak_engine
 from app.leak_engine.registry import Detector
 from app.services import benchmarks as bm
 from app.services import manual_import
-
 
 # ---------------------------------------------------------------------------
 # Fakes
@@ -61,7 +59,20 @@ class FakeDB:
     def table(self, name):
         if name not in self._tables:
             raise RuntimeError(f"table {name} does not exist")
-        return FakeQuery(self._tables[name])
+        return _WriteThroughQuery(self, name)
+
+
+class _WriteThroughQuery(FakeQuery):
+    """FakeQuery whose inserts land in the shared table (reads still filter a copy)."""
+
+    def __init__(self, db, name):
+        self._db = db
+        self._name = name
+        super().__init__(db._tables[name])
+
+    def insert(self, rows):
+        self._db._tables[self._name].extend(rows if isinstance(rows, list) else [rows])
+        return self
 
 
 class FakeUploadFile:
@@ -83,21 +94,23 @@ class FlakyInsertDB(FakeDB):
 
     def table(self, name):
         db = self
+        if name not in self._tables:
+            raise RuntimeError(f"table {name} does not exist")
 
-        class Q(FakeQuery):
+        class Q(_WriteThroughQuery):
+            def __init__(self):
+                super().__init__(db, name)
+
             def insert(self, rows):
                 db.attempts += 1
                 if db.attempts <= db.failures:
                     raise ConnectionError("connection reset by peer")
-                db.inserted.extend(rows if isinstance(rows, list) else [rows])
+                lst = rows if isinstance(rows, list) else [rows]
+                db.inserted.extend(lst)
+                db._tables[name].extend(lst)
                 return self
 
-            def execute(self):
-                return FakeResult([])
-
-        if name not in self._tables:
-            raise RuntimeError(f"table {name} does not exist")
-        return Q(self._tables[name])
+        return Q()
 
 
 class PoisonRowDB(FakeDB):
@@ -297,7 +310,8 @@ class ImportIsolationTest(unittest.TestCase):
             db, ORG, "leads", FakeUploadFile(GRANDMA_ROWS.encode())))
         self.assertEqual(result["imported"], 2)
         self.assertEqual(result["skipped_rows"], 0)
-        self.assertEqual(len(db.inserted), 2)
+        leads = [r for r in db.inserted if "name" in r]
+        self.assertEqual(len(leads), 2)
         self.assertGreaterEqual(db.attempts, 2)
 
     def test_db_level_poison_row_isolated_by_per_row_fallback(self):
@@ -308,7 +322,7 @@ class ImportIsolationTest(unittest.TestCase):
         self.assertEqual(result["imported"], 2)
         self.assertEqual(result["skipped_rows"], 1)
         self.assertEqual(result["skipped"][0]["row"], 2)
-        names = [r["name"] for r in db.inserted]
+        names = [r["name"] for r in db.inserted if "name" in r]
         self.assertEqual(names, ["Adaeze", "Chidi"])
 
     def test_import_log_records_skipped_details(self):
@@ -318,16 +332,14 @@ class ImportIsolationTest(unittest.TestCase):
         logs = db._tables["csv_import_logs"]
         self.assertEqual(len(logs), 1)
         self.assertEqual(logs[0]["skipped_rows"], 1)
-        self.assertEqual(logs[0]["status"], "success")
+        self.assertEqual(logs[0]["status"], "partial")
         self.assertTrue(logs[0]["details"]["skipped"])
 
     def test_import_log_falls_back_when_details_columns_missing(self):
         csv_data = GRANDMA_ROWS
-        db = LegacyLogDB()
-        # leads table missing here is fine: LegacyLogDB only serves the log
-        # table; use a full FakeDB subclass instead for the import itself.
+        # leads table served by a full FakeDB; LegacyLogDB only serves the log
+        # table to simulate a pre-migration schema.
         full = FakeDB({"leads": []})
-        logged = {}
 
         orig_table = full.table
 
@@ -423,12 +435,12 @@ class EngineResilienceTest(unittest.TestCase):
 class BenchmarkResilienceTest(unittest.TestCase):
     def test_transient_db_failure_retries(self):
         db = FlakyInsertDB(
-            {"organizations": [{"id": ORG, "benchmark_consent": True}]}, failures=2)
+            {"organizations": [{"id": ORG, "benchmark_consent": True}],
+             "benchmark_org_metrics": []}, failures=2)
         result = bm.record_org_metrics(db, ORG, "hvac", {"quote_close_rate": 24.0})
         self.assertEqual(result["recorded"], 1)
 
     def test_persistent_db_failure_degrades_without_raising(self):
-        db = DeadDB()
         # consent lookup itself fails transiently -> treated as no_consent path
         # must not raise; use a consenting org via a flaky consent read.
         class ConsentDeadDB(DeadDB):

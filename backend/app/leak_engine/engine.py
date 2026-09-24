@@ -3,11 +3,22 @@ groups findings into the morning brief (the question ladder).
 
 Leak findings are never fabricated: a detector whose source tables are
 missing or empty degrades to an honest `insufficient_data` status.
+
+TW-208 self-healing: one error never crushes the full process. Each detector
+runs in isolation with transient retries; a detector that still fails lands
+in data_status["errors"] and the scan completes partial, flagged honestly.
 """
+import math
 from datetime import datetime, timezone
 from typing import Any
 
+from .. import self_healing as sh
 from .registry import detectors_for
+
+# Detector invocation retries: transient DB blips heal themselves; permanent
+# detector bugs raise immediately into the per-detector error bucket.
+_DETECTOR_RETRY_ATTEMPTS = 3
+_DETECTOR_RETRY_BASE_DELAY = 0.2
 
 # Industry (organizations.industry) -> leak-engine vertical.
 _INDUSTRY_VERTICAL = {
@@ -76,13 +87,23 @@ def _vertical_for(db, org_id: str) -> str:
 
 def _tables_available(db, tables: list[str]) -> list[str]:
     """Return the subset of tables that exist and are readable."""
-    missing = []
-    for t in tables:
-        try:
-            db.table(t).select("id").limit(1).execute()
-        except Exception:
-            missing.append(t)
-    return missing
+    report = sh.health_check(db, tables)
+    return [t for t, status in report.items() if status != "ok"]
+
+
+def _safe_float(value: Any) -> float:
+    """Coerce a detector's estimated_value; hostile values become 0.0.
+
+    TW-208: a detector returning estimated_value="N/A" must never 500 the
+    brief totals aggregation.
+    """
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if math.isnan(v) or math.isinf(v):
+        return 0.0
+    return v
 
 
 def run_leak_scan(db, org_id: str) -> dict[str, Any]:
@@ -108,7 +129,14 @@ def run_leak_scan(db, org_id: str) -> dict[str, Any]:
                     brief["data_status"]["insufficient"].append(t)
             continue
         try:
-            result = detector(db, org_id) or []
+            # TW-208: transient DB blips retry with backoff; a permanent
+            # detector bug raises immediately into the error bucket below.
+            # Either way a detector must never take down the scan.
+            result = sh.retry_with_backoff(
+                lambda: detector(db, org_id),
+                attempts=_DETECTOR_RETRY_ATTEMPTS,
+                base_delay=_DETECTOR_RETRY_BASE_DELAY,
+            ) or []
             # TW-204: detectors may return (findings, meta) with a skipped_rows
             # count — surfaced loudly so a bad CSV cell never silently removes
             # a leak category from the morning brief. Unpacked inside the try:
@@ -143,12 +171,17 @@ def run_leak_scan(db, org_id: str) -> dict[str, Any]:
             brief["data_status"].setdefault("errors", []).append(detector.name)
             continue
 
+    # TW-208: honest partial flag — the brief says when it isn't whole.
+    data_status = brief["data_status"]
+    if data_status.get("errors") or data_status.get("skipped_rows") or data_status.get("insufficient"):
+        data_status["partial"] = True
+
     findings_all = (
         brief["what_happened"] + brief["what_will_happen"] + brief["what_should_we_do"]
     )
     brief["totals"]["findings"] = len(findings_all)
     brief["totals"]["dollars_at_stake"] = round(
-        sum(float(f.get("estimated_value") or 0) for f in findings_all), 2
+        sum(_safe_float(f.get("estimated_value")) for f in findings_all), 2
     )
     # Most urgent first inside each rung.
     severity_rank = {"urgent": 0, "watch": 1, "info": 2}
