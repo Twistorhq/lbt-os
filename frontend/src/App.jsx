@@ -18,6 +18,7 @@ import Admin from './pages/Admin'
 import Strategy from './pages/Strategy'
 import Messages from './pages/Messages'
 import RevenueIntelligence from './pages/RevenueIntelligence'
+import MorningBrief from './components/brief/MorningBrief'
 import AgentUIDemo from './pages/AgentUIDemo'
 import NotFound from './pages/NotFound'
 
@@ -136,6 +137,7 @@ export default function App() {
           <Route path="customers" element={<Customers />} />
           <Route path="expenses" element={<Expenses />} />
           <Route path="insights" element={<AIInsights />} />
+          <Route path="brief" element={<MorningBrief />} />
           <Route path="billing" element={<Billing />} />
           <Route path="strategy" element={<Strategy />} />
           <Route path="revenue-intelligence" element={<RevenueIntelligence />} />

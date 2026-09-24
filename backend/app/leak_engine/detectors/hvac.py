@@ -128,7 +128,7 @@ def _equipment_graveyard_run(db, org_id: str) -> list[dict[str, Any]]:
         findings.append({
             "ladder": "should",
             "severity": "urgent" if past else "watch",
-            "title": "Monday replacement call list",
+            "title": "Your replacement call list",
             "detail": "Prioritized by equipment age — oldest first.",
             "count": len(ordered),
             "estimated_value": None,
@@ -190,7 +190,8 @@ def _plan_churn_run(db, org_id: str) -> list[dict[str, Any]]:
             "title": f"{len(billing_risk)} plans at involuntary-churn risk",
             "detail": (
                 "Failed cards and past-due billing — churn with no hard "
-                "feelings and no second chance, purely from billing neglect."
+                "feelings and no second chance. Purely a billing failure, "
+                "not a service failure."
             ),
             "count": len(billing_risk),
             "estimated_value": None,
@@ -264,8 +265,8 @@ def _quote_resurrection_run(db, org_id: str) -> list[dict[str, Any]]:
         "severity": "watch",
         "title": f"{len(stalled)} stalled quotes still winnable",
         "detail": (
-            "Quotes that died without follow-up. Industry data puts "
-            "conversion near 24% without follow-up versus 33-38% with a "
+            "Quotes that died without follow-up. Per industry research, "
+            "conversion runs near 24% without follow-up versus 33-38% with a "
             "simple two-touch sequence — the gap is almost entirely process."
         ),
         "count": len(stalled),

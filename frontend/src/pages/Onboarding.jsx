@@ -115,7 +115,7 @@ export default function Onboarding() {
     },
     onSuccess: () => {
       trackVisitorEvent('info_submitted', submittedInfo('create_workspace'))
-      navigate('/app')
+      navigate('/app/brief')
     },
   })
 
@@ -133,7 +133,7 @@ export default function Onboarding() {
     },
     onSuccess: () => {
       trackVisitorEvent('info_submitted', submittedInfo('launch_demo'))
-      navigate('/app')
+      navigate('/app/brief')
     },
   })
 
@@ -305,6 +305,17 @@ export default function Onboarding() {
                   />
                 </div>
               </div>
+              {/* TW-207: the handoff moment — the trailer ends, the film begins */}
+              <div className="rounded-2xl border border-white/10 bg-[#0d0d17] p-5">
+                <p className="tt-kicker text-violet-300/90">One more thing</p>
+                <p className="mt-2 text-lg font-semibold tracking-tight text-white">
+                  The trailer ends here. Your first Morning Brief is ready.
+                </p>
+                <p className="mt-1 text-sm leading-relaxed text-white/55">
+                  We&rsquo;ll walk you through what walked out the door — and
+                  what to do about it.
+                </p>
+              </div>
               <button
                 onClick={() => create.mutate()}
                 disabled={create.isPending}
@@ -318,7 +329,7 @@ export default function Onboarding() {
                     </svg>
                     Setting up your dashboard...
                   </>
-                ) : 'Launch My Dashboard →'}
+                ) : 'See my Morning Brief →'}
               </button>
               {industry && industry !== 'other' && (
                 <button
