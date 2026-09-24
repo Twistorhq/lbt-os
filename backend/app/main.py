@@ -22,6 +22,7 @@ from .routers import (
     expenses,
     integrations,
     leads,
+    leak_engine,
     messages,
     metrics,
     organizations,
