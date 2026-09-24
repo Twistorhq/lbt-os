@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '@clerk/clerk-react'
 import { Ambient, DepthStage, DriftImage, Parallax, Reveal, ScrollScale } from '../components/motion'
+import SampleCharts from '../components/marketing/SampleCharts'
 import {
   ArrowRight,
   Check,
@@ -315,7 +316,7 @@ function Hero({ onCta, ctaUrl }) {
           <div className="relative overflow-hidden rounded-[2rem] border border-white/10 shadow-[0_50px_120px_-40px_rgba(0,0,0,0.8)]">
             <DriftImage
               src="/img/hvac-tech.jpg"
-              alt="HVAC technician installing a compressor on a heating and cooling unit"
+              alt="Civilian HVAC technician in a bucket hat drilling into a rooftop air conditioning unit"
               className="aspect-[4/4.4] sm:aspect-[4/3.4]"
               drift={0.08}
             />
@@ -523,6 +524,10 @@ function LivePreview({ onCta, ctaUrl }) {
             </div>
           </div>
         </ScrollScale>
+
+        <Reveal y={28}>
+          <SampleCharts tradeKey={tradeKey} tradeLabel={trade.label} />
+        </Reveal>
       </div>
     </section>
   )
@@ -637,7 +642,7 @@ function Pilot({ onCta, ctaUrl }) {
             </div>
             <DriftImage
               src="/img/hvac-team.jpg"
-              alt="Two heating and cooling technicians soldering valves on a unit together"
+              alt="Three electrical utility workers in hard hats servicing a power pole from bucket lifts"
               className="min-h-[20rem] lg:min-h-full"
               drift={0.1}
             />
@@ -738,7 +743,7 @@ function Footer() {
         </div>
         <div className="mt-14 flex flex-col gap-3 border-t border-white/10 pt-8 text-xs text-white/35 sm:flex-row sm:items-center sm:justify-between">
           <p>Prepared by Twistor Holdings LLC</p>
-          <p>Photography: U.S. Air Force (public domain) via DVIDS (3241939, 3241944)</p>
+          <p>Photography: José Andrés Pacheco Cortes and Thampapon Otavorn via Pexels</p>
         </div>
       </div>
     </footer>
