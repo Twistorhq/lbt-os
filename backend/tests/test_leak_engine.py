@@ -226,6 +226,148 @@ class EngineTest(unittest.TestCase):
         self.assertNotIn("demo", str(brief).lower())
 
 
+class HostileCellTest(unittest.TestCase):
+    """TW-204: one malformed CSV cell must not kill its detector.
+
+    Regression tests in production shapes: garbage strings where the
+    migrations declare numeric columns (pilot CSV imports).
+    """
+
+    def test_garbage_quote_total_keeps_row_with_zero_value(self):
+        quotes = [
+            {"id": "qb", "org_id": ORG, "customer_name": "BadCell",
+             "total": "abc", "status": "sent", "sent_at": _days_ago(20),
+             "last_follow_up_at": None, "follow_up_count": 0},
+        ]
+        brief = run_leak_scan(_db(quotes=quotes), ORG)
+        self.assertNotIn("quote-resurrection",
+                         brief["data_status"].get("errors", []))
+        res = [f for f in brief["what_should_we_do"]
+               if f["detector"] == "quote-resurrection"]
+        self.assertTrue(any("BadCell" in str(f["entities"]) for f in res),
+                        "row with garbage total must survive as a $0 candidate")
+
+    def test_garbage_follow_up_count_skips_row_and_counts(self):
+        quotes = [
+            {"id": "qb", "org_id": ORG, "customer_name": "BadCell",
+             "total": 5000.0, "status": "sent", "sent_at": _days_ago(20),
+             "last_follow_up_at": None, "follow_up_count": "three"},
+            {"id": "qg", "org_id": ORG, "customer_name": "Good",
+             "total": 9000.0, "status": "sent", "sent_at": _days_ago(20),
+             "last_follow_up_at": None, "follow_up_count": 0},
+        ]
+        brief = run_leak_scan(_db(quotes=quotes), ORG)
+        self.assertNotIn("quote-resurrection",
+                         brief["data_status"].get("errors", []))
+        res = [f for f in brief["what_should_we_do"]
+               if f["detector"] == "quote-resurrection"]
+        self.assertTrue(any("Good" in str(f["entities"]) for f in res))
+        self.assertFalse(any("BadCell" in str(f["entities"]) for f in res))
+        self.assertEqual(
+            brief["data_status"]["skipped_rows"].get("quote-resurrection"), 1)
+
+    def test_nan_visits_per_year_skips_plan_row_and_counts(self):
+        plans = [
+            {"id": "pb", "org_id": ORG, "customer_name": "BadCell",
+             "plan_name": "Club", "status": "active", "billing_status": "current",
+             "visits_per_year": "NaN", "visits_completed": 0,
+             "started_at": _days_ago(300)},
+            {"id": "pg", "org_id": ORG, "customer_name": "Good",
+             "plan_name": "Club", "status": "active", "billing_status": "current",
+             "visits_per_year": 2, "visits_completed": 0,
+             "started_at": _days_ago(300)},
+        ]
+        brief = run_leak_scan(_db(service_plans=plans), ORG)
+        self.assertNotIn("plan-churn-risk",
+                         brief["data_status"].get("errors", []))
+        churn = [f for f in brief["what_happened"]
+                 if f["detector"] == "plan-churn-risk"]
+        self.assertTrue(any("Good" in str(f["entities"]) for f in churn))
+        self.assertEqual(
+            brief["data_status"]["skipped_rows"].get("plan-churn-risk"), 1)
+
+    def test_na_expected_life_falls_back_to_default(self):
+        assets = [
+            {"id": "ab", "org_id": ORG, "customer_name": "BadCell",
+             "asset_type": "furnace", "brand": "Carrier",
+             "install_date": _days_ago(18 * 365), "expected_life_years": "N/A"},
+        ]
+        brief = run_leak_scan(_db(service_assets=assets), ORG)
+        self.assertNotIn("equipment-age-graveyard",
+                         brief["data_status"].get("errors", []))
+        grave = [f for f in brief["what_happened"]
+                 if f["detector"] == "equipment-age-graveyard"]
+        self.assertTrue(any("BadCell" in str(f["entities"]) for f in grave))
+
+    def test_unexpected_row_error_skips_and_counts(self):
+        class EvilRow(dict):
+            def get(self, key, default=None):
+                if key == "follow_up_count":
+                    raise RuntimeError("boom")
+                return super().get(key, default)
+
+        quotes = [EvilRow({"id": "qe", "org_id": ORG, "customer_name": "Evil",
+                           "total": 5000.0, "status": "sent",
+                           "sent_at": _days_ago(20),
+                           "last_follow_up_at": None, "follow_up_count": 0})]
+        brief = run_leak_scan(_db(quotes=quotes), ORG)
+        self.assertNotIn("quote-resurrection",
+                         brief["data_status"].get("errors", []))
+        self.assertEqual(
+            brief["data_status"]["skipped_rows"].get("quote-resurrection"), 1)
+
+
+class RogueContractTest(unittest.TestCase):
+    """Rosa (TW-204 re-review): a detector returning a malformed contract
+    must degrade to an honest error entry — never take down the scan."""
+
+    def _run_with_rogue(self, run_fn):
+        from app.leak_engine import registry as reg
+        rogue = reg.Detector(name="rogue-test", vertical="hvac",
+                             requires=[], run=run_fn)
+        reg.register(rogue)
+        try:
+            return run_leak_scan(_db(), ORG)  # must not raise
+        finally:
+            reg._REGISTRY.remove(rogue)
+
+    def test_three_tuple_kills_nothing(self):
+        brief = self._run_with_rogue(lambda db, org: ([], {}, "extra"))
+        self.assertIn("rogue-test", brief["data_status"].get("errors", []))
+        self.assertGreater(brief["totals"]["findings"], 0)
+
+    def test_nondict_meta_kills_nothing(self):
+        brief = self._run_with_rogue(lambda db, org: ([], "not-a-dict"))
+        self.assertIn("rogue-test", brief["data_status"].get("errors", []))
+        self.assertGreater(brief["totals"]["findings"], 0)
+
+    def test_garbage_skipped_count_degrades_to_zero(self):
+        brief = self._run_with_rogue(
+            lambda db, org: ([], {"skipped_rows": "three"}))
+        self.assertNotIn("rogue-test", brief["data_status"].get("errors", []))
+        self.assertNotIn("rogue-test",
+                         brief["data_status"].get("skipped_rows", {}))
+
+
+class BenchmarkGuardTest(unittest.TestCase):
+    """TW-204 (Rosa): never record benchmark metrics when detectors errored —
+    a leak_findings: 0 row would quietly pollute future cohort aggregates."""
+
+    def test_no_recording_when_detectors_errored(self):
+        from app.routers import leak_engine as le_router
+        brief = {"data_status": {"errors": ["quote-resurrection"]}}
+        self.assertFalse(le_router.should_record_benchmarks(brief))
+
+    def test_recording_when_clean(self):
+        from app.routers import leak_engine as le_router
+        brief = {"data_status": {"insufficient": ["leads"]}}
+        self.assertTrue(le_router.should_record_benchmarks(brief))
+
+    def test_recording_when_no_data_status(self):
+        from app.routers import leak_engine as le_router
+        self.assertTrue(le_router.should_record_benchmarks({}))
+
+
 if __name__ == "__main__":
     unittest.main()
 

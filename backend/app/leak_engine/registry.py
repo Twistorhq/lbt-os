@@ -3,6 +3,10 @@
 A detector is a named leak pattern: what vertical it serves, which source
 tables it reads, and a run() that returns findings. New vertical = new
 detectors registered here, not a new engine.
+
+run() contract (TW-204): return the findings list, or a
+(findings, meta) tuple where meta may carry "skipped_rows" — the count of
+malformed rows the detector skipped loudly instead of dying on.
 """
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -13,9 +17,9 @@ class Detector:
     name: str
     vertical: str | None  # None = runs for every vertical
     requires: list[str] = field(default_factory=list)
-    run: Callable[..., list[dict[str, Any]]] | None = None
+    run: Callable[..., Any] | None = None
 
-    def __call__(self, db, org_id: str) -> list[dict[str, Any]]:
+    def __call__(self, db, org_id: str) -> Any:
         assert self.run is not None, f"detector {self.name} has no run()"
         return self.run(db, org_id)
 

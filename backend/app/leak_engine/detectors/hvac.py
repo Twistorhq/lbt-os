@@ -2,7 +2,13 @@
 
 Sourced from the TW-199 moat brief: the equipment graveyard, plan churn
 (including involuntary card-failure churn), and quote resurrection.
+
+TW-204: per-row resilience. Pilot CSV imports arrive as hostile strings
+("N/A", "NaN", "abc") where the migrations declare numeric columns. A bad
+cell skips its row — counted loudly in the brief — instead of killing the
+whole detector.
 """
+import math
 from datetime import datetime, timezone
 from typing import Any
 
@@ -63,31 +69,57 @@ def _entity(row: dict[str, Any], **extra) -> dict[str, Any]:
     return e
 
 
+def _num(value: Any, default: float | None = None) -> float | None:
+    """Coerce a CSV-ish cell to float.
+
+    Returns `default` for missing, non-numeric, NaN, or infinite values.
+    Pilot imports arrive as strings ("N/A", "NaN", "abc") and must never
+    raise inside a detector (TW-204).
+    """
+    if value is None or value == "":
+        return default
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return default
+    if math.isnan(v) or math.isinf(v):
+        return default
+    return v
+
+
 # ---------------------------------------------------------------------------
 # equipment-age-graveyard
 # ---------------------------------------------------------------------------
 
-def _equipment_graveyard_run(db, org_id: str) -> list[dict[str, Any]]:
+def _equipment_graveyard_run(db, org_id: str):
     assets = _fetch(db, "service_assets", org_id)
     past, entering = [], []
+    skipped = 0
     for a in assets:
-        age = _age_days(a.get("install_date"))
-        if age is None:
-            continue
-        atype = (a.get("asset_type") or "").lower()
-        floor = _TYPE_LIFE_FLOOR.get(atype, _DEFAULT_LIFE)
-        stated = a.get("expected_life_years") or _DEFAULT_LIFE
-        effective_days = min(floor, stated) * 365
-        info = _entity(
-            a,
-            asset_type=atype or None,
-            brand=a.get("brand"),
-            age_years=round(age / 365.25, 1),
-        )
-        if age >= effective_days:
-            past.append((age, info))
-        elif effective_days - age <= _WINDOW_DAYS:
-            entering.append((age, info))
+        try:
+            age = _age_days(a.get("install_date"))
+            if age is None:
+                continue
+            atype = (a.get("asset_type") or "").lower()
+            floor = _TYPE_LIFE_FLOOR.get(atype, _DEFAULT_LIFE)
+            # TW-204: "N/A" and friends fall back to the documented default,
+            # exactly like a missing value — the row is otherwise valid.
+            stated = _num(a.get("expected_life_years"), _DEFAULT_LIFE)
+            effective_days = min(floor, stated) * 365
+            info = _entity(
+                a,
+                asset_type=atype or None,
+                brand=a.get("brand"),
+                age_years=round(age / 365.25, 1),
+            )
+            if age >= effective_days:
+                past.append((age, info))
+            elif effective_days - age <= _WINDOW_DAYS:
+                entering.append((age, info))
+        except Exception:
+            # TW-204: backstop — one bad row skips loudly, never kills the
+            # detector.
+            skipped += 1
 
     findings = []
     if past:
@@ -135,7 +167,7 @@ def _equipment_graveyard_run(db, org_id: str) -> list[dict[str, Any]]:
             "entities": [info for _, info in ordered[:10]],
             "recommended_action": "Work this list top to bottom before the next extreme-weather week.",
         })
-    return findings
+    return findings, {"skipped_rows": skipped}
 
 
 # ---------------------------------------------------------------------------
@@ -145,28 +177,38 @@ def _equipment_graveyard_run(db, org_id: str) -> list[dict[str, Any]]:
 _BILLING_RISK = {"past_due", "card_failed", "payment_failed"}
 
 
-def _plan_churn_run(db, org_id: str) -> list[dict[str, Any]]:
+def _plan_churn_run(db, org_id: str):
     plans = _fetch(db, "service_plans", org_id)
     now = _now()
     missing_visits, billing_risk = [], []
+    skipped = 0
     for p in plans:
-        if (p.get("status") or "").lower() != "active":
-            continue
-        started = _parse_dt(p.get("started_at")) or now
-        days_active = max(0.0, (now - started).total_seconds() / 86400)
-        expected = (p.get("visits_per_year") or 0) * min(1.0, days_active / 365)
-        completed = p.get("visits_completed") or 0
-        info = _entity(
-            p,
-            plan_name=p.get("plan_name"),
-            visits_completed=completed,
-            visits_expected=round(expected, 1),
-            billing_status=p.get("billing_status"),
-        )
-        if completed < expected - 0.5:
-            missing_visits.append(info)
-        if (p.get("billing_status") or "").lower() in _BILLING_RISK:
-            billing_risk.append(info)
+        try:
+            if (p.get("status") or "").lower() != "active":
+                continue
+            started = _parse_dt(p.get("started_at")) or now
+            days_active = max(0.0, (now - started).total_seconds() / 86400)
+            # TW-204: verdict-critical numerics. Uncoercible means we cannot
+            # judge this row, so skip it loudly instead of guessing.
+            vpy = _num(p.get("visits_per_year"))
+            completed = _num(p.get("visits_completed"))
+            if vpy is None or completed is None:
+                skipped += 1
+                continue
+            expected = vpy * min(1.0, days_active / 365)
+            info = _entity(
+                p,
+                plan_name=p.get("plan_name"),
+                visits_completed=int(completed),
+                visits_expected=round(expected, 1),
+                billing_status=p.get("billing_status"),
+            )
+            if completed < expected - 0.5:
+                missing_visits.append(info)
+            if (p.get("billing_status") or "").lower() in _BILLING_RISK:
+                billing_risk.append(info)
+        except Exception:
+            skipped += 1
 
     findings = []
     if missing_visits:
@@ -198,7 +240,7 @@ def _plan_churn_run(db, org_id: str) -> list[dict[str, Any]]:
             "entities": billing_risk[:10],
             "recommended_action": "Fix the payment method today — a 2-minute call saves the whole plan.",
         })
-    return findings
+    return findings, {"skipped_rows": skipped}
 
 
 # ---------------------------------------------------------------------------
@@ -212,52 +254,70 @@ _QUIET_FOLLOWUP_DAYS = 7
 _OPEN_QUOTE = {"sent", "follow_up"}
 
 
-def _quote_resurrection_run(db, org_id: str) -> list[dict[str, Any]]:
+def _quote_resurrection_run(db, org_id: str):
     quotes = _fetch(db, "quotes", org_id)
     now = _now()
     stalled = []
+    skipped = 0
     for q in quotes:
-        if (q.get("status") or "").lower() not in _OPEN_QUOTE:
-            continue
-        sent = _parse_dt(q.get("sent_at"))
-        last_fu = _parse_dt(q.get("last_follow_up_at"))
-        fu_count = q.get("follow_up_count") or 0
-        ref = last_fu or sent
-        if ref is None:
-            continue
-        days_idle = (now - ref).total_seconds() / 86400
-        never_followed = fu_count == 0 and (now - sent).total_seconds() / 86400 >= _STALLED_QUOTE_DAYS
-        gone_quiet = fu_count > 0 and days_idle >= _QUIET_FOLLOWUP_DAYS
-        if never_followed or gone_quiet:
-            stalled.append((
-                float(q.get("total") or 0),
-                _entity(q, total=float(q.get("total") or 0),
-                        days_idle=int(days_idle),
-                        follow_up_count=fu_count),
-            ))
+        try:
+            if (q.get("status") or "").lower() not in _OPEN_QUOTE:
+                continue
+            sent = _parse_dt(q.get("sent_at"))
+            last_fu = _parse_dt(q.get("last_follow_up_at"))
+            # TW-204: follow-up count drives the verdict — uncoercible
+            # means skip loudly. Total only drives display/priority, so a
+            # garbage cell coerces to 0 and the row survives.
+            fu_count = _num(q.get("follow_up_count"))
+            if fu_count is None:
+                skipped += 1
+                continue
+            fu_count = int(fu_count)
+            total = _num(q.get("total"), 0.0)
+            ref = last_fu or sent
+            if ref is None:
+                continue
+            days_idle = (now - ref).total_seconds() / 86400
+            never_followed = fu_count == 0 and sent is not None and (now - sent).total_seconds() / 86400 >= _STALLED_QUOTE_DAYS
+            gone_quiet = fu_count > 0 and days_idle >= _QUIET_FOLLOWUP_DAYS
+            if never_followed or gone_quiet:
+                stalled.append((
+                    total,
+                    _entity(q, total=total,
+                            days_idle=int(days_idle),
+                            follow_up_count=fu_count),
+                ))
+        except Exception:
+            # TW-204: backstop — one bad row skips loudly, never kills the
+            # detector.
+            skipped += 1
 
     # Fallback: no quote records yet (pilot importing via leads) — read
     # stalled proposal/qualified leads instead.
     if not stalled:
         leads = _fetch(db, "leads", org_id)
         for lead in leads:
-            if (lead.get("status") or "").lower() not in ("proposal", "qualified"):
-                continue
-            ref = _parse_dt(lead.get("stage_changed_at") or lead.get("created_at"))
-            if ref is None:
-                continue
-            days_idle = (now - ref).total_seconds() / 86400
-            if days_idle >= _STALLED_QUOTE_DAYS:
-                stalled.append((
-                    float(lead.get("estimated_value") or 0),
-                    _entity(lead,
-                            total=float(lead.get("estimated_value") or 0),
-                            days_idle=int(days_idle),
-                            source="lead"),
-                ))
+            try:
+                if (lead.get("status") or "").lower() not in ("proposal", "qualified"):
+                    continue
+                ref = _parse_dt(lead.get("stage_changed_at") or lead.get("created_at"))
+                if ref is None:
+                    continue
+                days_idle = (now - ref).total_seconds() / 86400
+                if days_idle >= _STALLED_QUOTE_DAYS:
+                    total = _num(lead.get("estimated_value"), 0.0)
+                    stalled.append((
+                        total,
+                        _entity(lead,
+                                total=total,
+                                days_idle=int(days_idle),
+                                source="lead"),
+                    ))
+            except Exception:
+                skipped += 1
 
     if not stalled:
-        return []
+        return [], {"skipped_rows": skipped}
     stalled.sort(key=lambda t: t[0], reverse=True)
     total_value = round(sum(v for v, _ in stalled), 2)
     return [{
@@ -273,7 +333,7 @@ def _quote_resurrection_run(db, org_id: str) -> list[dict[str, Any]]:
         "estimated_value": total_value,
         "entities": [info for _, info in stalled[:10]],
         "recommended_action": "Two-touch follow-up this week, highest value first. Call, don't email.",
-    }]
+    }], {"skipped_rows": skipped}
 
 
 register(Detector(

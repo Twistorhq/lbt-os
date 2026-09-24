@@ -94,21 +94,40 @@ def run_leak_scan(db, org_id: str) -> dict[str, Any]:
                     brief["data_status"]["insufficient"].append(t)
             continue
         try:
-            findings = detector(db, org_id) or []
+            result = detector(db, org_id) or []
+            # TW-204: detectors may return (findings, meta) with a skipped_rows
+            # count — surfaced loudly so a bad CSV cell never silently removes
+            # a leak category from the morning brief. Unpacked inside the try:
+            # a malformed contract from a future detector degrades to an
+            # honest error entry. A detector must never take down the scan.
+            if isinstance(result, tuple):
+                findings, meta = result
+            else:
+                findings, meta = result, {}
+            if not isinstance(meta, dict):
+                raise TypeError(
+                    f"detector {detector.name} returned non-dict meta"
+                )
+            try:
+                skipped = int(meta.get("skipped_rows") or 0)
+            except (TypeError, ValueError):
+                skipped = 0
+            if skipped:
+                brief["data_status"].setdefault("skipped_rows", {})[detector.name] = skipped
+            for f in findings:
+                rung = {
+                    "happened": "what_happened",
+                    "will": "what_will_happen",
+                    "should": "what_should_we_do",
+                }.get(f.get("ladder"), "what_happened")
+                f.setdefault("detector", detector.name)
+                f.setdefault("vertical", vertical)
+                f.setdefault("is_demo", False)
+                brief[rung].append(f)
         except Exception:
             # A detector must never take down the whole scan.
             brief["data_status"].setdefault("errors", []).append(detector.name)
             continue
-        for f in findings:
-            rung = {
-                "happened": "what_happened",
-                "will": "what_will_happen",
-                "should": "what_should_we_do",
-            }.get(f.get("ladder"), "what_happened")
-            f.setdefault("detector", detector.name)
-            f.setdefault("vertical", vertical)
-            f.setdefault("is_demo", False)
-            brief[rung].append(f)
 
     findings_all = (
         brief["what_happened"] + brief["what_will_happen"] + brief["what_should_we_do"]

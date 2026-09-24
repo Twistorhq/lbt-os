@@ -323,6 +323,11 @@ class EndpointWiringTests(unittest.TestCase):
         ("POST", "/api/v1/strategy/search-competitors"),
         ("POST", "/api/v1/strategy/analyze-competitors"),
         ("POST", "/api/v1/messages/channels/{channel_id}/ask"),
+        # TW-203: leak-engine endpoints are costly too (/brief runs three
+        # full-table scans + a benchmark write per call).
+        ("GET", "/api/v1/leaks/brief"),
+        ("GET", "/api/v1/leaks/detectors"),
+        ("GET", "/api/v1/leaks/benchmarks/compare"),
     ]
 
     def test_costly_endpoints_enforce_per_user_limit(self):
