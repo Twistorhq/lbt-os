@@ -118,6 +118,7 @@ app.include_router(stripe_webhooks.router,         prefix="/api/stripe")
 app.include_router(strategy.router,                prefix="/api/v1")
 app.include_router(messages.router,                prefix="/api/v1")
 app.include_router(revenue_intelligence.router,    prefix="/api/v1")
+app.include_router(leak_engine.router,              prefix="/api/v1")
 app.include_router(visitor_events.router,          prefix="/api/v1")
 
 
