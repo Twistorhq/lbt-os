@@ -160,6 +160,12 @@ export const revenueIntelligenceApi = {
   stageAging:   ()                              => api.get('/revenue-intelligence/stage-aging'),
 }
 
+// ---- Leak engine (morning brief) ----
+export const leakApi = {
+  brief:            ()                                    => api.get('/leaks/brief'),
+  detectors:        ()                                    => api.get('/leaks/detectors'),
+}
+
 // ---- Strategy ----
 export const strategyApi = {
   briefing:           ()                                    => api.get('/strategy/briefing'),
