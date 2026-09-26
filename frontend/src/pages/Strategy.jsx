@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { orgApi, strategyApi } from '../lib/api'
+import { Link } from 'react-router-dom'
 
 const fmt$ = (n) => `$${(n || 0).toLocaleString('en-US', { minimumFractionDigits: 0 })}`
 
@@ -686,7 +687,7 @@ function ProGate({ feature, description }) {
       <h2 className="text-lg font-semibold text-slate-950">{feature}</h2>
       <p className="text-sm text-slate-500 max-w-sm mx-auto leading-6">{description}</p>
       <p className="text-xs text-slate-400">Available on Growth ($129/mo) and above.</p>
-      <a href="/app/billing" className="btn-primary mx-auto inline-flex">See plans →</a>
+      <Link to="/app/billing" className="btn-primary mx-auto inline-flex">See plans →</Link>
     </div>
   )
 }

@@ -203,9 +203,15 @@ function Header({ onCta, ctaUrl }) {
         <Logo />
         <nav className="hidden items-center gap-8 text-sm font-medium text-white/65 md:flex" aria-label="Primary">
           {links.map((l) => (
-            <a key={l.href} href={l.href} className="transition-colors hover:text-white">
-              {l.label}
-            </a>
+            l.href.startsWith('/') ? (
+              <Link key={l.href} to={l.href} className="transition-colors hover:text-white">
+                {l.label}
+              </Link>
+            ) : (
+              <a key={l.href} href={l.href} className="transition-colors hover:text-white">
+                {l.label}
+              </a>
+            )
           ))}
         </nav>
         <div className="flex items-center gap-3">
@@ -238,13 +244,23 @@ function Header({ onCta, ctaUrl }) {
           <ul className="space-y-1">
             {links.map((l) => (
               <li key={l.href}>
-                <a
-                  href={l.href}
-                  onClick={() => setMenuOpen(false)}
-                  className="block rounded-xl px-3 py-3 text-base font-medium text-white/75 transition-colors hover:bg-white/5 hover:text-white"
-                >
-                  {l.label}
-                </a>
+                {l.href.startsWith('/') ? (
+                  <Link
+                    to={l.href}
+                    onClick={() => setMenuOpen(false)}
+                    className="block rounded-xl px-3 py-3 text-base font-medium text-white/75 transition-colors hover:bg-white/5 hover:text-white"
+                  >
+                    {l.label}
+                  </Link>
+                ) : (
+                  <a
+                    href={l.href}
+                    onClick={() => setMenuOpen(false)}
+                    className="block rounded-xl px-3 py-3 text-base font-medium text-white/75 transition-colors hover:bg-white/5 hover:text-white"
+                  >
+                    {l.label}
+                  </a>
+                )}
               </li>
             ))}
             <li>
