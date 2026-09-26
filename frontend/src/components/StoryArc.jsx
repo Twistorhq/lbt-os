@@ -262,7 +262,7 @@ function AnimatedArc({ onCta, ctaUrl }) {
         {/* Background layers — crossfade between photographic worlds */}
         <div className="pointer-events-none absolute inset-0" aria-hidden="true">
           <div ref={(el) => (bgRefs.current[0] = el)} className="absolute inset-0" style={{ opacity: 0 }}>
-            <img src="/img/hvac-tech.jpg" alt="" className="h-full w-full object-cover opacity-25" />
+            <img src={`${import.meta.env.BASE_URL}img/hvac-tech.jpg`} alt="" className="h-full w-full object-cover opacity-25" />
             <div className="absolute inset-0 bg-gradient-to-b from-sofrito-950/60 via-red-950/25 to-sofrito-950" />
           </div>
           <div ref={(el) => (bgRefs.current[1] = el)} className="absolute inset-0" style={{ opacity: 0 }}>
@@ -271,7 +271,7 @@ function AnimatedArc({ onCta, ctaUrl }) {
             <div className="absolute inset-0 bg-gradient-to-b from-sofrito-950/40 via-transparent to-sofrito-950" />
           </div>
           <div ref={(el) => (bgRefs.current[2] = el)} className="absolute inset-0" style={{ opacity: 0 }}>
-            <img src="/img/hvac-team.jpg" alt="" className="h-full w-full object-cover opacity-20" />
+            <img src={`${import.meta.env.BASE_URL}img/hvac-team.jpg`} alt="" className="h-full w-full object-cover opacity-20" />
             <div className="absolute inset-0 bg-gradient-to-b from-sofrito-950/60 via-gold-600/20 to-sofrito-950" />
           </div>
         </div>

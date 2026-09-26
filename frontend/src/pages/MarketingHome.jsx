@@ -203,9 +203,15 @@ function Header({ onCta, ctaUrl }) {
         <Logo />
         <nav className="hidden items-center gap-8 text-sm font-medium text-white/65 md:flex" aria-label="Primary">
           {links.map((l) => (
-            <a key={l.href} href={l.href} className="transition-colors hover:text-white">
-              {l.label}
-            </a>
+            l.href.startsWith('/') ? (
+              <Link key={l.href} to={l.href} className="transition-colors hover:text-white">
+                {l.label}
+              </Link>
+            ) : (
+              <a key={l.href} href={l.href} className="transition-colors hover:text-white">
+                {l.label}
+              </a>
+            )
           ))}
         </nav>
         <div className="flex items-center gap-3">
@@ -238,13 +244,23 @@ function Header({ onCta, ctaUrl }) {
           <ul className="space-y-1">
             {links.map((l) => (
               <li key={l.href}>
-                <a
-                  href={l.href}
-                  onClick={() => setMenuOpen(false)}
-                  className="block rounded-xl px-3 py-3 text-base font-medium text-white/75 transition-colors hover:bg-white/5 hover:text-white"
-                >
-                  {l.label}
-                </a>
+                {l.href.startsWith('/') ? (
+                  <Link
+                    to={l.href}
+                    onClick={() => setMenuOpen(false)}
+                    className="block rounded-xl px-3 py-3 text-base font-medium text-white/75 transition-colors hover:bg-white/5 hover:text-white"
+                  >
+                    {l.label}
+                  </Link>
+                ) : (
+                  <a
+                    href={l.href}
+                    onClick={() => setMenuOpen(false)}
+                    className="block rounded-xl px-3 py-3 text-base font-medium text-white/75 transition-colors hover:bg-white/5 hover:text-white"
+                  >
+                    {l.label}
+                  </a>
+                )}
               </li>
             ))}
             <li>
@@ -316,7 +332,7 @@ function Hero({ onCta, ctaUrl }) {
         <Parallax mode="visual" className="relative">
           <div className="relative overflow-hidden rounded-[2rem] border border-white/10 shadow-[0_50px_120px_-40px_rgba(0,0,0,0.8)]">
             <DriftImage
-              src="/img/hvac-tech.jpg"
+              src={`${import.meta.env.BASE_URL}img/hvac-tech.jpg`}
               alt="Civilian HVAC technician in a bucket hat drilling into a rooftop air conditioning unit"
               className="aspect-[4/4.4] sm:aspect-[4/3.4]"
               drift={0.08}
@@ -642,7 +658,7 @@ function Pilot({ onCta, ctaUrl }) {
               </Reveal>
             </div>
             <DriftImage
-              src="/img/hvac-team.jpg"
+              src={`${import.meta.env.BASE_URL}img/hvac-team.jpg`}
               alt="Three electrical utility workers in hard hats servicing a power pole from bucket lifts"
               className="min-h-[20rem] lg:min-h-full"
               drift={0.1}
