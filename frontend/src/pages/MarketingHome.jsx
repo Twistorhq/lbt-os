@@ -316,7 +316,7 @@ function Hero({ onCta, ctaUrl }) {
         <Parallax mode="visual" className="relative">
           <div className="relative overflow-hidden rounded-[2rem] border border-white/10 shadow-[0_50px_120px_-40px_rgba(0,0,0,0.8)]">
             <DriftImage
-              src="/img/hvac-tech.jpg"
+              src={`${import.meta.env.BASE_URL}img/hvac-tech.jpg`}
               alt="Civilian HVAC technician in a bucket hat drilling into a rooftop air conditioning unit"
               className="aspect-[4/4.4] sm:aspect-[4/3.4]"
               drift={0.08}
@@ -642,7 +642,7 @@ function Pilot({ onCta, ctaUrl }) {
               </Reveal>
             </div>
             <DriftImage
-              src="/img/hvac-team.jpg"
+              src={`${import.meta.env.BASE_URL}img/hvac-team.jpg`}
               alt="Three electrical utility workers in hard hats servicing a power pole from bucket lifts"
               className="min-h-[20rem] lg:min-h-full"
               drift={0.1}
