@@ -16,6 +16,7 @@ import {
   TwistorMark,
 } from '../components/icons'
 import { trackVisitorEvent } from '../lib/analytics'
+import { trackSignupIntent } from '../lib/funnel'
 
 /* TW-159: rebuilt marketing homepage — cinematic scroll experience.
  * Motion: single rAF-throttled scroll bus (motion.jsx), transform/opacity only,
@@ -164,7 +165,7 @@ function Logo({ dark = true }) {
   )
 }
 
-function Header({ onCta, ctaUrl }) {
+function Header({ onCta, onAuthCta, ctaUrl }) {
   const [scrolled, setScrolled] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
 
@@ -215,12 +216,19 @@ function Header({ onCta, ctaUrl }) {
           ))}
         </nav>
         <div className="flex items-center gap-3">
-          <Link to="/sign-in" className="hidden text-sm font-medium text-white/70 transition-colors hover:text-white sm:inline">
+          <Link
+            to="/sign-in"
+            onClick={() => onAuthCta('header_sign_in')}
+            className="hidden text-sm font-medium text-white/70 transition-colors hover:text-white sm:inline"
+          >
             Sign in
           </Link>
           <Link
             to={ctaUrl}
-            onClick={() => onCta('header_get_started', ctaUrl)}
+            onClick={() => {
+              onCta('header_get_started', ctaUrl)
+              onAuthCta('header_get_started')
+            }}
             className="inline-flex items-center gap-2 rounded-full bg-gold-400 px-5 py-2.5 text-sm font-bold text-sofrito-950 shadow-[0_10px_30px_-10px_rgba(245,185,66,0.6)] transition-transform duration-200 hover:scale-[1.03] active:scale-[0.98]"
           >
             Get started <ArrowRight className="h-4 w-4" />
@@ -266,7 +274,10 @@ function Header({ onCta, ctaUrl }) {
             <li>
               <Link
                 to="/sign-in"
-                onClick={() => setMenuOpen(false)}
+                onClick={() => {
+                  setMenuOpen(false)
+                  onAuthCta('mobile_sign_in')
+                }}
                 className="block rounded-xl px-3 py-3 text-base font-medium text-white/75 transition-colors hover:bg-white/5 hover:text-white"
               >
                 Sign in
@@ -279,7 +290,7 @@ function Header({ onCta, ctaUrl }) {
   )
 }
 
-function Hero({ onCta, ctaUrl }) {
+function Hero({ onCta, onAuthCta, ctaUrl }) {
   return (
     <section className="relative overflow-hidden" aria-labelledby="hero-heading">
       <Ambient speed={0.05} className="pointer-events-none absolute inset-0" aria-hidden="true">
@@ -301,7 +312,10 @@ function Hero({ onCta, ctaUrl }) {
           <div className="mt-9 flex flex-wrap gap-4">
             <Link
               to={ctaUrl}
-              onClick={() => onCta('hero_start_free', ctaUrl)}
+              onClick={() => {
+                onCta('hero_start_free', ctaUrl)
+                onAuthCta('hero_start_free')
+              }}
               className="inline-flex items-center gap-2 rounded-full bg-gold-400 px-7 py-3.5 text-base font-bold text-sofrito-950 shadow-[0_16px_44px_-12px_rgba(245,185,66,0.65)] transition-transform duration-200 hover:scale-[1.04] active:scale-[0.98]"
             >
               Start free <ArrowRight className="h-5 w-5" />
@@ -779,11 +793,18 @@ export default function MarketingHome() {
     trackVisitorEvent('cta_click', { page: 'marketing_home', cta, destination, signed_in: !!isSignedIn })
   }
 
+  // TW-295: standardized signup-intent funnel event on auth CTAs.
+  // Only counts for signed-out visitors — members clicking through to /app
+  // are not signup intents.
+  const trackAuthCta = (element) => {
+    if (!isSignedIn) trackSignupIntent(element, 'marketing_home')
+  }
+
   return (
     <div className="min-h-screen bg-sofrito-950 font-sans text-white antialiased">
-      <Header onCta={trackCta} ctaUrl={ctaUrl} />
+      <Header onCta={trackCta} onAuthCta={trackAuthCta} ctaUrl={ctaUrl} />
       <main>
-        <Hero onCta={trackCta} ctaUrl={ctaUrl} />
+        <Hero onCta={trackCta} onAuthCta={trackAuthCta} ctaUrl={ctaUrl} />
         <StoryArc onCta={trackCta} ctaUrl={ctaUrl} />
         <RoadmapMarquee />
         <HowItWorks />

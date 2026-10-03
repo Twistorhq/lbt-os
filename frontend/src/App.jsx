@@ -1,10 +1,14 @@
-import { useEffect, useState } from 'react'
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth, SignIn, SignUp } from '@clerk/clerk-react'
+import { useQueryClient } from '@tanstack/react-query'
 import { setAuthToken } from './lib/api'
+import { setSampleMode, isSampleMode, setSampleWriteBlockedHandler } from './lib/sampleMode'
+import { trackAppViewOnce, POST_AUTH_RETURN_KEY } from './lib/funnel'
 import ErrorBoundary from './components/ErrorBoundary'
 import Layout from './components/layout/Layout'
 import MarketingHome from './pages/MarketingHome'
+import AuthCallback from './pages/AuthCallback'
 import Dashboard from './pages/Dashboard'
 import Leads from './pages/Leads'
 import Sales from './pages/Sales'
@@ -83,6 +87,70 @@ function RequireAuth({ children }) {
   return children
 }
 
+/**
+ * TW-295 — public-first auth. Sample mode follows Clerk state: signed out
+ * visitors browse the app on fictional sample data (axios interceptor in
+ * lib/sampleMode.js). Flipping the mode invalidates react-query caches so
+ * no sample rows leak into a signed-in session and vice versa.
+ */
+function SampleModeSync() {
+  const { isLoaded, isSignedIn } = useAuth()
+  const queryClient = useQueryClient()
+  const prevRef = useRef(null)
+
+  useEffect(() => {
+    if (!isLoaded) return
+    const sample = !isSignedIn
+    setSampleMode(sample)
+    if (!isSignedIn) setAuthToken(null)
+    if (prevRef.current !== null && prevRef.current !== sample) {
+      queryClient.invalidateQueries()
+    }
+    prevRef.current = sample
+  }, [isLoaded, isSignedIn, queryClient])
+
+  return null
+}
+
+/**
+ * TW-295 — gated writes: the sample-mode interceptor blocks POST/PATCH/PUT/
+ * DELETE while unauthenticated. This bridge routes the visitor to sign-in
+ * (with a post-auth return) instead of failing silently.
+ */
+function SampleWriteBridge() {
+  const navigate = useNavigate()
+  const location = useLocation()
+
+  useEffect(() => {
+    setSampleWriteBlockedHandler(() => {
+      const here = `${location.pathname}${location.search}`
+      try {
+        sessionStorage.setItem(POST_AUTH_RETURN_KEY, here)
+      } catch {
+        /* private mode — return-to is best-effort */
+      }
+      navigate('/sign-in', { state: { returnTo: here } })
+    })
+    return () => setSampleWriteBlockedHandler(null)
+  }, [navigate, location.pathname, location.search])
+
+  return null
+}
+
+/** TW-295 — funnel: one app_view per session for sample-mode /app browsing. */
+function AppViewTracker() {
+  const location = useLocation()
+  const { isLoaded, isSignedIn } = useAuth()
+
+  useEffect(() => {
+    if (isLoaded && !isSignedIn && location.pathname.startsWith('/app')) {
+      trackAppViewOnce()
+    }
+  }, [isLoaded, isSignedIn, location.pathname])
+
+  return null
+}
+
 export default function App() {
   // TW-294: BrowserRouter now lives in main.jsx (wrapping ClerkProvider) so
   // Clerk's post-sign-in redirects go through React Router and keep the
@@ -90,6 +158,9 @@ export default function App() {
   return (
     <ErrorBoundary>
       <AuthSync />
+      <SampleModeSync />
+      <SampleWriteBridge />
+      <AppViewTracker />
       <Routes>
         <Route path="/" element={<MarketingHome />} />
 
@@ -103,7 +174,7 @@ export default function App() {
             <div className="flex h-screen items-center justify-center bg-gray-50">
               <SignIn
                 routing="hash"
-                fallbackRedirectUrl="/onboarding"
+                fallbackRedirectUrl="/auth-callback"
                 signUpUrl="/sign-up"
               />
             </div>
@@ -115,12 +186,16 @@ export default function App() {
             <div className="flex h-screen items-center justify-center bg-gray-50">
               <SignUp
                 routing="hash"
-                fallbackRedirectUrl="/onboarding"
+                fallbackRedirectUrl="/auth-callback"
                 signInUrl="/sign-in"
               />
             </div>
           }
         />
+
+        {/* TW-295: post-auth landing pad — first-timers to onboarding,
+            returning users back to their gated action */}
+        <Route path="/auth-callback" element={<AuthCallback />} />
 
         {/* Onboarding — shown once after first sign-up */}
         <Route
@@ -129,10 +204,10 @@ export default function App() {
         />
 
         {/* Admin panel */}
-        <Route path="/admin" element={<Admin />} />
+        <Route path="/admin" element={<RequireAuth><Admin /></RequireAuth>} />
 
-        {/* Main app */}
-        <Route path="/app" element={<RequireAuth><Layout /></RequireAuth>}>
+        {/* Main app — TW-295: public browsing on sample data, no auth wall */}
+        <Route path="/app" element={<Layout />}>
           <Route index element={<Dashboard />} />
           <Route path="connections" element={<Connections />} />
           <Route path="leads" element={<Leads />} />

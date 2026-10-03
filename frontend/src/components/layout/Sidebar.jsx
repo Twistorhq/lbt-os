@@ -1,8 +1,9 @@
 import { useState } from 'react'
-import { NavLink } from 'react-router-dom'
-import { useOrganization, UserButton } from '@clerk/clerk-react'
+import { NavLink, Link, useLocation } from 'react-router-dom'
+import { useOrganization, UserButton, useAuth } from '@clerk/clerk-react'
 import { useQuery } from '@tanstack/react-query'
 import { orgApi } from '../../lib/api'
+import { trackSignupIntent } from '../../lib/funnel'
 import { TwistorMark } from '../icons'
 
 const navGroups = [
@@ -43,6 +44,10 @@ const navGroups = [
 
 export default function Sidebar() {
   const { organization } = useOrganization()
+  // TW-295: signed-out visitors browse on sample data — offer sign-in,
+  // not a user button.
+  const { isLoaded, isSignedIn } = useAuth()
+  const location = useLocation()
   const [collapsedGroups, setCollapsedGroups] = useState({})
   const { data: workspaceStatus } = useQuery({
     queryKey: ['workspace-status'],
@@ -138,13 +143,25 @@ export default function Sidebar() {
         ))}
       </nav>
 
-      {/* User */}
+      {/* User — TW-295: visitors get a sign-in CTA, members get their button */}
       <div className="flex items-center gap-3 border-t border-white/10 px-4 py-4">
-        <UserButton afterSignOutUrl="/" />
-        <div>
-          <div className="text-xs font-medium text-white/80">Account</div>
-          <div className="text-[11px] text-white/45">Secure workspace</div>
-        </div>
+        {isLoaded && isSignedIn ? (
+          <>
+            <UserButton afterSignOutUrl="/" />
+            <div>
+              <div className="text-xs font-medium text-white/80">Account</div>
+              <div className="text-[11px] text-white/45">Secure workspace</div>
+            </div>
+          </>
+        ) : (
+          <Link
+            to="/sign-in"
+            onClick={() => trackSignupIntent('sidebar_sign_in', location.pathname)}
+            className="inline-flex w-full items-center justify-center rounded-xl bg-gold-400 px-4 py-2.5 text-sm font-bold text-sofrito-950 transition-transform hover:scale-[1.02] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gold-300"
+          >
+            Sign in
+          </Link>
+        )}
       </div>
     </aside>
   )

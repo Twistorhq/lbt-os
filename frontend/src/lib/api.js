@@ -1,4 +1,6 @@
 import axios from 'axios'
+import { installSampleInterceptor } from './sampleMode'
+import { SAMPLE_GETS } from './sampleData'
 
 const BASE_URL = import.meta.env.VITE_API_URL || ''
 
@@ -182,3 +184,7 @@ export const visitorEventsApi = {
 }
 
 export default api
+
+// TW-295: unauthenticated visitors browse on sample data; writes are gated
+// to sign-in. No-op until setSampleMode(true) is called.
+installSampleInterceptor([api, billingAxios], SAMPLE_GETS)

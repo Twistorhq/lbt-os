@@ -2,10 +2,12 @@ import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { integrationsApi, orgApi } from '../lib/api'
+import { useGatedAction } from '../hooks/useGatedAction'
 import api from '../lib/api'
 
 export default function Connections() {
   const qc = useQueryClient()
+  const gated = useGatedAction()
   const [importType, setImportType] = useState('leads')
   const [importFile, setImportFile] = useState(null)
   const [manualCredentials, setManualCredentials] = useState({})
@@ -335,7 +337,9 @@ export default function Connections() {
                           <div className="flex flex-col gap-2">
                             <button
                               className="btn-primary"
-                              onClick={() => startOAuth.mutate(provider.key)}
+                              onClick={() =>
+                                gated(() => startOAuth.mutate(provider.key), `connect_${provider.key}`)
+                              }
                               disabled={startOAuth.isPending}
                             >
                               {startOAuth.isPending ? 'Redirecting…' : `Connect ${provider.label}`}
