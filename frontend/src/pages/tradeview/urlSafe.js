@@ -1,0 +1,20 @@
+// Prepared by Twistor Holdings LLC.
+//
+// URL scheme allowlist for Trade View public-record link-outs.
+// html-escaping is NOT scheme-safe (javascript: survives escaping), so only
+// https: URLs become links — anything else renders as inert text.
+
+export function safeHttpsUrl(raw) {
+  if (typeof raw !== 'string') return null
+  const trimmed = raw.trim()
+  try {
+    const parsed = new URL(trimmed)
+    // Canonical href, not the raw string: "https:evil.example" parses with an
+    // https: protocol but is not a sane link target. parsed.href normalizes it
+    // to "https://evil.example/" so there is no ambiguity about what renders.
+    if (parsed.protocol === 'https:') return parsed.href
+    return null
+  } catch {
+    return null
+  }
+}
