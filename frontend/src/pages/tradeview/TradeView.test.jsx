@@ -47,8 +47,9 @@ describe('TradeView page', () => {
 })
 
 describe('safeHttpsUrl', () => {
-  test('allows https URLs', () => {
-    expect(safeHttpsUrl('https://www.sos.colorado.gov')).toBe('https://www.sos.colorado.gov')
+  test('allows https URLs, returned in canonical form', () => {
+    expect(safeHttpsUrl('https://www.sos.colorado.gov')).toBe('https://www.sos.colorado.gov/')
+    expect(safeHttpsUrl('https:evil.example')).toBe('https://evil.example/')
   })
   test('rejects javascript:, http:, data:, relative, and non-strings', () => {
     expect(safeHttpsUrl("javascript:alert('x')")).toBeNull()

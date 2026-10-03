@@ -9,7 +9,10 @@ export function safeHttpsUrl(raw) {
   const trimmed = raw.trim()
   try {
     const parsed = new URL(trimmed)
-    if (parsed.protocol === 'https:') return trimmed
+    // Canonical href, not the raw string: "https:evil.example" parses with an
+    // https: protocol but is not a sane link target. parsed.href normalizes it
+    // to "https://evil.example/" so there is no ambiguity about what renders.
+    if (parsed.protocol === 'https:') return parsed.href
     return null
   } catch {
     return null
