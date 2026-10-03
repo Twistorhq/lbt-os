@@ -5,7 +5,8 @@
 // read-only SQL sandbox, and insight-layer toggles.
 // Data: clearly-labeled SAMPLE records (no real businesses, no invented
 // metrics). Storm layer is LIVE NWS data (keyless, api.weather.gov).
-// Basemap: Leaflet + CartoDB dark matter / OSM tiles (FOSS, no keys).
+// Basemap: Leaflet + Esri Dark Gray canvas (dark) / OSM standard (terrain).
+// Both keyless — no API keys, no accounts. Esri tiles require attribution.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import L from 'leaflet'
@@ -230,11 +231,24 @@ export default function TradeView() {
     if (isTest || !mapDivRef.current || mapRef.current) return
     const map = L.map(mapDivRef.current, { zoomControl: false }).setView(DENVER, 11)
     L.control.zoom({ position: 'bottomright' }).addTo(map)
-    const dark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
-      subdomains: 'abcd',
-      maxZoom: 20,
+    // Dark: Esri World Dark Gray canvas (keyless public ArcGIS Online
+    // service — no API key, no account). CARTO's basemaps.cartocdn.com began
+    // requiring an API key in Aug 2026 and now stamps "API KEY REQUIRED" on
+    // anonymous tiles, so it is out. The Dark Gray Base carries no place
+    // names, so the Dark Gray Reference labels layer rides on top to match
+    // the old look. NOTE: Esri tile paths are {z}/{y}/{x} (row before
+    // column), not the usual {z}/{x}/{y}.
+    const darkBase = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
+      attribution: 'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ',
+      maxZoom: 19,
+      maxNativeZoom: 16,
     })
+    const darkLabels = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}', {
+      attribution: 'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ',
+      maxZoom: 19,
+      maxNativeZoom: 16,
+    })
+    const dark = L.layerGroup([darkBase, darkLabels])
     const terrain = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>',
       maxZoom: 19,
