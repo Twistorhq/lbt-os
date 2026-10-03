@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAuth, SignIn, SignUp } from '@clerk/clerk-react'
 import { setAuthToken } from './lib/api'
 import ErrorBoundary from './components/ErrorBoundary'
@@ -84,9 +84,11 @@ function RequireAuth({ children }) {
 }
 
 export default function App() {
+  // TW-294: BrowserRouter now lives in main.jsx (wrapping ClerkProvider) so
+  // Clerk's post-sign-in redirects go through React Router and keep the
+  // /lbt-os basename. App renders the route tree inside that Router.
   return (
-    <BrowserRouter basename={import.meta.env.BASE_URL.replace(/\/$/, '')} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-      <ErrorBoundary>
+    <ErrorBoundary>
       <AuthSync />
       <Routes>
         <Route path="/" element={<MarketingHome />} />
@@ -149,7 +151,6 @@ export default function App() {
         {/* 404 catch-all */}
         <Route path="*" element={<NotFound />} />
       </Routes>
-      </ErrorBoundary>
-    </BrowserRouter>
+    </ErrorBoundary>
   )
 }

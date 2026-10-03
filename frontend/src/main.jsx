@@ -1,7 +1,8 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import { ClerkProvider } from '@clerk/clerk-react'
+import { BrowserRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { ClerkProviderWithNavigate } from './auth/ClerkProviderWithNavigate'
 import App from './App'
 import './styles/index.css'
 import './styles/twistor.css' // TW-159: Twistor Trades marketing design system
@@ -22,17 +23,19 @@ const queryClient = new QueryClient({
   },
 })
 
+// TW-249: basename for the GitHub Pages subpath (/lbt-os). The Router must
+// wrap ClerkProvider (TW-294) so Clerk's post-sign-in redirects go through
+// React Router and keep the basename instead of full-page-loading to /onboarding.
+const basename = import.meta.env.BASE_URL.replace(/\/$/, '')
+
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <ClerkProvider
-      publishableKey={PUBLISHABLE_KEY}
-      signInUrl="/sign-in"
-      signUpUrl="/sign-up"
-      fallbackRedirectUrl="/onboarding"
-    >
-      <QueryClientProvider client={queryClient}>
-        <App />
-      </QueryClientProvider>
-    </ClerkProvider>
+    <BrowserRouter basename={basename} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <ClerkProviderWithNavigate publishableKey={PUBLISHABLE_KEY}>
+        <QueryClientProvider client={queryClient}>
+          <App />
+        </QueryClientProvider>
+      </ClerkProviderWithNavigate>
+    </BrowserRouter>
   </React.StrictMode>
 )
