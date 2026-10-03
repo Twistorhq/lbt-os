@@ -75,6 +75,12 @@ jobs:
             exit 1
           fi
 
+      - name: SPA fallback for deep links
+        # GitHub Pages serves unknown paths as 404s; copy index.html so
+        # client-side routes (/lbt-os/app/tradeview, /lbt-os/sign-in, ...)
+        # boot the app instead of showing the Pages 404 page.
+        run: cp dist/index.html dist/404.html
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: frontend/dist
