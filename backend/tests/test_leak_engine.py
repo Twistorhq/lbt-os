@@ -4,8 +4,10 @@ Detectors are plugins: one engine, twelve aim-points. v1 ships the three
 HVAC detectors live for the Oct 2 launch. Leak findings are never
 fabricated: no data means an honest empty state.
 """
+import os
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest import mock
 
 
 def _now():
@@ -349,22 +351,55 @@ class RogueContractTest(unittest.TestCase):
                          brief["data_status"].get("skipped_rows", {}))
 
 
+# Obviously-dummy values so pure unit tests can import modules that
+# transitively instantiate app.config.Settings() at import time. These tests
+# never touch the network or a real service; the values only need to satisfy
+# pydantic validation (non-production env skips the strict format checks).
+_DUMMY_ENV_VARS = {
+    "SUPABASE_URL": "https://test-only.invalid",
+    "SUPABASE_SERVICE_KEY": "test-only-dummy",
+    "CLERK_SECRET_KEY": "test-only-dummy",
+    "CLERK_PUBLISHABLE_KEY": "test-only-dummy",
+    "CLERK_WEBHOOK_SECRET": "test-only-dummy",
+    "STRIPE_SECRET_KEY": "test-only-dummy",
+    "STRIPE_WEBHOOK_SECRET": "test-only-dummy",
+    "STRIPE_PRICE_BASIC": "test-only-dummy",
+    "STRIPE_PRICE_PRO": "test-only-dummy",
+    "STRIPE_PRICE_PREMIUM": "test-only-dummy",
+}
+
+
+def _import_leak_engine_router():
+    """Import app.routers.leak_engine without ambient production secrets.
+
+    The router module transitively imports app.auth -> app.config, which
+    instantiates Settings() at import time and requires Supabase/Clerk/Stripe
+    secrets. should_record_benchmarks is a pure function — its unit tests must
+    not depend on ambient secrets, so the import runs under dummy env values.
+    mock.patch.dict restores the real environment afterwards; the assertions
+    on the guard itself are unchanged.
+    """
+    with mock.patch.dict(os.environ, _DUMMY_ENV_VARS):
+        from app.routers import leak_engine as le_router
+    return le_router
+
+
 class BenchmarkGuardTest(unittest.TestCase):
     """TW-204 (Rosa): never record benchmark metrics when detectors errored —
     a leak_findings: 0 row would quietly pollute future cohort aggregates."""
 
     def test_no_recording_when_detectors_errored(self):
-        from app.routers import leak_engine as le_router
+        le_router = _import_leak_engine_router()
         brief = {"data_status": {"errors": ["quote-resurrection"]}}
         self.assertFalse(le_router.should_record_benchmarks(brief))
 
     def test_recording_when_clean(self):
-        from app.routers import leak_engine as le_router
+        le_router = _import_leak_engine_router()
         brief = {"data_status": {"insufficient": ["leads"]}}
         self.assertTrue(le_router.should_record_benchmarks(brief))
 
     def test_recording_when_no_data_status(self):
-        from app.routers import leak_engine as le_router
+        le_router = _import_leak_engine_router()
         self.assertTrue(le_router.should_record_benchmarks({}))
 
 
