@@ -168,6 +168,15 @@ export const leakApi = {
   detectors:        ()                                    => api.get('/leaks/detectors'),
 }
 
+// ---- Trade View (TW-301): real backend — pins, dossiers, diagnostics, layers.
+// Signed-in only; signed-out visitors stay on the sample interceptor (TW-295).
+export const tradeviewApi = {
+  pins:              ()                  => api.get('/tradeview/pins'),
+  dossier:           (kind, id)          => api.get(`/tradeview/dossiers/${kind}/${id}`),
+  diagnostics:       (kind, id)          => api.get(`/tradeview/diagnostics/${kind}/${id}`),
+  layers:            ()                  => api.get('/tradeview/layers'),
+}
+
 // ---- Strategy ----
 export const strategyApi = {
   briefing:           ()                                    => api.get('/strategy/briefing'),

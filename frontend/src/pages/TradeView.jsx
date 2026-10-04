@@ -8,7 +8,7 @@
 // Basemap: Leaflet + Esri Dark Gray canvas (dark) / OSM standard (terrain).
 // Both keyless — no API keys, no accounts. Esri tiles require attribution.
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, Fragment } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import './tradeview/tradeview.css'
@@ -20,6 +20,8 @@ import {
   INSIGHT_PANELS,
 } from './tradeview/tradeviewSample'
 import { safeHttpsUrl } from './tradeview/urlSafe'
+import { tradeviewApi } from '../lib/api'
+import { isSampleMode } from '../lib/sampleMode'
 
 const DENVER = [39.7392, -104.9903]
 const STORM_COLORS = { tornado: '#FF4D5E', wind: '#FFB020', hail: '#6FD3FF', other: '#7C5CFF' }
@@ -80,10 +82,11 @@ export function InsightPanels() {
   )
 }
 
-// Read-only SQL sandbox over the sample dataset.
+// Read-only SQL sandbox over a company dataset.
 // Genuinely read-only: only a SELECT subset is parsed and executed in-memory.
 // Anything else is rejected with a clear message.
-export function runSandboxQuery(sql) {
+// `rows` defaults to the sample dataset; live mode passes the live pins.
+export function runSandboxQuery(sql, dataset = SAMPLE_COMPANIES) {
   const text = String(sql || '').trim()
   if (!text) return { error: 'Type a SELECT query to run against the sample dataset.' }
   if (/;/.test(text)) return { error: 'One statement at a time — no semicolons.' }
@@ -105,7 +108,7 @@ export function runSandboxQuery(sql) {
   if (bad.length > 0) {
     return { error: `Unknown column(s): ${bad.join(', ')}. Available: ${SQL_COLUMNS.join(', ')}` }
   }
-  let rows = SAMPLE_COMPANIES.slice()
+  let rows = dataset.slice()
   const where = (m[2] || '').trim()
   if (where) {
     const wm = where.match(/^(trade|kind|name)\s*(=|like)\s*'(.*)'$/i)
@@ -124,14 +127,14 @@ export function runSandboxQuery(sql) {
   return { columns: cols, rows: rows.map((r) => cols.map((c) => r[c] ?? '')) }
 }
 
-function SqlSandbox() {
+function SqlSandbox({ rows, datasetLabel }) {
   const [query, setQuery] = useState("SELECT name, kind, trade FROM companies WHERE trade = 'HVAC'")
   const [result, setResult] = useState(null)
-  const run = () => setResult(runSandboxQuery(query))
+  const run = () => setResult(runSandboxQuery(query, rows))
   return (
     <div className="tv-sandbox">
       <h3>SQL sandbox — read-only</h3>
-      <p className="tv-note">SELECT-only subset over the sample dataset. Nothing is written anywhere.</p>
+      <p className="tv-note">SELECT-only subset over the {datasetLabel}. Nothing is written anywhere.</p>
       <label htmlFor="tv-sql" className="tv-note" style={{ display: 'block', marginBottom: '0.35rem' }}>
         Query
       </label>
@@ -170,8 +173,84 @@ function SqlSandbox() {
   )
 }
 
-export function DiagnosticsReport({ company, onClose }) {
+// TW-301: live dossier facts + leak findings for the selected pin.
+// Rendered only when signed in; sample mode keeps the static Facts block.
+export function LiveDossier({ dossier }) {
+  if (!dossier) return <p className="tv-empty">Loading live dossier…</p>
+  const facts = dossier.facts || {}
+  const findings = dossier.leak_findings || []
   return (
+    <>
+      <h3>Facts</h3>
+      {Object.keys(facts).length > 0 ? (
+        <dl className="tv-facts">
+          {Object.entries(facts).map(([k, v]) => (
+            <Fragment key={k}>
+              <dt>{k}</dt>
+              <dd>{String(v)}</dd>
+            </Fragment>
+          ))}
+        </dl>
+      ) : (
+        <p className="tv-empty">No facts on file yet.</p>
+      )}
+      <h3>Leak findings</h3>
+      {findings.length > 0 ? (
+        <ul style={{ margin: '0.5rem 0', paddingLeft: '1.1rem', fontSize: '0.9rem' }}>
+          {findings.map((f, i) => (
+            <li key={i} style={{ margin: '0.35rem 0' }}>
+              <strong>{f.title}</strong>
+              {f.estimated_value != null && (
+                <> — <span className="tv-kind">${Number(f.estimated_value).toLocaleString()}</span></>
+              )}
+              {f.recommended_action && <div className="tv-note">{f.recommended_action}</div>}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="tv-empty">No leak findings for this record yet.</p>
+      )}
+      <p className="tv-provenance">{dossier.provenance}</p>
+    </>
+  )
+}
+
+// TW-301: server-generated diagnostics from live data.
+export function LiveDiagnosticsReport({ data, onClose }) {
+  if (!data) return <p className="tv-empty">Loading diagnostics…</p>
+  const findings = data.leak_findings || []
+  return (
+    <div className="tv-report" role="region" aria-label={`Diagnostics report for ${data.entity_name}`}>
+      <h4>Diagnostics — {data.entity_name}</h4>
+      <p className="tv-provenance">LIVE report — generated from your connected data.</p>
+      <p><strong>Snapshot:</strong> {data.snapshot}</p>
+      {findings.length > 0 ? (
+        <>
+          <p><strong>Leak findings ({findings.length}):</strong></p>
+          <ul style={{ margin: '0.5rem 0', paddingLeft: '1.1rem', fontSize: '0.9rem' }}>
+            {findings.map((f, i) => (
+              <li key={i} style={{ margin: '0.35rem 0' }}>
+                {f.title}
+                {f.estimated_value != null && (
+                  <> — <span className="tv-kind">${Number(f.estimated_value).toLocaleString()}</span></>
+                )}
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        <p><strong>Leak findings:</strong> none for this record.</p>
+      )}
+      <p><strong>Recommended next step:</strong> {data.recommended_next_step}</p>
+      <div style={{ display: 'flex', gap: '0.6rem', marginTop: '0.7rem' }}>
+        <button type="button" className="tv-btn" onClick={() => window.print()}>Print report</button>
+        <button type="button" className="tv-btn" onClick={onClose}>Close</button>
+      </div>
+    </div>
+  )
+}
+
+export function DiagnosticsReport({ company, onClose }) {  return (
     <div className="tv-report" role="region" aria-label={`Diagnostics report for ${company.name}`}>
       <h4>Prospect diagnostics — {company.name}</h4>
       <p className="tv-provenance">SAMPLE report — generated from demo data, not a real assessment.</p>
@@ -199,6 +278,13 @@ export default function TradeView() {
   const [stormNote, setStormNote] = useState('')
   const [selectedId, setSelectedId] = useState(null)
   const [showReport, setShowReport] = useState(false)
+  // TW-301: live backend state. Signed-in users get real pins/dossiers/
+  // diagnostics from /api/v1/tradeview; signed-out visitors stay on the
+  // clearly-labeled sample dataset (TW-295).
+  const [livePins, setLivePins] = useState(null)
+  const [liveNote, setLiveNote] = useState('')
+  const [liveDossier, setLiveDossier] = useState(null)
+  const [liveDiagnostics, setLiveDiagnostics] = useState(null)
   const mapRef = useRef(null)
   const mapDivRef = useRef(null)
   const markersRef = useRef({})
@@ -211,20 +297,89 @@ export default function TradeView() {
     return () => clearTimeout(t)
   }, [])
 
+  // TW-301: fetch live pins when signed in. Any failure (no backend on the
+  // static Pages deploy, 401, network) falls back to the sample dataset —
+  // the map never renders empty. (Not gated on isTest: the fetch is plain
+  // axios and is exactly what the live-mode tests exercise.)
+  useEffect(() => {
+    if (isSampleMode()) return
+    let cancelled = false
+    tradeviewApi.pins()
+      .then((r) => {
+        if (cancelled) return
+        // Normalize backend kinds (customer|lead) to the map's display kinds
+        // (client|prospect); apiKind is kept for dossier/diagnostics calls.
+        // Idempotent: already-normalized kinds pass through untouched.
+        const pins = (r.data.pins || []).map((p) => ({
+          ...p,
+          apiKind: p.kind,
+          kind: p.kind === 'customer' ? 'client' : p.kind === 'lead' ? 'prospect' : p.kind,
+        }))
+        setLivePins(pins)
+        const n = r.data.unlocated_count || 0
+        if (n > 0) setLiveNote(`${n} record${n === 1 ? '' : 's'} ha${n === 1 ? 's' : 've'} no mappable address yet.`)
+      })
+      .catch(() => {
+        if (!cancelled) setLivePins(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const liveMode = livePins !== null
+  const companies = liveMode ? livePins : SAMPLE_COMPANIES
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
-    return SAMPLE_COMPANIES.filter(
+    return companies.filter(
       (c) =>
         kinds[c.kind] &&
-        trades[c.trade] &&
-        (!q || c.name.toLowerCase().includes(q) || c.address.toLowerCase().includes(q))
+        // Live records without a trade classification stay visible — real
+        // data is never hidden by a filter it can't match.
+        (trades[c.trade] || (liveMode && !c.trade)) &&
+        (!q || c.name.toLowerCase().includes(q) || (c.address || '').toLowerCase().includes(q))
     )
-  }, [search, kinds, trades])
+  }, [search, kinds, trades, companies, liveMode])
 
   const selected = useMemo(
-    () => SAMPLE_COMPANIES.find((c) => c.id === selectedId) || null,
-    [selectedId]
+    () => companies.find((c) => c.id === selectedId) || null,
+    [selectedId, companies]
   )
+
+  // TW-301: live dossier (facts + leak findings) for the selected pin.
+  useEffect(() => {
+    setLiveDossier(null)
+    if (!liveMode || !selected) return
+    let cancelled = false
+    tradeviewApi.dossier(selected.apiKind || selected.kind, selected.id)
+      .then((r) => {
+        if (!cancelled) setLiveDossier(r.data)
+      })
+      .catch(() => {
+        if (!cancelled) setLiveDossier(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [liveMode, selected])
+
+  // TW-301: live diagnostics report, fetched on demand.
+  useEffect(() => {
+    setLiveDiagnostics(null)
+    if (!liveMode || !selected || !showReport) return
+    let cancelled = false
+    tradeviewApi.diagnostics(selected.apiKind || selected.kind, selected.id)
+      .then((r) => {
+        if (!cancelled) setLiveDiagnostics(r.data)
+      })
+      .catch(() => {
+        if (!cancelled) setLiveDiagnostics(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [liveMode, selected, showReport])
 
   // Map init (skipped under vitest — no layout engine there).
   useEffect(() => {
@@ -388,7 +543,11 @@ export default function TradeView() {
             TRADE <span className="tv-glow">VIEW</span>
             <span className="tv-badges">
               <span className="tv-badge tv-badge-internal">Internal</span>
-              <span className="tv-badge tv-badge-sample">Sample data</span>
+              {liveMode ? (
+                <span className="tv-badge">Live data</span>
+              ) : (
+                <span className="tv-badge tv-badge-sample">Sample data</span>
+              )}
             </span>
           </h1>
           <p className="tv-sub">
@@ -396,6 +555,7 @@ export default function TradeView() {
               {filtered.length} companies · {filtered.filter((c) => c.kind === 'prospect').length} prospects ·{' '}
               {filtered.filter((c) => c.kind === 'client').length} clients
             </span>
+            {liveNote && <span className="tv-note" style={{ display: 'block' }}>{liveNote}</span>}
           </p>
         </div>
         <div className="tv-basemap" role="group" aria-label="Basemap style">
@@ -469,7 +629,10 @@ export default function TradeView() {
             </label>
             {stormNote && <p className="tv-note">{stormNote}</p>}
           </fieldset>
-          <p className="tv-note">Map pins: ◈ prospect · ◆ client. Sample records — not real businesses.</p>
+          <p className="tv-note">
+            Map pins: ◈ prospect · ◆ client.{' '}
+            {liveMode ? 'Live records from your connected data.' : 'Sample records — not real businesses.'}
+          </p>
         </aside>
 
         <section className="tv-dossier" aria-label="Company dossier" aria-live="polite">
@@ -492,19 +655,27 @@ export default function TradeView() {
                 </div>
               </div>
               <h3>Facts</h3>
-              <dl className="tv-facts">
-                <dt>Phone</dt><dd>{selected.phone}</dd>
-                <dt>Owner</dt><dd>{selected.owner}</dd>
-                <dt>Email</dt><dd>{selected.email}</dd>
-              </dl>
-              <h3>Pitch notes</h3>
-              <p className="tv-detail-sub">{selected.pitch}</p>
-              <p className="tv-detail-sub">{selected.marketing}</p>
-              <h3>Public records</h3>
-              <PublicRecords records={selected.publicRecords} />
+              {liveMode ? (
+                <LiveDossier dossier={liveDossier} />
+              ) : (
+                <>
+                  <dl className="tv-facts">
+                    <dt>Phone</dt><dd>{selected.phone}</dd>
+                    <dt>Owner</dt><dd>{selected.owner}</dd>
+                    <dt>Email</dt><dd>{selected.email}</dd>
+                  </dl>
+                  <h3>Pitch notes</h3>
+                  <p className="tv-detail-sub">{selected.pitch}</p>
+                  <p className="tv-detail-sub">{selected.marketing}</p>
+                  <h3>Public records</h3>
+                  <PublicRecords records={selected.publicRecords} />
+                </>
+              )}
               <h3>Insights</h3>
               <InsightPanels />
-              <p className="tv-provenance">Provenance: {selected.provenance}</p>
+              {!liveMode && (
+                <p className="tv-provenance">Provenance: {selected.provenance}</p>
+              )}
               <div style={{ marginTop: '1rem', display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
                 <button
                   type="button"
@@ -515,8 +686,13 @@ export default function TradeView() {
                   {showReport ? 'Hide diagnostics' : 'Run diagnostics'}
                 </button>
               </div>
-              {showReport && <DiagnosticsReport company={selected} onClose={() => setShowReport(false)} />}
-              <SqlSandbox />
+              {showReport && liveMode && (
+                <LiveDiagnosticsReport data={liveDiagnostics} onClose={() => setShowReport(false)} />
+              )}
+              {showReport && !liveMode && (
+                <DiagnosticsReport company={selected} onClose={() => setShowReport(false)} />
+              )}
+              <SqlSandbox rows={companies} datasetLabel={liveMode ? 'live dataset' : 'sample dataset'} />
             </article>
           )}
         </section>

@@ -30,6 +30,7 @@ from .routers import (
     sales,
     strategy,
     stripe_webhooks,
+    tradeview,
     visitor_events,
 )
 from .services.scheduler import start_scheduler, stop_scheduler
@@ -120,6 +121,7 @@ app.include_router(strategy.router,                prefix="/api/v1")
 app.include_router(messages.router,                prefix="/api/v1")
 app.include_router(revenue_intelligence.router,    prefix="/api/v1")
 app.include_router(leak_engine.router,              prefix="/api/v1")
+app.include_router(tradeview.router,                prefix="/api/v1")
 app.include_router(visitor_events.router,          prefix="/api/v1")
 
 
