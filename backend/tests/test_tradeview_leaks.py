@@ -145,7 +145,7 @@ def _db_with_addresses():
     )
 
 
-def _geo(address):
+def _geo(address, **kwargs):
     return GeocodeResult(lat=39.7, lon=-105.0, display_name=address, source="photon")
 
 
