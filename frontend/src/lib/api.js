@@ -176,6 +176,8 @@ export const tradeviewApi = {
   diagnostics:       (kind, id)          => api.get(`/tradeview/diagnostics/${kind}/${id}`),
   layers:            ()                  => api.get('/tradeview/layers'),
   leaks:             ()                  => api.get('/tradeview/leaks'),
+  actions:           ()                  => api.get('/tradeview/actions'),
+  route:             (leak_ids, start)   => api.post('/tradeview/route', { leak_ids, start }),
 }
 
 // ---- Strategy ----

@@ -16,6 +16,8 @@ vi.mock('../../lib/api', async (importOriginal) => {
       diagnostics: vi.fn(),
       layers: vi.fn(),
       leaks: vi.fn(),
+      actions: vi.fn(),
+      route: vi.fn(),
     },
   }
 })
@@ -59,6 +61,8 @@ describe('TW-301 live backend', () => {
         recommended_next_step: 'Call them today.',
       },
     })
+    vi.mocked(tradeviewApi.actions).mockResolvedValue({ data: { actions: [], count: 0 } })
+    vi.mocked(tradeviewApi.route).mockResolvedValue({ data: { order: [], total_km: 0 } })
   })
 
   test('shows Live data badge and live pins when signed in', async () => {
@@ -161,6 +165,13 @@ const LEAK_DATA = {
       recommended_action: 'Two-touch follow-up this week.',
       lat: 39.7, lng: -105.0, located: true,
     },
+    {
+      id: 'quote-resurrection:q-2', entity_id: 'q-2', entity_name: 'Beta Corp',
+      detector: 'quote-resurrection', title: '2 stalled quotes still winnable',
+      severity: 'watch', dollars: 4500.0, days_idle: 16,
+      recommended_action: 'Two-touch follow-up this week.',
+      lat: 39.71, lng: -105.01, located: true,
+    },
   ],
 }
 
@@ -196,5 +207,54 @@ describe('TW-303 Leak Map', () => {
   test('LeakExecutiveSummary renders nothing without data', () => {
     const { container } = render(<LeakExecutiveSummary data={null} />)
     expect(container.textContent).toBe('')
+  })
+})
+
+const ACTIONS = [
+  {
+    id: 'action:quote-resurrection:q-1', rank: 1, detector: 'quote-resurrection',
+    title: '2 stalled quotes still winnable', entity_id: 'q-1', entity_name: 'Acme Heating',
+    dollars: 8500.0, recoverability: 0.35, weight_basis: 'heuristic prior',
+    expected_recovery: 2975.0, next_move: 'Two-touch follow-up this week.',
+    located: true, lat: 39.7, lng: -105.0,
+  },
+  {
+    id: 'action:plan-churn-risk:p-1', rank: 2, detector: 'plan-churn-risk',
+    title: '1 plan at churn risk', entity_id: 'p-1', entity_name: 'Beta Corp',
+    dollars: 2400.0, recoverability: 0.5, weight_basis: 'heuristic prior',
+    expected_recovery: 1200.0, next_move: 'Call before the card fails again.',
+    located: false, lat: null, lng: null,
+  },
+]
+
+describe('TW-306 What Should We Do', () => {
+  test('ranked action queue renders with expected recovery and next move', async () => {
+    vi.mocked(tradeviewApi.leaks).mockResolvedValue({ data: LEAK_DATA })
+    vi.mocked(tradeviewApi.actions).mockResolvedValue({ data: { actions: ACTIONS, count: 2 } })
+    render(<TradeView />)
+    await waitFor(() => expect(screen.getByText('Live data')).toBeInTheDocument())
+    screen.getByLabelText(/Leak Map — money on the table/).click()
+    await waitFor(() => expect(screen.getByText('What should we do')).toBeInTheDocument())
+    // Ranked: Acme ($2,975 expected) above Beta ($1,200).
+    const items = screen.getAllByRole('listitem')
+    expect(items[0].textContent).toMatch(/Acme Heating/)
+    expect(screen.getByText(/\$2,975 expected/)).toBeInTheDocument()
+    expect(screen.getByText(/Two-touch follow-up this week/)).toBeInTheDocument()
+    // Weights are labeled as priors, not measured rates.
+    expect(screen.getByText(/heuristic priors/)).toBeInTheDocument()
+  })
+
+  test('optimize route calls the API with located leak ids', async () => {
+    vi.mocked(tradeviewApi.leaks).mockResolvedValue({ data: LEAK_DATA })
+    vi.mocked(tradeviewApi.actions).mockResolvedValue({ data: { actions: ACTIONS, count: 2 } })
+    vi.mocked(tradeviewApi.route).mockResolvedValue({ data: { order: ['q-1', 'q-2'], total_km: 1.2 } })
+    render(<TradeView />)
+    await waitFor(() => expect(screen.getByText('Live data')).toBeInTheDocument())
+    screen.getByLabelText(/Leak Map — money on the table/).click()
+    await waitFor(() => expect(screen.getByText('Optimize route')).toBeInTheDocument())
+    screen.getByText('Optimize route').click()
+    await waitFor(() =>
+      expect(tradeviewApi.route).toHaveBeenCalledWith(['q-1', 'q-2'], null)
+    )
   })
 })

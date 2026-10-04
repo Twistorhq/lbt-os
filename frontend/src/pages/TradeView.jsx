@@ -175,6 +175,35 @@ function SqlSandbox({ rows, datasetLabel }) {
   )
 }
 
+// TW-306: What Should We Do — ranked action queue. Client-safe: plain
+// language, dollars, and the single next move. No SQL, no code.
+export function ActionQueue({ actions }) {
+  if (!actions) return <p className="tv-empty">Loading actions…</p>
+  if (actions.length === 0)
+    return <p className="tv-empty">Nothing to do — no open leaks right now.</p>
+  return (
+    <div className="tv-actions">
+      <h3>What should we do</h3>
+      <ol style={{ margin: '0.5rem 0', paddingLeft: '1.3rem', fontSize: '0.9rem' }}>
+        {actions.slice(0, 5).map((a) => (
+          <li key={a.id} style={{ margin: '0.5rem 0' }}>
+            <strong>{a.entity_name}</strong> — {a.title}
+            {a.expected_recovery != null && (
+              <> · <span className="tv-kind">${Number(a.expected_recovery).toLocaleString()} expected</span></>
+            )}
+            <div className="tv-note" style={{ marginTop: '0.15rem' }}>
+              <strong>Do:</strong> {a.next_move}
+            </div>
+          </li>
+        ))}
+      </ol>
+      <p className="tv-provenance">
+        Ranked by expected recovery. Weights are heuristic priors, tuned per shop — not measured rates.
+      </p>
+    </div>
+  )
+}
+
 // TW-303: executive summary of the Leak Map — client-safe, no SQL, no code.
 // This is the piece the client edition consumes: plain-language money story.
 export function LeakExecutiveSummary({ data }) {
@@ -336,6 +365,9 @@ export default function TradeView() {
   const [leakOn, setLeakOn] = useState(false)
   const [leakData, setLeakData] = useState(null)
   const leakLayerRef = useRef(null)
+  // TW-306: ranked actions + route polyline.
+  const [actions, setActions] = useState(null)
+  const routeRef = useRef(null)
   const mapRef = useRef(null)
   const mapDivRef = useRef(null)
   const markersRef = useRef({})
@@ -450,8 +482,61 @@ export default function TradeView() {
         map.removeLayer(leakLayerRef.current)
         leakLayerRef.current = null
       }
+      if (routeRef.current) {
+        map.removeLayer(routeRef.current)
+        routeRef.current = null
+      }
     }
   }, [leakOn, leakData])
+
+  // TW-306: fetch the ranked action queue once the leak scan is in.
+  useEffect(() => {
+    setActions(null)
+    if (!leakOn || !leakData) return
+    let cancelled = false
+    tradeviewApi.actions()
+      .then((r) => {
+        if (!cancelled) setActions(r.data.actions || [])
+      })
+      .catch(() => {
+        if (!cancelled) setActions([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [leakOn, leakData])
+
+  // TW-306: route optimization over the located leaks. The API call is not
+  // gated on the map existing (it doesn't in the test env) — only the
+  // polyline drawing is.
+  const buildRoute = () => {
+    if (!leakData || !leakData.leaks) return
+    const ids = leakData.leaks.map((l) => l.entity_id).filter(Boolean)
+    tradeviewApi.route(ids, null)
+      .then((r) => {
+        const map = mapRef.current
+        if (!map) return
+        if (routeRef.current) {
+          map.removeLayer(routeRef.current)
+          routeRef.current = null
+        }
+        const order = r.data.order || []
+        if (order.length < 2) return
+        const byId = {}
+        leakData.leaks.forEach((l) => {
+          byId[l.entity_id] = l
+        })
+        const latlngs = order.map((id) => [byId[id].lat, byId[id].lng]).filter((p) => p[0] != null)
+        if (latlngs.length < 2) return
+        const line = L.polyline(latlngs, {
+          color: '#7C5CFF', weight: 3, dashArray: '8 6', opacity: 0.85,
+        })
+        line.addTo(map)
+        routeRef.current = line
+        map.fitBounds(line.getBounds(), { padding: [40, 40] })
+      })
+      .catch(() => {})
+  }
 
   const liveMode = livePins !== null
   const companies = liveMode ? livePins : SAMPLE_COMPANIES
@@ -847,6 +932,12 @@ export default function TradeView() {
             )}
             {oppOn && <p className="tv-opp-legend">{OPPORTUNITY_ESTIMATE_NOTE}</p>}
             {leakOn && liveMode && <LeakExecutiveSummary data={leakData} />}
+            {leakOn && liveMode && <ActionQueue actions={actions} />}
+            {leakOn && liveMode && leakData && leakData.leaks && leakData.leaks.length > 1 && (
+              <button type="button" className="tv-btn" onClick={buildRoute} style={{ marginTop: '0.6rem' }}>
+                Optimize route
+              </button>
+            )}
           </fieldset>
           <p className="tv-note">
             Map pins: ◈ prospect · ◆ client.{' '}
