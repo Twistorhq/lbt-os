@@ -175,6 +175,37 @@ function SqlSandbox({ rows, datasetLabel }) {
   )
 }
 
+// TW-303: executive summary of the Leak Map — client-safe, no SQL, no code.
+// This is the piece the client edition consumes: plain-language money story.
+export function LeakExecutiveSummary({ data }) {
+  if (!data) return null
+  const totals = data.totals || {}
+  const top = (data.leaks || []).slice(0, 5)
+  return (
+    <div className="tv-leak-summary">
+      <h3>Money on the table</h3>
+      <p className="tv-leak-headline">{data.headline}</p>
+      <p className="tv-note" style={{ marginTop: 0 }}>
+        {totals.findings} findings
+        {totals.located > 0 && ` · ${totals.located} pinned on the map`}
+        {totals.unlocated > 0 && ` · ${totals.unlocated} need${totals.unlocated === 1 ? 's' : ''} an address to pin`}
+        {totals.partial && ' · partial scan'}
+      </p>
+      {top.length > 0 && (
+        <ul>
+          {top.map((l) => (
+            <li key={l.id}>
+              <strong>{l.entity_name}</strong> — {l.title}
+              {l.dollars != null && <> · ${Number(l.dollars).toLocaleString()}</>}
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="tv-provenance">Live from your leak scan — every figure from your own data, nothing invented.</p>
+    </div>
+  )
+}
+
 // TW-301: live dossier facts + leak findings for the selected pin.
 // Rendered only when signed in; sample mode keeps the static Facts block.
 // MINOR 1 (Rosa): an `error` prop renders an honest failure note — the
@@ -301,6 +332,10 @@ export default function TradeView() {
   // MAJOR 1 follow-on: a genuinely empty book is not a failure — say so
   // honestly instead of rendering a bare map.
   const [liveEmptyBook, setLiveEmptyBook] = useState(false)
+  // TW-303: Leak Map layer — every leak pinned with its dollar figure.
+  const [leakOn, setLeakOn] = useState(false)
+  const [leakData, setLeakData] = useState(null)
+  const leakLayerRef = useRef(null)
   const mapRef = useRef(null)
   const mapDivRef = useRef(null)
   const markersRef = useRef({})
@@ -358,6 +393,65 @@ export default function TradeView() {
       cancelled = true
     }
   }, [])
+
+  // TW-303: fetch the leak scan when the layer is toggled on (signed-in
+  // only — the scan runs over the org's real data).
+  useEffect(() => {
+    setLeakData(null)
+    if (!leakOn || isSampleMode()) return
+    let cancelled = false
+    tradeviewApi.leaks()
+      .then((r) => {
+        if (!cancelled) setLeakData(r.data)
+      })
+      .catch(() => {
+        if (!cancelled) setLeakData(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [leakOn])
+
+  // TW-303: leak pins layer — glowing markers with dollar figures.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    if (leakLayerRef.current) {
+      map.removeLayer(leakLayerRef.current)
+      leakLayerRef.current = null
+    }
+    if (!leakOn || !leakData || !leakData.leaks) return
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]))
+    const colorFor = (severity) =>
+      severity === 'urgent' ? '#FF4D5E' : severity === 'watch' ? '#FFB020' : '#7C5CFF'
+    const layer = L.layerGroup()
+    leakData.leaks.forEach((p) => {
+      const dollars = p.dollars != null ? `$${Math.round(p.dollars).toLocaleString()}` : 'LEAK'
+      const icon = L.divIcon({
+        className: '',
+        html: `<span class="tv-leak-pin tv-pin-enter" style="--leak:${colorFor(p.severity)}"><span>${esc(dollars)}</span></span>`,
+        iconSize: [64, 44],
+        iconAnchor: [32, 22],
+      })
+      const marker = L.marker([p.lat, p.lng], { icon, title: p.entity_name, keyboard: true })
+      marker.bindPopup(
+        `<strong>${esc(p.entity_name)}</strong><br>${esc(p.title)}` +
+        (p.dollars != null ? `<br><strong>$${Math.round(p.dollars).toLocaleString()}</strong> at stake` : '') +
+        (p.recommended_action ? `<br><small>${esc(p.recommended_action)}</small>` : '')
+      )
+      marker.addTo(layer)
+    })
+    layer.addTo(map)
+    leakLayerRef.current = layer
+    return () => {
+      if (leakLayerRef.current) {
+        map.removeLayer(leakLayerRef.current)
+        leakLayerRef.current = null
+      }
+    }
+  }, [leakOn, leakData])
 
   const liveMode = livePins !== null
   const companies = liveMode ? livePins : SAMPLE_COMPANIES
@@ -666,6 +760,13 @@ export default function TradeView() {
         />
         <div className="tv-vignette" aria-hidden="true" />
 
+        {leakOn && leakData && (
+          <div className="tv-leak-banner" role="status">
+            <strong>{leakData.headline}</strong>
+            <small>Money walking out the door</small>
+          </div>
+        )}
+
         <aside className="tv-hud" aria-label="Map controls">
           <h2 className="tv-hud-title">Command HUD</h2>
           <label htmlFor="tv-search" className="tv-note" style={{ fontWeight: 700, letterSpacing: '0.18em' }}>
@@ -706,6 +807,18 @@ export default function TradeView() {
               <input type="checkbox" checked={oppOn} onChange={(e) => setOppOn(e.target.checked)} />
               Storm opportunity (revenue)
             </label>
+            <label
+              className="tv-check"
+              title={liveMode ? 'Every leak finding pinned with its dollar figure' : 'Sign in to scan your real data for leaks'}
+            >
+              <input
+                type="checkbox"
+                checked={leakOn}
+                disabled={!liveMode}
+                onChange={(e) => setLeakOn(e.target.checked)}
+              />
+              Leak Map — money on the table{liveMode ? ' (live)' : ''}
+            </label>
             <label className="tv-check" title="Not assessed in sample data">
               <input type="checkbox" disabled />
               Ghost-web presence
@@ -733,6 +846,7 @@ export default function TradeView() {
               </div>
             )}
             {oppOn && <p className="tv-opp-legend">{OPPORTUNITY_ESTIMATE_NOTE}</p>}
+            {leakOn && liveMode && <LeakExecutiveSummary data={leakData} />}
           </fieldset>
           <p className="tv-note">
             Map pins: ◈ prospect · ◆ client.{' '}
