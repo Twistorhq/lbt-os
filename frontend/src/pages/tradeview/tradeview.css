@@ -179,3 +179,130 @@
   .tv-boot { display: none; }
   .tv-pin::before, .tv-pin-enter, .tv-dossier > article, .tv-boot-bar span { animation: none; }
 }
+
+/* ================= client edition (TW-304) ================= */
+/* Same Dark Glass / Medianoche system. Client edition: zero SQL/code —
+   talk-or-type, one button, marketing output. Faceless: no people imagery. */
+
+.cv-hero { position: relative; overflow: hidden; border-radius: 18px;
+  background: radial-gradient(1200px 480px at 50% -10%, rgba(124, 92, 255, 0.22), transparent 60%),
+    linear-gradient(180deg, #14141d 0%, #0b0b10 100%);
+  border: 1px solid var(--tv-line); padding: clamp(2.5rem, 6vw, 5rem) clamp(1.5rem, 5vw, 4rem);
+  text-align: center; }
+.cv-kicker { font-size: 0.72rem; letter-spacing: 0.34em; color: var(--tv-lavender);
+  text-transform: uppercase; font-weight: 700; margin: 0 0 1rem; }
+.cv-hero h2 { font-family: Sora, sans-serif; font-size: clamp(2rem, 5vw, 3.4rem);
+  font-weight: 800; letter-spacing: 0.02em; margin: 0 0 1rem; line-height: 1.12; }
+.cv-hero h2 .tv-glow { color: var(--tv-indigo); text-shadow: 0 0 26px rgba(124, 92, 255, 0.85); }
+.cv-lede { max-width: 620px; margin: 0 auto 2rem; color: var(--tv-muted);
+  font-size: 1.05rem; line-height: 1.65; }
+.cv-badge-client { background: rgba(111, 211, 255, 0.12); color: #6fd3ff;
+  border: 1px solid rgba(111, 211, 255, 0.45); }
+
+/* cinematic scroll — elements scale and shift depth as they enter */
+.cv-cine { opacity: 0; transform: scale(0.96) translateY(48px);
+  transition: opacity 0.9s cubic-bezier(0.2, 0.8, 0.3, 1), transform 0.9s cubic-bezier(0.2, 0.8, 0.3, 1); }
+.cv-cine.cv-inview { opacity: 1; transform: none; }
+.cv-cine-deep { transform: scale(0.9) translateY(90px); }
+
+.cv-section { max-width: 980px; margin: 0 auto; padding: clamp(2rem, 5vw, 4rem) clamp(1.25rem, 4vw, 2rem); }
+.cv-section h2 { font-family: Sora, sans-serif; font-size: clamp(1.4rem, 3vw, 2rem);
+  margin: 0 0 0.6rem; letter-spacing: 0.02em; }
+.cv-section .cv-sub { color: var(--tv-muted); margin: 0 0 1.8rem; font-size: 0.98rem; line-height: 1.6; }
+
+.cv-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1.1rem; }
+.cv-card { background: var(--tv-glass); border: 1px solid var(--tv-line); border-radius: 16px;
+  padding: 1.4rem; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+.cv-card h3 { margin: 0 0 0.5rem; font-size: 1.02rem; color: var(--tv-text); }
+.cv-card p { margin: 0; color: var(--tv-muted); font-size: 0.9rem; line-height: 1.6; }
+.cv-card .cv-stat { font-family: Sora, sans-serif; font-size: 2rem; font-weight: 800;
+  color: var(--tv-lavender); display: block; margin-bottom: 0.3rem; }
+
+/* talk-or-type */
+.cv-ask { background: var(--tv-glass); border: 1px solid var(--tv-line); border-radius: 18px;
+  padding: 1.6rem; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+.cv-ask-row { display: flex; gap: 0.7rem; flex-wrap: wrap; }
+.cv-ask input { flex: 1; min-width: 200px; background: rgba(11, 11, 16, 0.7);
+  border: 1px solid var(--tv-line); color: var(--tv-text); border-radius: 999px;
+  padding: 0.8rem 1.2rem; font-size: 1rem; font-family: Inter, sans-serif; }
+.cv-ask input:focus { outline: none; border-color: var(--tv-indigo);
+  box-shadow: 0 0 0 3px rgba(124, 92, 255, 0.28); }
+.cv-chips { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 1rem; }
+.cv-chip { background: transparent; border: 1px solid var(--tv-line); color: var(--tv-lavender);
+  border-radius: 999px; padding: 0.4rem 0.9rem; font-size: 0.82rem; cursor: pointer;
+  font-family: Inter, sans-serif; transition: background 0.2s; }
+.cv-chip:hover { background: rgba(124, 92, 255, 0.12); }
+.cv-answer { margin-top: 1.2rem; padding: 1.1rem 1.3rem; border-left: 3px solid var(--tv-indigo);
+  background: rgba(124, 92, 255, 0.07); border-radius: 0 12px 12px 0;
+  font-size: 0.98rem; line-height: 1.65; color: var(--tv-text); }
+.cv-answer p { margin: 0; }
+
+/* one-button report */
+.cv-report-cta { text-align: center; padding: 1rem 0 0; }
+.tv-btn-big { font-size: 1.05rem; padding: 0.9rem 2.2rem; }
+
+/* report modal */
+.cv-modal-veil { position: fixed; inset: 0; z-index: 5000; background: rgba(5, 5, 8, 0.78);
+  backdrop-filter: blur(6px); display: flex; align-items: center; justify-content: center; padding: 1rem; }
+.cv-modal-card { width: min(680px, 100%); max-height: calc(100vh - 3rem); overflow: auto;
+  background: #101018; border: 1px solid var(--tv-line); border-radius: 20px; padding: 2.2rem;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.7), 0 0 40px rgba(124, 92, 255, 0.12); }
+.cv-modal-card h2 { font-family: Sora, sans-serif; margin: 0 0 0.4rem; font-size: 1.6rem; }
+.cv-modal-card .cv-report-tag { color: var(--tv-lavender); font-size: 0.8rem;
+  letter-spacing: 0.2em; text-transform: uppercase; margin: 0 0 1.2rem; }
+.cv-modal-card h3 { color: var(--tv-lavender); font-size: 0.8rem; letter-spacing: 0.18em;
+  text-transform: uppercase; margin: 1.6rem 0 0.5rem; }
+.cv-modal-card p, .cv-modal-card li { color: var(--tv-text); font-size: 0.95rem; line-height: 1.7; }
+.cv-modal-card ul { padding-left: 1.2rem; margin: 0.4rem 0; }
+.cv-modal-actions { display: flex; gap: 0.7rem; margin-top: 1.8rem; flex-wrap: wrap; }
+
+/* SiteView cinematic tour */
+.cv-tour { position: fixed; inset: 0; z-index: 6000; background: #060609;
+  display: flex; flex-direction: column; }
+.cv-tour-map { position: relative; flex: 1; min-height: 0; }
+.cv-tour-map .leaflet-container { background: #060609; }
+.cv-tour-caption { position: absolute; left: 50%; bottom: 2rem; transform: translateX(-50%);
+  width: min(640px, calc(100% - 3rem)); text-align: center; z-index: 700;
+  background: rgba(10, 10, 15, 0.72); border: 1px solid var(--tv-line); border-radius: 16px;
+  padding: 1.3rem 1.6rem; backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
+.cv-tour-chapter { font-size: 0.7rem; letter-spacing: 0.32em; color: var(--tv-lavender);
+  text-transform: uppercase; font-weight: 700; margin: 0 0 0.5rem; }
+.cv-tour-caption p { margin: 0; font-size: 1.08rem; line-height: 1.6; color: var(--tv-text);
+  font-family: Sora, sans-serif; }
+.cv-tour-top { position: absolute; top: 1rem; left: 1rem; right: 1rem; z-index: 700;
+  display: flex; justify-content: space-between; align-items: center; }
+.cv-tour-progress { display: flex; gap: 0.5rem; }
+.cv-tour-progress span { width: 44px; height: 4px; border-radius: 4px;
+  background: rgba(124, 92, 255, 0.25); overflow: hidden; position: relative; }
+.cv-tour-progress span.cv-active::after { content: ""; position: absolute; inset: 0;
+  background: var(--tv-indigo); animation: cvTourFill 6.5s linear forwards; }
+.cv-tour-progress span.cv-done { background: var(--tv-indigo); }
+@keyframes cvTourFill { from { transform: translateX(-100%); } to { transform: translateX(0); } }
+.cv-tour-close { background: rgba(10, 10, 15, 0.72); border: 1px solid var(--tv-line);
+  color: var(--tv-text); border-radius: 999px; padding: 0.5rem 1.1rem; cursor: pointer;
+  font-size: 0.85rem; font-family: Inter, sans-serif; }
+.cv-tour-nav { position: absolute; z-index: 700; top: 50%; transform: translateY(-50%);
+  background: rgba(10, 10, 15, 0.72); border: 1px solid var(--tv-line); color: var(--tv-text);
+  width: 44px; height: 44px; border-radius: 50%; cursor: pointer; font-size: 1.2rem; }
+.cv-tour-prev { left: 1rem; }
+.cv-tour-next { right: 1rem; }
+
+/* storm alert card (client) */
+.cv-alert { border: 1px solid rgba(255, 176, 32, 0.4); border-radius: 18px;
+  background: linear-gradient(180deg, rgba(255, 176, 32, 0.08), rgba(11, 11, 16, 0.4));
+  padding: 1.6rem; }
+.cv-alert h3 { margin: 0 0 0.5rem; font-size: 1.05rem; }
+.cv-alert p { color: var(--tv-muted); font-size: 0.93rem; line-height: 1.65; margin: 0 0 1rem; }
+.cv-alert .cv-alert-event { color: #ffb020; font-weight: 700; }
+
+/* storm opportunity (internal, TW-309) */
+.tv-opp-banner { margin: 0.8rem 0 0; padding: 0.7rem 0.9rem; border-radius: 10px;
+  background: rgba(255, 176, 32, 0.1); border: 1px solid rgba(255, 176, 32, 0.4);
+  font-size: 0.8rem; line-height: 1.5; color: var(--tv-text); }
+.tv-opp-banner strong { color: #ffb020; }
+.tv-opp-legend { font-size: 0.75rem; color: var(--tv-muted); margin: 0.8rem 0 0; line-height: 1.5; }
+
+@media (prefers-reduced-motion: reduce) {
+  .cv-cine { opacity: 1; transform: none; transition: none; }
+  .cv-tour-progress span.cv-active::after { animation: none; }
+}
