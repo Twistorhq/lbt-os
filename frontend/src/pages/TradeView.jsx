@@ -20,9 +20,11 @@ import {
   INSIGHT_PANELS,
 } from './tradeview/tradeviewSample'
 import { safeHttpsUrl } from './tradeview/urlSafe'
+import { buildOpportunities, OPPORTUNITY_ESTIMATE_NOTE } from './tradeview/stormOpportunity'
 
 const DENVER = [39.7392, -104.9903]
 const STORM_COLORS = { tornado: '#FF4D5E', wind: '#FFB020', hail: '#6FD3FF', other: '#7C5CFF' }
+const OPP_COLOR = '#FFC94D' // revenue gold — opportunity layer is visually distinct from risk red
 const SQL_COLUMNS = ['id', 'name', 'kind', 'trade', 'address', 'phone', 'owner', 'email']
 
 function stormColor(event) {
@@ -196,15 +198,29 @@ export default function TradeView() {
   const [trades, setTrades] = useState({ HVAC: true, Plumbing: true, Electrical: true })
   const [basemap, setBasemap] = useState('dark')
   const [stormOn, setStormOn] = useState(false)
+  const [oppOn, setOppOn] = useState(false)
   const [stormNote, setStormNote] = useState('')
+  const [stormFeatures, setStormFeatures] = useState([])
   const [selectedId, setSelectedId] = useState(null)
   const [showReport, setShowReport] = useState(false)
   const mapRef = useRef(null)
   const mapDivRef = useRef(null)
   const markersRef = useRef({})
   const stormLayerRef = useRef(null)
+  const oppLayerRef = useRef(null)
   const baseLayersRef = useRef({})
   const isTest = typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.MODE === 'test'
+
+  // TW-309: revenue view of the same live NWS cells — per-cell opportunity
+  // plus which sample companies sit inside the swath (surge alerts).
+  const opportunities = useMemo(
+    () => buildOpportunities(stormFeatures, SAMPLE_COMPANIES),
+    [stormFeatures]
+  )
+  const surgeTotal = useMemo(
+    () => opportunities.reduce((n, o) => n + o.affectedCount, 0),
+    [opportunities]
+  )
 
   useEffect(() => {
     const t = setTimeout(() => setBootDone(true), 1400)
@@ -303,16 +319,23 @@ export default function TradeView() {
     })
   }, [filtered])
 
-  // Storm layer — live NWS alerts (keyless, CORS-enabled).
+  // Storm layers — live NWS alerts (keyless, CORS-enabled).
+  // One fetch feeds both views: the risk layer (stormOn) and the revenue
+  // opportunity layer (oppOn, TW-309). Layers render independently.
   useEffect(() => {
     const map = mapRef.current
     if (!map) return
-    if (!stormOn) {
-      if (stormLayerRef.current) {
-        map.removeLayer(stormLayerRef.current)
-        stormLayerRef.current = null
+    const clearLayer = (ref) => {
+      if (ref.current) {
+        map.removeLayer(ref.current)
+        ref.current = null
       }
+    }
+    if (!stormOn && !oppOn) {
+      clearLayer(stormLayerRef)
+      clearLayer(oppLayerRef)
       setStormNote('')
+      setStormFeatures([])
       return
     }
     let cancelled = false
@@ -325,35 +348,76 @@ export default function TradeView() {
       .then((data) => {
         if (cancelled) return
         const features = (data.features || []).filter((f) => f.geometry)
-        const layer = L.geoJSON(features, {
-          style: (f) => ({
-            color: stormColor(f.properties?.event),
-            weight: 2,
-            dashArray: '6 4',
-            fillOpacity: 0.12,
-          }),
-          pointToLayer: (f, latlng) =>
-            L.circleMarker(latlng, {
-              radius: 8,
+        setStormFeatures(features)
+        clearLayer(stormLayerRef)
+        clearLayer(oppLayerRef)
+        const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+          '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+        }[c]))
+        if (stormOn) {
+          const layer = L.geoJSON(features, {
+            style: (f) => ({
               color: stormColor(f.properties?.event),
-              fillOpacity: 0.3,
+              weight: 2,
+              dashArray: '6 4',
+              fillOpacity: 0.12,
             }),
-          onEachFeature: (f, l) => {
-            const p = f.properties || {}
-            const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
-              '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-            }[c]))
-            l.bindPopup(
-              `<strong>${esc(p.event)}</strong><br>${esc(p.headline)}<br>` +
-              `<small>Onset: ${esc(p.onset)} · Expires: ${esc(p.expires)}</small>`
-            )
-          },
-        })
-        layer.addTo(map)
-        stormLayerRef.current = layer
+            pointToLayer: (f, latlng) =>
+              L.circleMarker(latlng, {
+                radius: 8,
+                color: stormColor(f.properties?.event),
+                fillOpacity: 0.3,
+              }),
+            onEachFeature: (f, l) => {
+              const p = f.properties || {}
+              l.bindPopup(
+                `<strong>${esc(p.event)}</strong><br>${esc(p.headline)}<br>` +
+                `<small>Onset: ${esc(p.onset)} · Expires: ${esc(p.expires)}</small>`
+              )
+            },
+          })
+          layer.addTo(map)
+          stormLayerRef.current = layer
+        }
+        if (oppOn) {
+          // TW-309: revenue rendering — gold cells, opportunity popups.
+          const opps = buildOpportunities(features, SAMPLE_COMPANIES)
+          const byFeature = new Map(features.map((f, i) => [f, opps[i]]))
+          const layer = L.geoJSON(features, {
+            style: () => ({
+              color: OPP_COLOR,
+              weight: 2.5,
+              fillColor: OPP_COLOR,
+              fillOpacity: 0.14,
+            }),
+            pointToLayer: (f, latlng) =>
+              L.circleMarker(latlng, { radius: 10, color: OPP_COLOR, fillOpacity: 0.35 }),
+            onEachFeature: (f, l) => {
+              const opp = byFeature.get(f)
+              const o = opp ? opp.opportunity : null
+              l.bindPopup(
+                `<strong>💰 ${esc(f.properties?.event)} — job opportunity</strong><br>` +
+                (o ? `${esc(o.label)} · ${esc(o.trades.join(', '))}<br>` : '') +
+                (o ? `<strong>Illustrative ticket: ${esc(o.ticketRange)}</strong><br>` : '') +
+                (opp && opp.affectedCount > 0
+                  ? `<small>Surge: ${opp.affectedCount} sample ${opp.affectedCount === 1 ? 'company' : 'companies'} in swath — ${esc(opp.affectedNames.join(', '))}</small><br>`
+                  : `<small>No sample companies in this swath.</small><br>`) +
+                `<small>${esc(OPPORTUNITY_ESTIMATE_NOTE)}</small>`
+              )
+            },
+          })
+          layer.addTo(map)
+          oppLayerRef.current = layer
+        }
+        const inSwath = buildOpportunities(features, SAMPLE_COMPANIES).reduce(
+          (n, o) => n + o.affectedCount,
+          0
+        )
         setStormNote(
           features.length > 0
-            ? `${features.length} active alert${features.length === 1 ? '' : 's'} · live from NWS api.weather.gov`
+            ? `${features.length} active alert${features.length === 1 ? '' : 's'}${
+                oppOn ? ` · ${inSwath} sample ${inSwath === 1 ? 'company' : 'companies'} in swath` : ''
+              } · live from NWS api.weather.gov`
             : 'No active storm alerts right now · live from NWS api.weather.gov'
         )
       })
@@ -363,7 +427,7 @@ export default function TradeView() {
     return () => {
       cancelled = true
     }
-  }, [stormOn])
+  }, [stormOn, oppOn])
 
   const toggleKind = (k) => setKinds((p) => ({ ...p, [k]: !p[k] }))
   const toggleTrade = (t) => setTrades((p) => ({ ...p, [t]: !p[t] }))
@@ -455,6 +519,10 @@ export default function TradeView() {
               <input type="checkbox" checked={stormOn} onChange={(e) => setStormOn(e.target.checked)} />
               NWS storm alerts (live)
             </label>
+            <label className="tv-check">
+              <input type="checkbox" checked={oppOn} onChange={(e) => setOppOn(e.target.checked)} />
+              Storm opportunity (revenue)
+            </label>
             <label className="tv-check" title="Not assessed in sample data">
               <input type="checkbox" disabled />
               Ghost-web presence
@@ -468,6 +536,20 @@ export default function TradeView() {
               Digital maturity grade
             </label>
             {stormNote && <p className="tv-note">{stormNote}</p>}
+            {oppOn && stormFeatures.length > 0 && (
+              <div className="tv-opp-banner" role="status">
+                <strong>Surge alert:</strong> {surgeTotal} sample{' '}
+                {surgeTotal === 1 ? 'company' : 'companies'} in active storm swaths.
+                {opportunities
+                  .filter((o) => o.affectedCount > 0)
+                  .map((o) => (
+                    <span key={o.id}>
+                      {' '}{o.event}: {o.affectedCount} ({o.opportunity.ticketRange}).
+                    </span>
+                  ))}
+              </div>
+            )}
+            {oppOn && <p className="tv-opp-legend">{OPPORTUNITY_ESTIMATE_NOTE}</p>}
           </fieldset>
           <p className="tv-note">Map pins: ◈ prospect · ◆ client. Sample records — not real businesses.</p>
         </aside>
