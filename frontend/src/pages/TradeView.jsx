@@ -175,7 +175,10 @@ function SqlSandbox({ rows, datasetLabel }) {
 
 // TW-301: live dossier facts + leak findings for the selected pin.
 // Rendered only when signed in; sample mode keeps the static Facts block.
-export function LiveDossier({ dossier }) {
+// MINOR 1 (Rosa): an `error` prop renders an honest failure note — the
+// panel must never sit on "Loading…" forever.
+export function LiveDossier({ dossier, error }) {
+  if (error) return <p className="tv-empty">Couldn't load the live dossier — check your connection and try again.</p>
   if (!dossier) return <p className="tv-empty">Loading live dossier…</p>
   const facts = dossier.facts || {}
   const findings = dossier.leak_findings || []
@@ -216,7 +219,9 @@ export function LiveDossier({ dossier }) {
 }
 
 // TW-301: server-generated diagnostics from live data.
-export function LiveDiagnosticsReport({ data, onClose }) {
+// MINOR 1 (Rosa): an `error` prop renders an honest failure note.
+export function LiveDiagnosticsReport({ data, error, onClose }) {
+  if (error) return <p className="tv-empty">Couldn't load the live diagnostics — check your connection and try again.</p>
   if (!data) return <p className="tv-empty">Loading diagnostics…</p>
   const findings = data.leak_findings || []
   return (
@@ -285,6 +290,13 @@ export default function TradeView() {
   const [liveNote, setLiveNote] = useState('')
   const [liveDossier, setLiveDossier] = useState(null)
   const [liveDiagnostics, setLiveDiagnostics] = useState(null)
+  // MINOR 1 (Rosa, TW-301): fetch failures get an honest error state —
+  // never a stuck "Loading…".
+  const [liveDossierError, setLiveDossierError] = useState(false)
+  const [liveDiagnosticsError, setLiveDiagnosticsError] = useState(false)
+  // MAJOR 1 follow-on: a genuinely empty book is not a failure — say so
+  // honestly instead of rendering a bare map.
+  const [liveEmptyBook, setLiveEmptyBook] = useState(false)
   const mapRef = useRef(null)
   const mapDivRef = useRef(null)
   const markersRef = useRef({})
@@ -318,6 +330,10 @@ export default function TradeView() {
         setLivePins(pins)
         const n = r.data.unlocated_count || 0
         if (n > 0) setLiveNote(`${n} record${n === 1 ? '' : 's'} ha${n === 1 ? 's' : 've'} no mappable address yet.`)
+        // A 200 with zero pins AND zero source records is a genuinely empty
+        // book — honest note, not a bare map. (A DB failure is non-200 and
+        // falls through to .catch → sample fallback.)
+        setLiveEmptyBook(pins.length === 0 && (r.data.records_total || 0) === 0)
       })
       .catch(() => {
         if (!cancelled) setLivePins(null)
@@ -350,6 +366,7 @@ export default function TradeView() {
   // TW-301: live dossier (facts + leak findings) for the selected pin.
   useEffect(() => {
     setLiveDossier(null)
+    setLiveDossierError(false)
     if (!liveMode || !selected) return
     let cancelled = false
     tradeviewApi.dossier(selected.apiKind || selected.kind, selected.id)
@@ -357,7 +374,7 @@ export default function TradeView() {
         if (!cancelled) setLiveDossier(r.data)
       })
       .catch(() => {
-        if (!cancelled) setLiveDossier(null)
+        if (!cancelled) setLiveDossierError(true)
       })
     return () => {
       cancelled = true
@@ -367,6 +384,7 @@ export default function TradeView() {
   // TW-301: live diagnostics report, fetched on demand.
   useEffect(() => {
     setLiveDiagnostics(null)
+    setLiveDiagnosticsError(false)
     if (!liveMode || !selected || !showReport) return
     let cancelled = false
     tradeviewApi.diagnostics(selected.apiKind || selected.kind, selected.id)
@@ -374,7 +392,7 @@ export default function TradeView() {
         if (!cancelled) setLiveDiagnostics(r.data)
       })
       .catch(() => {
-        if (!cancelled) setLiveDiagnostics(null)
+        if (!cancelled) setLiveDiagnosticsError(true)
       })
     return () => {
       cancelled = true
@@ -556,6 +574,11 @@ export default function TradeView() {
               {filtered.filter((c) => c.kind === 'client').length} clients
             </span>
             {liveNote && <span className="tv-note" style={{ display: 'block' }}>{liveNote}</span>}
+            {liveMode && liveEmptyBook && (
+              <span className="tv-note" style={{ display: 'block' }}>
+                Your book is empty — connect customers or leads and they'll appear on the map.
+              </span>
+            )}
           </p>
         </div>
         <div className="tv-basemap" role="group" aria-label="Basemap style">
@@ -656,7 +679,7 @@ export default function TradeView() {
               </div>
               <h3>Facts</h3>
               {liveMode ? (
-                <LiveDossier dossier={liveDossier} />
+                <LiveDossier dossier={liveDossier} error={liveDossierError} />
               ) : (
                 <>
                   <dl className="tv-facts">
@@ -687,7 +710,7 @@ export default function TradeView() {
                 </button>
               </div>
               {showReport && liveMode && (
-                <LiveDiagnosticsReport data={liveDiagnostics} onClose={() => setShowReport(false)} />
+                <LiveDiagnosticsReport data={liveDiagnostics} error={liveDiagnosticsError} onClose={() => setShowReport(false)} />
               )}
               {showReport && !liveMode && (
                 <DiagnosticsReport company={selected} onClose={() => setShowReport(false)} />

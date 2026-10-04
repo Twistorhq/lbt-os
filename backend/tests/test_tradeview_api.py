@@ -172,7 +172,7 @@ class GeocodeTest(unittest.TestCase):
 
 
 class PinsEndpointTest(unittest.TestCase):
-    def _geo(self, address):
+    def _geo(self, address, **kwargs):
         from app.services.geocode import GeocodeResult
 
         return GeocodeResult(
@@ -301,11 +301,10 @@ class LeakScanMemoTest(unittest.TestCase):
 
         geo = GeocodeResult(lat=39.7, lon=-105.0, display_name="x", source="photon")
         with _ClientCtx(_db()) as client:
-            with mock.patch.object(
-                tv_router, "geocode_cached", return_value=geo
-            ), mock.patch.object(
-                tv_router, "run_leak_scan", return_value={}
-            ) as scan:
+            with (
+                mock.patch.object(tv_router, "geocode_cached", return_value=geo),
+                mock.patch.object(tv_router, "run_leak_scan", return_value={}) as scan,
+            ):
                 client.get("/api/v1/tradeview/dossiers/customer/c-1")
                 client.get("/api/v1/tradeview/diagnostics/customer/c-1")
         self.assertEqual(scan.call_count, 1)

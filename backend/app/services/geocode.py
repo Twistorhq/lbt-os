@@ -14,6 +14,7 @@ import json
 import time
 import urllib.parse
 import urllib.request
+from collections import OrderedDict
 from dataclasses import dataclass
 
 # Vendored-from attribution: twistor-core/src/twistor_core/territory_intel/geocode.py
@@ -100,14 +101,28 @@ class GeocodeCache:
     pins request, but can still recover later.
     """
 
-    def __init__(self, ttl_s: float = 86400.0, miss_ttl_s: float = 3600.0):
+    def __init__(
+        self,
+        ttl_s: float = 86400.0,
+        miss_ttl_s: float = 3600.0,
+        max_entries: int = 2000,
+    ):
         self._ttl = ttl_s
         self._miss_ttl = miss_ttl_s
-        self._store: dict[str, tuple[float, GeocodeResult | None]] = {}
+        self._max_entries = max_entries
+        # Insertion-ordered dict used as an LRU: hits move_to_end, inserts
+        # evict the least-recently-used entry when full (NIT 1, TW-301).
+        self._store: OrderedDict[str, tuple[float, GeocodeResult | None]] = (
+            OrderedDict()
+        )
 
     @staticmethod
     def _key(address: str) -> str:
         return " ".join(address.strip().lower().split())
+
+    def _evict_if_full(self) -> None:
+        while len(self._store) >= self._max_entries:
+            self._store.popitem(last=False)
 
     def get(
         self, address: str | None, *, timeout: float = 10.0
@@ -120,9 +135,12 @@ class GeocodeCache:
         if hit is not None:
             expires_at, result = hit
             if now < expires_at:
+                self._store.move_to_end(key)
                 return result
+            del self._store[key]
         result = geocode(address, timeout=timeout)
         ttl = self._ttl if result is not None else self._miss_ttl
+        self._evict_if_full()
         self._store[key] = (now + ttl, result)
         return result
 

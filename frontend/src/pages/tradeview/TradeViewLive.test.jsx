@@ -111,3 +111,38 @@ describe('TW-301 live backend', () => {
     expect(screen.getByText(/Call them today/)).toBeInTheDocument()
   })
 })
+
+describe('TW-301 Rosa fix round: honest failure states', () => {
+  beforeEach(() => {
+    vi.mocked(tradeviewApi.pins).mockResolvedValue({
+      data: { source: 'live', pins: LIVE_PINS, unlocated_count: 1, records_total: 3 },
+    })
+  })
+
+  test('LiveDossier shows an error note instead of loading forever', () => {
+    render(<LiveDossier dossier={null} error />)
+    expect(screen.getByText(/Couldn't load the live dossier/)).toBeInTheDocument()
+    expect(screen.queryByText(/Loading live dossier/)).not.toBeInTheDocument()
+  })
+
+  test('LiveDiagnosticsReport shows an error note instead of loading forever', () => {
+    render(<LiveDiagnosticsReport data={null} error onClose={() => {}} />)
+    expect(screen.getByText(/Couldn't load the live diagnostics/)).toBeInTheDocument()
+    expect(screen.queryByText(/Loading diagnostics/)).not.toBeInTheDocument()
+  })
+
+  test('genuinely empty book gets an honest note, not a bare map', async () => {
+    vi.mocked(tradeviewApi.pins).mockResolvedValueOnce({
+      data: { source: 'live', pins: [], unlocated_count: 0, records_total: 0 },
+    })
+    render(<TradeView />)
+    await waitFor(() => expect(screen.getByText('Live data')).toBeInTheDocument())
+    expect(screen.getByText(/Your book is empty/)).toBeInTheDocument()
+  })
+
+  test('non-empty 200 keeps the live map with no empty-book note', async () => {
+    render(<TradeView />)
+    await waitFor(() => expect(screen.getByText('Live data')).toBeInTheDocument())
+    expect(screen.queryByText(/Your book is empty/)).not.toBeInTheDocument()
+  })
+})
