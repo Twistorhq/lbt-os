@@ -464,6 +464,7 @@ def tradeview_leaks(
                 try:
                     pin = _leak_pin(entity, finding, index, names, budget)
                 except Exception:
+                    unlocated += 1
                     continue
                 if pin is None:
                     unlocated += 1
