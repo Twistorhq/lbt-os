@@ -495,22 +495,20 @@ def tradeview_leaks(
     brief, items = _collect_leak_items(db, auth.org_id, budget)
     pins: dict[str, dict[str, Any]] = {}
     unlocated = 0
-    for rung in ("what_happened", "what_will_happen", "what_should_we_do"):
-        for finding in brief.get(rung, []) or []:
-            for entity in finding.get("entities", []) or []:
-                try:
-                    pin = _leak_pin(entity, finding, index, names, budget)
-                except Exception:
-                    unlocated += 1
-                    continue
-                if pin is None:
-                    unlocated += 1
-                    continue
-                key = pin["entity_id"] or pin["id"]
-                prev = pins.get(key)
-                # Dedupe: one pin per entity, keeping the highest-dollar one.
-                if prev is None or (pin["dollars"] or 0) > (prev["dollars"] or 0):
-                    pins[key] = pin
+    for it in items:
+        if it["geo"] is None or it["entry"] is None:
+            unlocated += 1
+            continue
+        try:
+            pin = _leak_pin(it["entity"], it["finding"], it["entry"], it["geo"])
+        except Exception:
+            unlocated += 1
+            continue
+        key = pin["entity_id"] or pin["id"]
+        prev = pins.get(key)
+        # Dedupe: one pin per entity, keeping the highest-dollar one.
+        if prev is None or (pin["dollars"] or 0) > (prev["dollars"] or 0):
+            pins[key] = pin
     leak_list = sorted(pins.values(), key=lambda p: p["dollars"] or 0, reverse=True)
     dollars = brief.get("totals", {}).get("dollars_at_stake", 0) or 0
     try:
