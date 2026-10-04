@@ -57,10 +57,11 @@ expected recovery, prescribed next move; weights labeled as priors);
 The API call is not gated on the map existing (jsdom has no map) — only
 the polyline drawing is.
 
-**Full suites + lint.** Backend: `180 passed` (17 new). Frontend:
-`63 → 65 passed` (2 new test blocks: ranked queue rendering, route API
-call). `ruff check app tests` → `All checks passed!` (CI's exact
-invocation). `ruff format` applied.
+**Full suites + lint.** Backend: `187 passed` (18 new: 17 engine/endpoint
++ 1 tech-assignment surface). Frontend: `88 passed`, 11 files (3 new test
+blocks: ranked queue rendering, route API call, actions-fetch honesty).
+`ruff check app tests` → `All checks passed!` (CI's exact invocation).
+`ruff format` applied.
 
 ## 3. Guarantees table
 
@@ -79,16 +80,22 @@ invocation). `ruff format` applied.
 | 11 | Both endpoints require auth | ... | integration | PASS | 401/403 |
 | 12 | Queue panel renders ranked actions + priors label | TradeViewLive.test.jsx (TW-306 block) | unit | PASS | $2,975 expected; "heuristic priors" visible |
 | 13 | Route button calls API with located ids | ... | unit | PASS | `toHaveBeenCalledWith(['q-1','q-2'], null)` |
-| 14 | Full backend suite green | `python3 -m pytest tests/ -q` | CI | PASS | `180 passed, 8 subtests passed` |
-| 15 | Full frontend suite green | `npx vitest run` | CI | PASS | `65 passed`, 9 files |
+| 14 | Full backend suite green | `python3 -m pytest tests/ -q` | CI | PASS | `187 passed, 8 subtests passed` |
+| 15 | Full frontend suite green | `npx vitest run` | CI | PASS | `88 passed`, 11 files |
 | 16 | Lint clean under CI's exact invocation | `ruff check app tests` | CI | PASS | `All checks passed!` |
+| 17 | Every `/actions` action carries its `tech_assignment` | ...::TechAssignmentSurfaceTest | integration | PASS | located → honest no-roster reason; unlocated → honest no-location reason; decision record structure queryable |
+| 18 | `/actions` fetch failure never reads as all-clear | TradeViewLive.test.jsx (false all-clear) | unit | PASS | "Couldn't load actions — check your connection and try again."; no "Nothing to do" copy on error |
 
 ## 4. Coverage and known gaps
 
-- Tech assignment is engine-complete and unit-tested but has no roster
-  source yet: no techs table, no roster UI. The endpoint surface for a
-  future roster UI is the documented next step; until then the honest
-  "no roster connected" state shows.
+- Tech assignment has no roster source yet: no techs table, no roster UI.
+  Until a roster connects, `GET /actions` carries a per-action
+  `tech_assignment` with the honest "no technician roster connected —
+  connect your roster to enable assignment" reason and an empty JEV
+  decision record (unlocated actions get the honest "no location"
+  reason). The honest state is queryable per action on the API and shown
+  on every action in the UI — the roster-management UI is the documented
+  follow-up, not a silent gap.
 - Route optimization is nearest-neighbor (documented); true VRP with
   time windows is out of scope.
 - The `/leaks` refactor (shared `_collect_leak_items`) changed no

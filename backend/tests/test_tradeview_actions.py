@@ -363,5 +363,55 @@ class RouteEndpointTest(unittest.TestCase):
         self.assertIn(resp.status_code, (401, 403))
 
 
+class TechAssignmentSurfaceTest(unittest.TestCase):
+    """Rosa round-3 MINOR 1 (RED): assign_tech must be reachable in the
+    product — every action from GET /actions carries its tech_assignment,
+    including the honest no-roster reason."""
+
+    def test_actions_carry_tech_assignment_with_honest_no_roster_reason(self):
+        db = FakeDb(
+            {
+                "organizations": [{"id": ORG, "industry": "hvac"}],
+                "customers": [
+                    {
+                        "id": "q-1",
+                        "org_id": ORG,
+                        "name": "Acme Heating",
+                        "address": "123 Colfax Ave, Denver, CO",
+                    }
+                ],
+                "leads": [],
+                "quotes": [],
+            }
+        )
+        with _ClientCtx(db) as client:
+            with (
+                mock.patch.object(
+                    tv_router, "run_leak_scan", return_value=_brief([_finding()])
+                ),
+                mock.patch.object(
+                    tv_router,
+                    "geocode_cached",
+                    return_value=GeocodeResult(39.7, -105.0, "x", "photon"),
+                ),
+            ):
+                resp = client.get("/api/v1/tradeview/actions")
+        self.assertEqual(resp.status_code, 200)
+        actions = resp.json()["actions"]
+        self.assertTrue(actions)
+        by_entity = {a["entity_id"]: a for a in actions}
+        # Located action (q-1 has an address): honest no-roster reason.
+        ta = by_entity["q-1"]["tech_assignment"]
+        self.assertIsNotNone(ta, "every action must carry tech_assignment")
+        self.assertIsNone(ta["tech"])
+        self.assertIn("no technician roster connected", ta["reason"])
+        self.assertIsNone(ta["decision"])
+        # Unlocated action (q-2 has no address): honest no-location reason.
+        ta2 = by_entity["q-2"]["tech_assignment"]
+        self.assertIsNotNone(ta2)
+        self.assertIsNone(ta2["tech"])
+        self.assertIn("no location", ta2["reason"])
+
+
 if __name__ == "__main__":
     unittest.main()

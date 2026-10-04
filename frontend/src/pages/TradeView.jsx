@@ -177,7 +177,8 @@ function SqlSandbox({ rows, datasetLabel }) {
 
 // TW-306: What Should We Do — ranked action queue. Client-safe: plain
 // language, dollars, and the single next move. No SQL, no code.
-export function ActionQueue({ actions }) {
+export function ActionQueue({ actions, error }) {
+  if (error) return <p className="tv-empty">Couldn't load actions — check your connection and try again.</p>
   if (!actions) return <p className="tv-empty">Loading actions…</p>
   if (actions.length === 0)
     return <p className="tv-empty">Nothing to do — no open leaks right now.</p>
@@ -193,6 +194,12 @@ export function ActionQueue({ actions }) {
             )}
             <div className="tv-note" style={{ marginTop: '0.15rem' }}>
               <strong>Do:</strong> {a.next_move}
+            </div>
+            <div className="tv-note" style={{ marginTop: '0.15rem' }}>
+              <strong>Tech:</strong>{' '}
+              {a.tech_assignment && a.tech_assignment.tech
+                ? `${a.tech_assignment.tech.name} — ${a.tech_assignment.reason}`
+                : (a.tech_assignment && a.tech_assignment.reason) || 'No roster connected yet.'}
             </div>
           </li>
         ))}
@@ -367,6 +374,7 @@ export default function TradeView() {
   const leakLayerRef = useRef(null)
   // TW-306: ranked actions + route polyline.
   const [actions, setActions] = useState(null)
+  const [actionsError, setActionsError] = useState(false)
   const routeRef = useRef(null)
   const mapRef = useRef(null)
   const mapDivRef = useRef(null)
@@ -490,8 +498,11 @@ export default function TradeView() {
   }, [leakOn, leakData])
 
   // TW-306: fetch the ranked action queue once the leak scan is in.
+  // A transport failure is an honest error, never a false all-clear
+  // (same honesty class as TW-301 MINOR 1).
   useEffect(() => {
     setActions(null)
+    setActionsError(false)
     if (!leakOn || !leakData) return
     let cancelled = false
     tradeviewApi.actions()
@@ -499,7 +510,7 @@ export default function TradeView() {
         if (!cancelled) setActions(r.data.actions || [])
       })
       .catch(() => {
-        if (!cancelled) setActions([])
+        if (!cancelled) setActionsError(true)
       })
     return () => {
       cancelled = true
@@ -932,7 +943,7 @@ export default function TradeView() {
             )}
             {oppOn && <p className="tv-opp-legend">{OPPORTUNITY_ESTIMATE_NOTE}</p>}
             {leakOn && liveMode && <LeakExecutiveSummary data={leakData} />}
-            {leakOn && liveMode && <ActionQueue actions={actions} />}
+            {leakOn && liveMode && <ActionQueue actions={actions} error={actionsError} />}
             {leakOn && liveMode && leakData && leakData.leaks && leakData.leaks.length > 1 && (
               <button type="button" className="tv-btn" onClick={buildRoute} style={{ marginTop: '0.6rem' }}>
                 Optimize route

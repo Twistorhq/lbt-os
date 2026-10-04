@@ -257,4 +257,16 @@ describe('TW-306 What Should We Do', () => {
       expect(tradeviewApi.route).toHaveBeenCalledWith(['q-1', 'q-2'], null)
     )
   })
+
+  test('actions fetch failure renders an honest note, not a false all-clear', async () => {
+    vi.mocked(tradeviewApi.leaks).mockResolvedValue({ data: LEAK_DATA })
+    vi.mocked(tradeviewApi.actions).mockRejectedValue(new Error('backend down'))
+    render(<TradeView />)
+    await waitFor(() => expect(screen.getByText('Live data')).toBeInTheDocument())
+    screen.getByLabelText(/Leak Map — money on the table/).click()
+    // Same honesty class as TW-301 MINOR 1: a transport failure with leak
+    // pins visible must never read as "nothing to do".
+    await waitFor(() => expect(screen.getByText(/Couldn't load actions/)).toBeInTheDocument())
+    expect(screen.queryByText(/Nothing to do — no open leaks/)).not.toBeInTheDocument()
+  })
 })

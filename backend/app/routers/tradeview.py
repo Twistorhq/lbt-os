@@ -568,7 +568,10 @@ def tradeview_actions(
     Recoverability weights are labeled heuristic priors (see
     services/next_actions.py), never measured rates. Actions exist for
     unlocated leaks too — location gates the map pin and the tech
-    assignment, never the action itself.
+    assignment, never the action itself. Every action carries its
+    tech_assignment: the nearest qualified tech with a JEV-style auditable
+    decision record, or the honest reason it cannot be assigned (no roster
+    connected yet — roster management is the documented follow-up).
     """
     db = get_db()
     budget = _GeocodeBudget(_MAX_GEOCODE_ATTEMPTS_PER_REQUEST)
@@ -590,6 +593,11 @@ def tradeview_actions(
         deduped.append(a)
     for i, a in enumerate(deduped, 1):
         a["rank"] = i
+        # TW-306 Rosa round-3 MINOR 1: tech assignment is a first-class,
+        # queryable part of every action. With no roster connected (the
+        # current state), assign_tech returns the honest no-roster reason
+        # with an empty decision record — never a silent omission.
+        a["tech_assignment"] = na.assign_tech(a, roster=None)
     return {
         "source": "live",
         "org_id": auth.org_id,
