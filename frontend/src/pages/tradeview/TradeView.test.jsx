@@ -44,6 +44,12 @@ describe('TradeView page', () => {
     fireEvent.click(screen.getByLabelText('Prospects'))
     expect(screen.getByText(/1 companies · 0 prospects · 1 client/)).toBeInTheDocument()
   })
+
+  test('storm opportunity (revenue) toggle is present alongside the risk layer', () => {
+    render(<TradeView />)
+    expect(screen.getByLabelText('Storm opportunity (revenue)')).toBeInTheDocument()
+    expect(screen.getByLabelText('NWS storm alerts (live)')).toBeInTheDocument()
+  })
 })
 
 describe('safeHttpsUrl', () => {

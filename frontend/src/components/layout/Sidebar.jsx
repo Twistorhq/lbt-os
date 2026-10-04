@@ -28,6 +28,7 @@ const navGroups = [
     label: 'Intelligence',
     items: [
       { to: '/app/tradeview', label: 'Trade View', icon: '⬔', pro: true },
+      { to: '/app/tradeview/client', label: 'Trade View — Client', icon: '⬣' },
       { to: '/app/brief', label: 'Morning Brief', icon: '☀' },
       { to: '/app/insights', label: 'AI Audit', icon: '✦', pro: true },
       { to: '/app/strategy', label: 'Strategy', icon: '◈', pro: true },
