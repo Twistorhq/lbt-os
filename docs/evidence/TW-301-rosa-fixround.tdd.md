@@ -8,10 +8,13 @@ Rosa's review of `feature/tw-301-tradeview-api` (2026-10-04): CHANGES REQUIRED
 
 ## RED
 
-Commit `RED`: 4 new regression tests, all failed pre-fix (validated):
+Commit `RED`: 6 new tests across 4 test classes; 4 failed pre-fix
+(validated). The two dossier/diagnostics DB-outage tests PASSED pre-fix —
+guards, not regression proofs (the old code answered 404, which satisfies
+`assertNotEqual(200)`); kept for protection:
 - `DbOutageTest::test_pins_db_outage_is_not_200_empty` — FAILED (got 200 empty)
-- `DbOutageTest::test_dossier_db_outage_is_not_200` — FAILED
-- `DbOutageTest::test_diagnostics_db_outage_is_not_200` — FAILED
+- `DbOutageTest::test_dossier_db_outage_is_not_200` — PASSED (guard)
+- `DbOutageTest::test_diagnostics_db_outage_is_not_200` — PASSED (guard)
 - `GeocodeBudgetTest::test_geocode_attempts_capped_per_request` — FAILED (30 calls)
 - `LeakScanMemoTest::test_scan_runs_once_per_org_within_ttl` — FAILED (2 calls)
 - `GeocodeTest::test_cache_is_bounded_lru` — FAILED (unbounded)
