@@ -58,8 +58,11 @@ Command: `npx vitest run src/pages/tradeview/` → `22 passed`
 disabled, summary-has-no-SQL).
 
 **Full suites + lint.** Backend: `154 → 163 passed`
-(9 new). Frontend: `59 → 63 passed` (4 new test files counted once;
-22 in the tradeview dir). `ruff check app tests` → `All checks passed!`
+(9 new). Frontend: `59 → 67 passed`, 9 files (4 new test files; 22 in
+the tradeview dir) — the original draft said "63 passed"; Rosa's
+independent run measured 67/9 and that is the corrected figure.
+Post-rebase onto main (TW-301 + TW-304/309 merged): frontend full suite
+`85 passed`, 11 files. `ruff check app tests` → `All checks passed!`
 (CI's exact invocation).
 
 ## 3. Guarantees table
@@ -78,7 +81,7 @@ disabled, summary-has-no-SQL).
 | 10 | Layer disabled in sample mode | ... | unit | PASS | `toBeDisabled()` asserted |
 | 11 | Executive summary has no SQL/code | ... | unit | PASS | `not.toMatch(/SELECT/i)` |
 | 12 | Full backend suite green | `python3 -m pytest tests/ -q` | CI | PASS | `163 passed, 8 subtests passed` |
-| 13 | Full frontend suite green | `npx vitest run` | CI | PASS | `63 passed`, 9 files |
+| 13 | Full frontend suite green | `npx vitest run` | CI | PASS | `67 passed`, 9 files (85/11 post-rebase) |
 | 14 | Lint clean under CI's exact invocation | `ruff check app tests` | CI | PASS | `All checks passed!` |
 
 ## 4. Coverage and known gaps
