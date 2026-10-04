@@ -154,6 +154,17 @@ class GeocodeTest(unittest.TestCase):
         with mock.patch.object(g, "_get", return_value=None):
             self.assertIsNone(g.geocode("Nowhere, XX"))
 
+    def test_cache_is_bounded_lru(self):
+        # NIT 1 (Rosa): the process-wide cache must not grow without bound.
+        from app.services import geocode as g
+
+        cache = g.GeocodeCache(ttl_s=600, max_entries=3)
+        payload = b'{"features": [{"geometry": {"coordinates": [-105.0, 39.7]}, "properties": {"name": "X"}}]}'
+        with mock.patch.object(g, "_get", return_value=payload):
+            for i in range(5):
+                cache.get(f"{i} Bounded St, Denver, CO")
+        self.assertLessEqual(len(cache._store), 3)
+
 
 # ---------------------------------------------------------------------------
 # GET /api/v1/tradeview/pins
@@ -205,6 +216,99 @@ class PinsEndpointTest(unittest.TestCase):
     def test_requires_auth(self):
         resp = TestClient(app).get("/api/v1/tradeview/pins")
         self.assertIn(resp.status_code, (401, 403))
+
+
+class DbOutageTest(unittest.TestCase):
+    """MAJOR 1 (Rosa): a total DB failure must NOT return 200 with an empty
+    'live' payload — the frontend would render an empty map with a Live
+    badge. Table-level failures must surface as non-200 so the frontend
+    .catch() engages the TW-295 sample fallback."""
+
+    class _BrokenTable(_FakeTable):
+        def execute(self):
+            raise ConnectionError("db is down")
+
+    class _BrokenDb(FakeDb):
+        def table(self, name):
+            return DbOutageTest._BrokenTable(self, name)
+
+    def test_pins_db_outage_is_not_200_empty(self):
+        with _ClientCtx(DbOutageTest._BrokenDb()) as client:
+            resp = client.get("/api/v1/tradeview/pins")
+        self.assertNotEqual(resp.status_code, 200)
+        self.assertIn(resp.status_code, (500, 502, 503))
+
+    def test_dossier_db_outage_is_not_200(self):
+        with _ClientCtx(DbOutageTest._BrokenDb()) as client:
+            resp = client.get("/api/v1/tradeview/dossiers/customer/c-1")
+        self.assertNotEqual(resp.status_code, 200)
+
+    def test_diagnostics_db_outage_is_not_200(self):
+        with _ClientCtx(DbOutageTest._BrokenDb()) as client:
+            resp = client.get("/api/v1/tradeview/diagnostics/customer/c-1")
+        self.assertNotEqual(resp.status_code, 200)
+
+
+class GeocodeBudgetTest(unittest.TestCase):
+    """MAJOR 2 (Rosa): sequential sync geocoding inline in the request must
+    be capped — a book of uncached addresses must not hang the request."""
+
+    def _many_rows(self, n):
+        return FakeDb(
+            {
+                "customers": [
+                    {
+                        "id": f"c-{i}",
+                        "org_id": ORG,
+                        "name": f"Shop {i}",
+                        "address": f"{i} Unique St, Denver, CO",
+                        "trade": "HVAC",
+                    }
+                    for i in range(n)
+                ],
+                "leads": [],
+            }
+        )
+
+    def test_geocode_attempts_capped_per_request(self):
+        calls = []
+
+        def fake_geo(address, timeout=10.0):
+            calls.append(address)
+            from app.services.geocode import GeocodeResult
+
+            return GeocodeResult(
+                lat=39.7, lon=-105.0, display_name=address, source="photon"
+            )
+
+        with _ClientCtx(self._many_rows(30)) as client:
+            with mock.patch.object(tv_router, "geocode_cached", side_effect=fake_geo):
+                resp = client.get("/api/v1/tradeview/pins")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertLessEqual(len(calls), 10)
+        # The remainder degrade to unlocated this round; the cache warms
+        # across requests.
+        self.assertGreaterEqual(body["unlocated_count"], 30 - len(calls))
+
+
+class LeakScanMemoTest(unittest.TestCase):
+    """MINOR 2 (Rosa): a full-org run_leak_scan per pin click is O(org)
+    per click — memoize with a short TTL per org."""
+
+    def test_scan_runs_once_per_org_within_ttl(self):
+        from app.services.geocode import GeocodeResult
+
+        geo = GeocodeResult(lat=39.7, lon=-105.0, display_name="x", source="photon")
+        with _ClientCtx(_db()) as client:
+            with mock.patch.object(
+                tv_router, "geocode_cached", return_value=geo
+            ), mock.patch.object(
+                tv_router, "run_leak_scan", return_value={}
+            ) as scan:
+                client.get("/api/v1/tradeview/dossiers/customer/c-1")
+                client.get("/api/v1/tradeview/diagnostics/customer/c-1")
+        self.assertEqual(scan.call_count, 1)
 
 
 # ---------------------------------------------------------------------------
