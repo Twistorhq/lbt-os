@@ -22,11 +22,13 @@ from datetime import datetime, timezone
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 from ..auth import AuthContext, get_auth
 from ..database import get_db
 from ..leak_engine import run_leak_scan
 from ..limiter import enforce_user_limit
+from ..services import next_actions as na
 from ..services.geocode import geocode_cached
 
 router = APIRouter(prefix="/tradeview", tags=["tradeview"])
@@ -380,33 +382,78 @@ def _address_index(db, org_id: str) -> tuple[dict[str, dict], dict[str, dict]]:
     return index, names
 
 
-def _leak_pin(
+def _resolve_entity(
     entity: dict[str, Any],
-    finding: dict[str, Any],
     index: dict[str, dict],
     names: dict[str, dict],
     budget: _GeocodeBudget,
     *,
     geocode_timeout: float = _PINS_GEOCODE_TIMEOUT_S,
-) -> dict[str, Any] | None:
-    """One glowing leak pin for one entity. Returns None when the entity
-    cannot be located — counted, never pinned on a guess.
+) -> tuple[dict[str, Any] | None, Any]:
+    """Resolve an entity to (address-entry, geo). Either may be None.
+    Never raises — resolution failure is data, not an error.
 
     Shares the per-request geocode budget (MAJOR 2, TW-301): beyond the cap
     the entity counts as unlocated this round and the cache warms across
     requests."""
+    try:
+        eid = entity.get("id")
+        entry = index.get(str(eid)) if eid is not None else None
+        if entry is None:
+            entry = names.get((entity.get("name") or "").strip().lower())
+        if entry is None or not entry.get("address"):
+            return entry, None
+        geo = None
+        if budget.attempts > 0:
+            budget.attempts -= 1
+            geo = geocode_cached(entry["address"], timeout=geocode_timeout)
+        return entry, geo
+    except Exception:
+        return None, None
+
+
+def _collect_leak_items(
+    db, org_id: str, budget: _GeocodeBudget
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Shared flattening for the leak endpoints: every (finding, entity)
+    in the scan with its resolved address-entry and geo (either may be
+    None). One bad entity never kills the collection (TW-204).
+
+    The brief is memoized per org (MINOR 2, TW-301); geocoding shares the
+    per-request budget (MAJOR 2, TW-301)."""
+    try:
+        brief = _brief_for(db, org_id)
+    except Exception:
+        brief = {
+            "what_happened": [],
+            "what_will_happen": [],
+            "what_should_we_do": [],
+            "totals": {"findings": 0, "dollars_at_stake": 0.0},
+            "data_status": {"errors": ["scan"]},
+        }
+    index, names = _address_index(db, org_id)
+    items: list[dict[str, Any]] = []
+    for rung in ("what_happened", "what_will_happen", "what_should_we_do"):
+        for finding in brief.get(rung, []) or []:
+            for entity in finding.get("entities", []) or []:
+                try:
+                    entry, geo = _resolve_entity(entity, index, names, budget)
+                except Exception:
+                    continue
+                items.append(
+                    {"finding": finding, "entity": entity, "entry": entry, "geo": geo}
+                )
+    return brief, items
+
+
+def _leak_pin(
+    entity: dict[str, Any],
+    finding: dict[str, Any],
+    entry: dict[str, Any],
+    geo: Any,
+) -> dict[str, Any]:
+    """One glowing leak pin for one located entity."""
     eid = entity.get("id")
-    entry = index.get(str(eid)) if eid is not None else None
-    if entry is None:
-        entry = names.get((entity.get("name") or "").strip().lower())
-    if entry is None or not entry.get("address"):
-        return None
-    geo = None
-    if budget.attempts > 0:
-        budget.attempts -= 1
-        geo = geocode_cached(entry["address"], timeout=geocode_timeout)
-    if geo is None:
-        return None
     dollars = _dollars(entity.get("total"))
     if dollars is None:
         dollars = _dollars(entity.get("estimated_value"))
@@ -444,36 +491,24 @@ def tradeview_leaks(
     detectors; a pin without a figure shows none rather than an estimate.
     """
     db = get_db()
-    try:
-        brief = run_leak_scan(db, auth.org_id)
-    except Exception:
-        brief = {
-            "what_happened": [],
-            "what_will_happen": [],
-            "what_should_we_do": [],
-            "totals": {"findings": 0, "dollars_at_stake": 0.0},
-            "data_status": {"errors": ["scan"]},
-        }
-    index, names = _address_index(db, auth.org_id)
+    budget = _GeocodeBudget(_MAX_GEOCODE_ATTEMPTS_PER_REQUEST)
+    brief, items = _collect_leak_items(db, auth.org_id, budget)
     pins: dict[str, dict[str, Any]] = {}
     unlocated = 0
-    budget = _GeocodeBudget(_MAX_GEOCODE_ATTEMPTS_PER_REQUEST)
-    for rung in ("what_happened", "what_will_happen", "what_should_we_do"):
-        for finding in brief.get(rung, []) or []:
-            for entity in finding.get("entities", []) or []:
-                try:
-                    pin = _leak_pin(entity, finding, index, names, budget)
-                except Exception:
-                    unlocated += 1
-                    continue
-                if pin is None:
-                    unlocated += 1
-                    continue
-                key = pin["entity_id"] or pin["id"]
-                prev = pins.get(key)
-                # Dedupe: one pin per entity, keeping the highest-dollar one.
-                if prev is None or (pin["dollars"] or 0) > (prev["dollars"] or 0):
-                    pins[key] = pin
+    for it in items:
+        if it["geo"] is None or it["entry"] is None:
+            unlocated += 1
+            continue
+        try:
+            pin = _leak_pin(it["entity"], it["finding"], it["entry"], it["geo"])
+        except Exception:
+            unlocated += 1
+            continue
+        key = pin["entity_id"] or pin["id"]
+        prev = pins.get(key)
+        # Dedupe: one pin per entity, keeping the highest-dollar one.
+        if prev is None or (pin["dollars"] or 0) > (prev["dollars"] or 0):
+            pins[key] = pin
     leak_list = sorted(pins.values(), key=lambda p: p["dollars"] or 0, reverse=True)
     dollars = brief.get("totals", {}).get("dollars_at_stake", 0) or 0
     try:
@@ -498,4 +533,126 @@ def tradeview_leaks(
         },
         "leaks": leak_list,
         "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# TW-306: What Should We Do — ranked actions, tech assignment, routing
+# ---------------------------------------------------------------------------
+
+
+class RouteRequest(BaseModel):
+    leak_ids: list[str] = []
+    start: dict[str, float] | None = None  # {"lat":, "lng":} or None
+
+
+def _unique_findings(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[int] = set()
+    findings: list[dict[str, Any]] = []
+    for it in items:
+        f = it["finding"]
+        if id(f) not in seen:
+            seen.add(id(f))
+            findings.append(f)
+    return findings
+
+
+@router.get("/actions")
+def tradeview_actions(
+    auth: Annotated[AuthContext, Depends(get_auth)],
+    _user_limit: Annotated[None, Depends(enforce_user_limit(_TRADEVIEW_RATE_LIMIT))],
+):
+    """What Should We Do: every open leak ranked by expected dollars-
+    recovered, each with its single prescribed next move.
+
+    Recoverability weights are labeled heuristic priors (see
+    services/next_actions.py), never measured rates. Actions exist for
+    unlocated leaks too — location gates the map pin and the tech
+    assignment, never the action itself. Every action carries its
+    tech_assignment: the nearest qualified tech with a JEV-style auditable
+    decision record, or the honest reason it cannot be assigned (no roster
+    connected yet — roster management is the documented follow-up).
+    """
+    db = get_db()
+    budget = _GeocodeBudget(_MAX_GEOCODE_ATTEMPTS_PER_REQUEST)
+    _brief, items = _collect_leak_items(db, auth.org_id, budget)
+    located: dict[str, dict[str, float]] = {}
+    for it in items:
+        eid = it["entity"].get("id")
+        if eid is not None and it["geo"] is not None:
+            located.setdefault(str(eid), {"lat": it["geo"].lat, "lng": it["geo"].lon})
+    queue = na.build_action_queue(_unique_findings(items), located=located)
+    # One action per entity: keep the highest-ranked (already sorted).
+    seen: set[str] = set()
+    deduped: list[dict[str, Any]] = []
+    for a in queue:
+        key = a["entity_id"] or a["id"]
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(a)
+    for i, a in enumerate(deduped, 1):
+        a["rank"] = i
+        # TW-306 Rosa round-3 MINOR 1: tech assignment is a first-class,
+        # queryable part of every action. With no roster connected (the
+        # current state), assign_tech returns the honest no-roster reason
+        # with an empty decision record — never a silent omission.
+        a["tech_assignment"] = na.assign_tech(a, roster=None)
+    return {
+        "source": "live",
+        "org_id": auth.org_id,
+        "actions": deduped,
+        "count": len(deduped),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@router.post("/route")
+def tradeview_route(
+    body: RouteRequest,
+    auth: Annotated[AuthContext, Depends(get_auth)],
+    _user_limit: Annotated[None, Depends(enforce_user_limit(_TRADEVIEW_RATE_LIMIT))],
+):
+    """Route optimization over leak pins: nearest-neighbor visit order.
+
+    Unknown or unlocated ids are reported honestly, never routed on a
+    guess. Method is a documented heuristic, not an optimal solver.
+    """
+    db = get_db()
+    budget = _GeocodeBudget(_MAX_GEOCODE_ATTEMPTS_PER_REQUEST)
+    _brief, items = _collect_leak_items(db, auth.org_id, budget)
+    stops: list[dict[str, Any]] = []
+    unknown: list[str] = []
+    seen: set[str] = set()
+    for lid in body.leak_ids:
+        matched = False
+        for it in items:
+            eid = it["entity"].get("id")
+            if eid is not None and str(eid) == str(lid) and it["geo"] is not None:
+                if str(eid) not in seen:
+                    seen.add(str(eid))
+                    stops.append(
+                        {
+                            "id": str(eid),
+                            "name": it["entity"].get("name"),
+                            "lat": it["geo"].lat,
+                            "lng": it["geo"].lon,
+                        }
+                    )
+                matched = True
+                break
+        if not matched:
+            unknown.append(str(lid))
+    route = na.optimize_route(stops, start=body.start)
+    note = (
+        f"{len(unknown)} id(s) unknown or unlocated — left out of the route."
+        if unknown
+        else f"{len(stops)} stop(s) routed."
+    )
+    return {
+        "source": "live",
+        "org_id": auth.org_id,
+        **route,
+        "unknown_ids": unknown,
+        "note": note,
     }
