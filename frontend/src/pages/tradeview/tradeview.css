@@ -306,3 +306,32 @@
   .cv-cine { opacity: 1; transform: none; transition: none; }
   .cv-tour-progress span.cv-active::after { animation: none; }
 }
+
+/* ---------- TW-303: leak pins — money glowing on the map ---------- */
+.tv-leak-pin { display: inline-flex; align-items: center; justify-content: center;
+  min-width: 44px; height: 44px; padding: 0 8px; position: relative;
+  font-size: 0.8rem; font-weight: 800; }
+.tv-leak-pin::before { content: ""; position: absolute; inset: 0; border-radius: 999px;
+  background: var(--leak, #ff4d5e); opacity: 0.5; animation: tvLeakGlow 1.8s ease-out infinite; }
+.tv-leak-pin > span { position: relative; z-index: 1; padding: 4px 10px; border-radius: 999px;
+  background: var(--leak, #ff4d5e); color: #0b0b10; white-space: nowrap;
+  box-shadow: 0 0 18px var(--leak, #ff4d5e); }
+@keyframes tvLeakGlow { 0% { transform: scale(0.75); opacity: 0.6; }
+  70% { transform: scale(1.45); opacity: 0; } 100% { transform: scale(1.45); opacity: 0; } }
+
+/* ---------- TW-303: leak headline banner ---------- */
+.tv-leak-banner { position: absolute; z-index: 550; top: 1rem; left: 50%; transform: translateX(-50%);
+  background: rgba(20, 8, 8, 0.82); border: 1px solid rgba(255, 77, 94, 0.55);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  border-radius: 999px; padding: 0.55rem 1.4rem; text-align: center;
+  box-shadow: 0 0 28px rgba(255, 77, 94, 0.35); max-width: calc(100% - 3rem); }
+.tv-leak-banner strong { color: #ff6b7a; font-size: 1.15rem; letter-spacing: 0.02em; }
+.tv-leak-banner small { display: block; color: var(--tv-muted); font-size: 0.7rem; letter-spacing: 0.14em; }
+
+/* ---------- TW-303: executive summary (client-safe, no SQL) ---------- */
+.tv-leak-summary { margin-top: 0.9rem; padding: 0.9rem; border-radius: 12px;
+  background: rgba(255, 77, 94, 0.07); border: 1px solid rgba(255, 77, 94, 0.3); }
+.tv-leak-summary h3 { margin: 0 0 0.4rem; font-size: 0.8rem; letter-spacing: 0.18em; color: #ff6b7a; }
+.tv-leak-headline { font-size: 1.25rem; font-weight: 800; color: #ffd9dd; margin: 0 0 0.3rem; }
+.tv-leak-summary ul { margin: 0.5rem 0; padding-left: 1.1rem; font-size: 0.85rem; }
+.tv-leak-summary li { margin: 0.3rem 0; }

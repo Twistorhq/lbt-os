@@ -3,7 +3,16 @@ from datetime import datetime
 from pydantic import BaseModel, field_validator
 
 LEAD_STATUSES = {"new", "contacted", "qualified", "proposal", "won", "lost"}
-LEAD_SOURCES  = {"google", "referral", "social", "yelp", "cold_call", "walk_in", "website", "other"}
+LEAD_SOURCES = {
+    "google",
+    "referral",
+    "social",
+    "yelp",
+    "cold_call",
+    "walk_in",
+    "website",
+    "other",
+}
 
 
 class LeadCreate(BaseModel):
@@ -14,6 +23,7 @@ class LeadCreate(BaseModel):
     status: str = "new"
     service_interest: str | None = None
     estimated_value: float | None = None
+    address: str | None = None
     notes: str | None = None
     assigned_to: str | None = None
     follow_up_at: datetime | None = None
@@ -34,6 +44,7 @@ class LeadUpdate(BaseModel):
     status: str | None = None
     service_interest: str | None = None
     estimated_value: float | None = None
+    address: str | None = None
     notes: str | None = None
     assigned_to: str | None = None
     follow_up_at: datetime | None = None
@@ -59,6 +70,7 @@ class LeadOut(BaseModel):
     status: str
     service_interest: str | None
     estimated_value: float | None
+    address: str | None
     notes: str | None
     assigned_to: str | None
     follow_up_at: datetime | None

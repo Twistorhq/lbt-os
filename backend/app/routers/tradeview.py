@@ -16,6 +16,7 @@ Self-healing (TW-208): one bad row or one failed geocode never kills the
 endpoint — failures degrade to honest unlocated counts / empty states.
 """
 
+import math
 import time
 from datetime import datetime, timezone
 from typing import Annotated, Any
@@ -316,9 +317,9 @@ def tradeview_layers(
             {
                 "id": "leak_map",
                 "label": "Leak Map — money on the table",
-                "live": False,
+                "live": True,
                 "requires_auth": True,
-                "note": "Ships with TW-303.",
+                "note": "Every leak finding pinned with its dollar figure.",
             },
             {
                 "id": "actions",
@@ -328,4 +329,173 @@ def tradeview_layers(
                 "note": "Ships with TW-306.",
             },
         ]
+    }
+
+
+# ---------------------------------------------------------------------------
+# TW-303: Leak Map — money walking out the door, pinned with dollar figures
+# ---------------------------------------------------------------------------
+
+
+def _dollars(value: Any) -> float | None:
+    """Coerce a detector's dollar figure. Garbage becomes None — a missing
+    figure is honest; a fabricated one is not."""
+    if value is None:
+        return None
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(v) or math.isinf(v) or v < 0:
+        return None
+    return round(v, 2)
+
+
+def _address_index(db, org_id: str) -> tuple[dict[str, dict], dict[str, dict]]:
+    """Entity id -> {address, kind, name} across customers, leads, quotes,
+    plus a customer name -> row fallback for name-matched entities."""
+    index: dict[str, dict] = {}
+    for table, kind in (
+        ("customers", "customer"),
+        ("leads", "lead"),
+        ("quotes", "quote"),
+    ):
+        for row in _rows(db, table, org_id):
+            rid = row.get("id")
+            if rid and str(rid) not in index:
+                index[str(rid)] = {
+                    "address": (row.get("address") or "").strip() or None,
+                    "kind": kind,
+                    "name": row.get("customer_name") or row.get("name"),
+                }
+    names: dict[str, dict] = {}
+    for row in _rows(db, "customers", org_id):
+        n = (row.get("name") or "").strip().lower()
+        if n and n not in names:
+            names[n] = {
+                "address": (row.get("address") or "").strip() or None,
+                "kind": "customer",
+                "name": row.get("name"),
+            }
+    return index, names
+
+
+def _leak_pin(
+    entity: dict[str, Any],
+    finding: dict[str, Any],
+    index: dict[str, dict],
+    names: dict[str, dict],
+    budget: _GeocodeBudget,
+    *,
+    geocode_timeout: float = _PINS_GEOCODE_TIMEOUT_S,
+) -> dict[str, Any] | None:
+    """One glowing leak pin for one entity. Returns None when the entity
+    cannot be located — counted, never pinned on a guess.
+
+    Shares the per-request geocode budget (MAJOR 2, TW-301): beyond the cap
+    the entity counts as unlocated this round and the cache warms across
+    requests."""
+    eid = entity.get("id")
+    entry = index.get(str(eid)) if eid is not None else None
+    if entry is None:
+        entry = names.get((entity.get("name") or "").strip().lower())
+    if entry is None or not entry.get("address"):
+        return None
+    geo = None
+    if budget.attempts > 0:
+        budget.attempts -= 1
+        geo = geocode_cached(entry["address"], timeout=geocode_timeout)
+    if geo is None:
+        return None
+    dollars = _dollars(entity.get("total"))
+    if dollars is None:
+        dollars = _dollars(entity.get("estimated_value"))
+    return {
+        "id": f"{finding.get('detector')}:{eid}",
+        "entity_id": str(eid) if eid is not None else None,
+        "entity_name": entity.get("name") or entry.get("name"),
+        "entity_kind": entry.get("kind"),
+        "detector": finding.get("detector"),
+        "title": finding.get("title"),
+        "detail": finding.get("detail"),
+        "severity": finding.get("severity"),
+        "ladder": finding.get("ladder"),
+        "dollars": dollars,
+        "days_idle": entity.get("days_idle"),
+        "recommended_action": finding.get("recommended_action"),
+        "address": entry["address"],
+        "lat": geo.lat,
+        "lng": geo.lon,
+        "located": True,
+    }
+
+
+@router.get("/leaks")
+def tradeview_leaks(
+    auth: Annotated[AuthContext, Depends(get_auth)],
+    _user_limit: Annotated[None, Depends(enforce_user_limit(_TRADEVIEW_RATE_LIMIT))],
+):
+    """Leak Map: every leak finding pinned with its dollar figure.
+
+    Runs the real leak-engine scan, resolves each finding's entities to
+    addresses (customers, leads, quotes), and geocodes them. Entities that
+    cannot be located are counted in totals.unlocated — never pinned on a
+    guess, never dropped silently. Dollar figures come only from the
+    detectors; a pin without a figure shows none rather than an estimate.
+    """
+    db = get_db()
+    try:
+        brief = run_leak_scan(db, auth.org_id)
+    except Exception:
+        brief = {
+            "what_happened": [],
+            "what_will_happen": [],
+            "what_should_we_do": [],
+            "totals": {"findings": 0, "dollars_at_stake": 0.0},
+            "data_status": {"errors": ["scan"]},
+        }
+    index, names = _address_index(db, auth.org_id)
+    pins: dict[str, dict[str, Any]] = {}
+    unlocated = 0
+    budget = _GeocodeBudget(_MAX_GEOCODE_ATTEMPTS_PER_REQUEST)
+    for rung in ("what_happened", "what_will_happen", "what_should_we_do"):
+        for finding in brief.get(rung, []) or []:
+            for entity in finding.get("entities", []) or []:
+                try:
+                    pin = _leak_pin(entity, finding, index, names, budget)
+                except Exception:
+                    unlocated += 1
+                    continue
+                if pin is None:
+                    unlocated += 1
+                    continue
+                key = pin["entity_id"] or pin["id"]
+                prev = pins.get(key)
+                # Dedupe: one pin per entity, keeping the highest-dollar one.
+                if prev is None or (pin["dollars"] or 0) > (prev["dollars"] or 0):
+                    pins[key] = pin
+    leak_list = sorted(pins.values(), key=lambda p: p["dollars"] or 0, reverse=True)
+    dollars = brief.get("totals", {}).get("dollars_at_stake", 0) or 0
+    try:
+        dollars = float(dollars)
+    except (TypeError, ValueError):
+        dollars = 0.0
+    headline = (
+        f"${dollars:,.0f} left on the table"
+        if dollars > 0
+        else "No leaks detected — your follow-up game is tight."
+    )
+    return {
+        "source": "live",
+        "org_id": auth.org_id,
+        "headline": headline,
+        "totals": {
+            "findings": brief.get("totals", {}).get("findings", 0),
+            "dollars_at_stake": round(dollars, 2),
+            "located": len(leak_list),
+            "unlocated": unlocated,
+            "partial": bool(brief.get("data_status", {}).get("partial")),
+        },
+        "leaks": leak_list,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
     }

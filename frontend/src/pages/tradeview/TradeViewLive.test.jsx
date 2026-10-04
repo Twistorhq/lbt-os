@@ -15,6 +15,7 @@ vi.mock('../../lib/api', async (importOriginal) => {
       dossier: vi.fn(),
       diagnostics: vi.fn(),
       layers: vi.fn(),
+      leaks: vi.fn(),
     },
   }
 })
@@ -23,8 +24,9 @@ vi.mock('../../lib/sampleMode', async (importOriginal) => {
   return { ...actual, isSampleMode: vi.fn(() => false) }
 })
 
-import TradeView, { runSandboxQuery, LiveDossier, LiveDiagnosticsReport } from '../TradeView'
+import TradeView, { runSandboxQuery, LiveDossier, LiveDiagnosticsReport, LeakExecutiveSummary } from '../TradeView'
 import { tradeviewApi } from '../../lib/api'
+import { isSampleMode } from '../../lib/sampleMode'
 
 const LIVE_PINS = [
   {
@@ -144,5 +146,55 @@ describe('TW-301 Rosa fix round: honest failure states', () => {
     render(<TradeView />)
     await waitFor(() => expect(screen.getByText('Live data')).toBeInTheDocument())
     expect(screen.queryByText(/Your book is empty/)).not.toBeInTheDocument()
+  })
+})
+
+const LEAK_DATA = {
+  source: 'live',
+  headline: '$13,000 left on the table',
+  totals: { findings: 1, dollars_at_stake: 13000.0, located: 1, unlocated: 1, partial: false },
+  leaks: [
+    {
+      id: 'quote-resurrection:q-1', entity_id: 'q-1', entity_name: 'Acme Heating',
+      detector: 'quote-resurrection', title: '2 stalled quotes still winnable',
+      severity: 'urgent', dollars: 8500.0, days_idle: 21,
+      recommended_action: 'Two-touch follow-up this week.',
+      lat: 39.7, lng: -105.0, located: true,
+    },
+  ],
+}
+
+describe('TW-303 Leak Map', () => {
+  test('toggling the layer fetches leaks and shows the headline banner', async () => {
+    vi.mocked(tradeviewApi.leaks).mockResolvedValue({ data: LEAK_DATA })
+    render(<TradeView />)
+    await waitFor(() => expect(screen.getByText('Live data')).toBeInTheDocument())
+    const toggle = screen.getByLabelText(/Leak Map — money on the table/)
+    expect(toggle).not.toBeDisabled()
+    toggle.click()
+    await waitFor(() => expect(screen.getAllByText('$13,000 left on the table').length).toBeGreaterThan(0))
+    expect(screen.getByText('Money walking out the door')).toBeInTheDocument()
+    // Executive summary renders the top leaks in plain language.
+    expect(screen.getByText('Money on the table')).toBeInTheDocument()
+    expect(screen.getByText('Acme Heating')).toBeInTheDocument()
+  })
+
+  test('leak layer is disabled in sample mode', () => {
+    vi.mocked(isSampleMode).mockReturnValueOnce(true)
+    render(<TradeView />)
+    expect(screen.getByLabelText(/Leak Map — money on the table/)).toBeDisabled()
+  })
+
+  test('LeakExecutiveSummary is client-safe: no SQL, no code', () => {
+    render(<LeakExecutiveSummary data={LEAK_DATA} />)
+    const text = document.body.textContent
+    expect(text).toMatch(/\$13,000 left on the table/)
+    expect(text).toMatch(/Acme Heating/)
+    expect(text).not.toMatch(/SELECT/i)
+  })
+
+  test('LeakExecutiveSummary renders nothing without data', () => {
+    const { container } = render(<LeakExecutiveSummary data={null} />)
+    expect(container.textContent).toBe('')
   })
 })
