@@ -1,0 +1,1034 @@
+{
+  "version": 1,
+  "observed_at": "2026-10-11",
+  "upstream": "bilawalsidhu/gods-eye-view",
+  "commit": "591f299d11f38a612629a274463196d57ae3862e",
+  "source_url": "https://github.com/bilawalsidhu/gods-eye-view/blob/591f299d11f38a612629a274463196d57ae3862e/DATA_SOURCES.md",
+  "scope": "Retain every source and bundled dataset listed in upstream attribution tables for future embedded-view integration. Metadata only; no dataset files or upstream runtime imported.",
+  "layers": [
+    {
+      "id": "gev-source-01",
+      "name": "NOAA GFS (wind) (`noaa-gfs-bdp-pds.s3.amazonaws.com`)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-02",
+      "name": "ECMWF IFS (wind) (`data.ecmwf.int/forecasts`, ECMWF Open Data)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-03",
+      "name": "NOAA nowCOAST observed weather (`nowcoast.noaa.gov/geoserver/observations/{weather_radar,satellite}/ows`, WMS 1.1.1)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-04",
+      "name": "NOAA nowCOAST lightning density (`nowcoast.noaa.gov/geoserver/observations/lightning_detection/ows`)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-05",
+      "name": "NOAA NHC / CPHC advisories (`www.nhc.noaa.gov/CurrentStorms.json` + the `mapservices.weather.noaa.gov` tropical weather summary MapServer)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-06",
+      "name": "Mapillary (vector tiles, Graph API, MapillaryJS)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-07",
+      "name": "OpenStreetMap",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-08",
+      "name": "Google Map Tiles API (Photorealistic 3D Tiles) + Places/Geocoding",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-09",
+      "name": "OpenSky Network",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-10",
+      "name": "adsb.lol point API",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-11",
+      "name": "adsb.lol",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-12",
+      "name": "adsbdb (`api.adsbdb.com`)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-13",
+      "name": "AISStream.io",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-14",
+      "name": "CelesTrak",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-15",
+      "name": "The Space Devs \u2014 Launch Library 2 v2.3",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-16",
+      "name": "Esri World Imagery (ArcGIS Online tile service)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-17",
+      "name": "USGS",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-18",
+      "name": "NASA GIBS (WMTS tiles + Worldview Snapshots) and NASA CMR (granule catalog)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-19",
+      "name": "NIFC WFIGS (Wildland Fire Interagency Geospatial Services, ArcGIS feature service)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-20",
+      "name": "InciWeb (inciweb.wildfire.gov)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-21",
+      "name": "OpenFreeMap / OpenMapTiles",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-22",
+      "name": "Overture Maps Foundation",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-23",
+      "name": "TomTom Traffic API (flow vector tiles)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-24",
+      "name": "Photon (komoot)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-25",
+      "name": "Open-Meteo",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-26",
+      "name": "Google News RSS",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-27",
+      "name": "GDELT Project DOC 2.0",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-28",
+      "name": "City of Austin Open Data",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-29",
+      "name": "TxDOT ITS (its.txdot.gov)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-30",
+      "name": "City of Tallinn (ristmikud.tallinn.ee)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-31",
+      "name": "Transpordiamet / Tarktee",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-32",
+      "name": "Stadt Warendorf webcam",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-33",
+      "name": "Live Traffic NSW (Transport for NSW)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-34",
+      "name": "Caltrans (cwwp2.dot.ca.gov)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-35",
+      "name": "DelDOT (video.deldot.gov)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-36",
+      "name": "TfL Open Data (JamCams)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-37",
+      "name": "Ontario 511",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-38",
+      "name": "Fintraffic / Digitraffic (weathercams)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-39",
+      "name": "DriveBC (Government of British Columbia)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-40",
+      "name": "Open Calgary (`data.calgary.ca`)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-41",
+      "name": "Statens vegvesen (catalog `ogckart-sn1.atlas.vegvesen.no`, frames `kamera.atlas.vegvesen.no`, HLS `kamera.vegvesen.no`)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-42",
+      "name": "GBFS (Lyft / BCycle)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-43",
+      "name": "MBTA / MassDOT (cdn.mbta.com)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-44",
+      "name": "CapMetro (data.texas.gov)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-45",
+      "name": "Metro Transit (Metropolitan Council)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-46",
+      "name": "OVapi / Stichting OpenGeo",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-47",
+      "name": "Entur (api.entur.io)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-48",
+      "name": "TransLink (Queensland Government)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-49",
+      "name": "HSL (realtime.hsl.fi)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-50",
+      "name": "Radio Browser",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-51",
+      "name": "Re:Earth Terrain (Mapterhorn)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-52",
+      "name": "OSRM on the FOSSGIS routing servers (`routing.openstreetmap.de`)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-53",
+      "name": "Datacenters (4,351)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-54",
+      "name": "Dams (704)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-55",
+      "name": "Military area names (36,466)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-56",
+      "name": "TeleGeography Submarine Cable Map (712 cables + 1,917 landing points)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-57",
+      "name": "Natural Earth physical regions (1,046 land + 292 marine named polygons)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-58",
+      "name": "DataSF Analysis Neighborhoods (41 SF neighborhood polygons)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-59",
+      "name": "Natural Earth countries, states and provinces (260 admin-0/map units + 4,587 admin-1 polygons)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-60",
+      "name": "US Census Bureau counties (3,235 county polygons)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-61",
+      "name": "CCTV ground heights (3,445 cameras)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-62",
+      "name": "NASA FIRMS active fires (narrative source entry)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-63",
+      "name": "Bhote Koshi event imagery and derived river centerline (narrative/license entry)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    },
+    {
+      "id": "gev-source-64",
+      "name": "Bundled third-party 3D models (per-model licenses; public/models/README.md)",
+      "retained_in_scope": true,
+      "enabled": false,
+      "status": "planned",
+      "activation_gates": [
+        "provider terms independently verified for intended commercial use",
+        "required license or subscription obtained",
+        "credentials configured if required",
+        "attribution and data freshness implemented",
+        "integration and cost limits tested"
+      ],
+      "license_evidence": null,
+      "subscription_evidence": null
+    }
+  ]
+}
