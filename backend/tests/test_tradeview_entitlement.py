@@ -2,9 +2,11 @@
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+
 from app.auth import AuthContext, get_auth, require_tradeview_subscription
 from app.main import app
 from app.routers.tradeview import router
+
 
 @pytest.mark.parametrize('status,sub,plan', [
     ('inactive', 'sub_test', 'pro'), ('past_due', 'sub_test', 'pro'),
