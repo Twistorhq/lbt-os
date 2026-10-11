@@ -86,10 +86,12 @@ class UserContext:
 
 class AuthContext:
     """Full auth — verified user with a resolved org UUID."""
-    def __init__(self, user_id: str, org_id: str, plan: str = "basic"):
+    def __init__(self, user_id: str, org_id: str, plan: str = "basic", subscription_status: str = "inactive", stripe_subscription_id: str | None = None):
         self.user_id = user_id
         self.org_id  = org_id
         self.plan    = plan
+        self.subscription_status = subscription_status
+        self.stripe_subscription_id = stripe_subscription_id
 
 
 async def get_user(
@@ -115,7 +117,7 @@ async def get_auth(
     db = get_db()
     result = (
         db.table("organizations")
-        .select("id, plan, subscription_status")
+        .select("id, plan, subscription_status, stripe_subscription_id")
         .eq("clerk_user_id", user_id)
         .maybe_single()
         .execute()
@@ -131,7 +133,22 @@ async def get_auth(
         user_id=user_id,
         org_id=result.data["id"],
         plan=result.data.get("plan", "basic"),
+        subscription_status=result.data.get("subscription_status", "inactive"),
+        stripe_subscription_id=result.data.get("stripe_subscription_id"),
     )
+
+
+def require_tradeview_subscription(auth: AuthContext = Depends(get_auth)) -> AuthContext:
+    """Fail closed using server-resolved subscription state, never UI flags.
+
+    Existing billing sync treats active trials as active access too. This is
+    an entitlement check, not proof of payment. No new price/SKU is created.
+    """
+    if (auth.subscription_status != "active"
+            or not auth.stripe_subscription_id
+            or auth.plan not in {"basic", "pro", "premium", "enterprise"}):
+        raise HTTPException(status_code=403, detail="Trade View connected data requires an active subscription.")
+    return auth
 
 
 def get_clerk_user_email(user_id: str) -> str | None:

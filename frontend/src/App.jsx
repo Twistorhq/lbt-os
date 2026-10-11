@@ -24,6 +24,7 @@ import Messages from './pages/Messages'
 import RevenueIntelligence from './pages/RevenueIntelligence'
 import TradeView from './pages/TradeView'
 import ClientTradeView from './pages/tradeview/ClientTradeView'
+import TradeViewEditions from './pages/tradeview/TradeViewEditions'
 import MorningBrief from './components/brief/MorningBrief'
 import AgentUIDemo from './pages/AgentUIDemo'
 import NotFound from './pages/NotFound'
@@ -164,6 +165,7 @@ export default function App() {
       <AppViewTracker />
       <Routes>
         <Route path="/" element={<MarketingHome />} />
+        <Route path="/tradeview/lite" element={<TradeViewEditions />} />
 
         {/* TW-181: agent-generated dashboard demo (sample data, public) */}
         <Route path="/agent-ui-demo" element={<AgentUIDemo />} />

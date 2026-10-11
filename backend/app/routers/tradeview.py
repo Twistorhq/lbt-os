@@ -4,7 +4,8 @@ Pins, dossiers, diagnostics, and layers served from real pipeline output
 (customers, leads, leak-engine brief) instead of fictional sample data.
 
 Auth + consent posture:
-- Every endpoint requires a valid auth token (any plan) and serves ONLY
+- Every endpoint requires a valid auth token plus an eligible active
+  subscription (including active trials under existing billing policy), and serves ONLY
   the caller's own org_id. A cross-org id degrades to 404 — never leaks.
 - This serves an org's OWN connected data back to its OWN signed-in
   members (the product's normal function). Cohort/benchmark recording
@@ -24,14 +25,14 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from ..auth import AuthContext, get_auth
+from ..auth import AuthContext, get_auth, require_tradeview_subscription
 from ..database import get_db
 from ..leak_engine import run_leak_scan
 from ..limiter import enforce_user_limit
 from ..services import next_actions as na
 from ..services.geocode import geocode_cached
 
-router = APIRouter(prefix="/tradeview", tags=["tradeview"])
+router = APIRouter(prefix="/tradeview", tags=["tradeview"], dependencies=[Depends(require_tradeview_subscription)])
 
 # NIT 2 (Rosa, TW-301): single enforcement via the spoof-proof per-user
 # limiter (TW-078) — the IP-keyed slowapi layer was redundant on these
