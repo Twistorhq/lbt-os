@@ -1,6 +1,7 @@
 import React from 'react'
-import { createRoot } from 'react-dom/client'
+import { hydrateRoot } from 'react-dom/client'
 import TradeViewExperience from './components/TradeViewExperience'
 import './tradeview-preview.css'
 
-createRoot(document.getElementById('root')).render(<TradeViewExperience />)
+hydrateRoot(document.getElementById('root'), <TradeViewExperience />)
+document.getElementById('preview-mode-note')?.remove()
