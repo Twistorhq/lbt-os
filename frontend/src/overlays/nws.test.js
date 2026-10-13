@@ -58,6 +58,18 @@ describe('fetchAlerts', () => {
     expect(alerts).toEqual([]);
   });
 
+  it('one malformed feature does not kill the list (self-healing)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(JSON.stringify({ features: [null, ALERT, undefined] }), { status: 200 })
+      )
+    );
+    const { alerts } = await fetchAlerts({ lat: 39.7392, lon: -104.9903 });
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0].event).toBe('Winter Storm Warning');
+  });
+
   it('rejects invalid coords before fetching', async () => {
     const spy = vi.fn(async () => new Response('{}', { status: 200 }));
     vi.stubGlobal('fetch', spy);

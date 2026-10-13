@@ -65,19 +65,32 @@ export function assertLatLon(lat, lon) {
 export async function fetchJson(url, { timeoutMs = 10_000, maxBytes = 2_000_000 } = {}) {
   assertAllowedUrl(url);
   const controller = new AbortController();
+  // TW-473: the timer covers the whole read, not just time-to-first-byte —
+  // a server that sends headers then stalls the body must not hang us.
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let res;
   try {
     res = await fetch(url, { signal: controller.signal });
+    // TW-472: fetch follows redirects; re-check the final URL against the
+    // allowlist so a 302 can't smuggle us off-allowlist. (res.url is empty
+    // on synthetic Responses in tests — fall back to the validated request URL.)
+    assertAllowedUrl(res.url || url);
   } catch (err) {
+    if (err instanceof OverlayError) throw err;
     throw new OverlayError(`Fetch failed: ${url}`, { cause: err });
+  }
+  if (!res.ok) {
+    clearTimeout(timer);
+    throw new OverlayError(`Upstream responded ${res.status} for ${url}`);
+  }
+  let text;
+  try {
+    text = await res.text();
+  } catch (err) {
+    throw new OverlayError(`Failed reading response body for ${url}`, { cause: err });
   } finally {
     clearTimeout(timer);
   }
-  if (!res.ok) {
-    throw new OverlayError(`Upstream responded ${res.status} for ${url}`);
-  }
-  const text = await res.text();
   if (text.length > maxBytes) {
     throw new OverlayError(`Upstream response exceeded ${maxBytes} bytes for ${url}`);
   }

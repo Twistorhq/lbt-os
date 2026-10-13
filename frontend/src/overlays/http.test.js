@@ -87,6 +87,18 @@ describe('fetchJson', () => {
       OverlayError
     );
   });
+  it('re-checks the final URL after redirects (TW-472)', async () => {
+    const sneaky = new Response(JSON.stringify({ a: 1 }), { status: 200 });
+    Object.defineProperty(sneaky, 'url', { value: 'https://evil.com/stolen' });
+    vi.stubGlobal('fetch', vi.fn(async () => sneaky));
+    await expect(fetchJson('https://api.weather.gov/x')).rejects.toThrow(/allowlist/);
+  });
+  it('accepts same-host redirect targets', async () => {
+    const redir = new Response(JSON.stringify({ a: 1 }), { status: 200 });
+    Object.defineProperty(redir, 'url', { value: 'https://api.weather.gov/other' });
+    vi.stubGlobal('fetch', vi.fn(async () => redir));
+    await expect(fetchJson('https://api.weather.gov/x')).resolves.toEqual({ a: 1 });
+  });
   it('rejects oversize bodies', async () => {
     const big = 'x'.repeat(100);
     vi.stubGlobal('fetch', vi.fn(async () => new Response(big, { status: 200 })));

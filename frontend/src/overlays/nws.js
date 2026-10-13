@@ -45,8 +45,17 @@ export async function fetchAlerts({ lat, lon } = {}) {
   return cached(key, ALERTS_TTL_MS, async () => {
     const data = await fetchJson(`${NWS}/alerts/active?point=${lat},${lon}`);
     const features = Array.isArray(data.features) ? data.features : [];
+    // Self-healing: one malformed feature never kills the whole list.
+    const alerts = [];
+    for (const f of features) {
+      try {
+        if (f) alerts.push(normalizeAlert(f));
+      } catch {
+        // skip it, keep the rest
+      }
+    }
     return {
-      alerts: features.map(normalizeAlert),
+      alerts,
       fetchedAt: new Date().toISOString(),
       source: NWS_SOURCE,
     };
@@ -78,7 +87,9 @@ export async function fetchCurrentConditions({ lat, lon } = {}) {
   const key = `nws-conditions:${lat.toFixed(4)},${lon.toFixed(4)}`;
   return cached(key, CONDITIONS_TTL_MS, async () => {
     const stationId = await resolveStation({ lat, lon });
-    const obs = await fetchJson(`${NWS}/stations/${stationId}/observations/latest`);
+    // TW-474: stationId comes from the upstream response — encode it even
+    // though the host is pinned by the allowlist.
+    const obs = await fetchJson(`${NWS}/stations/${encodeURIComponent(stationId)}/observations/latest`);
     const p = obs?.properties || {};
     const cToF = (c) => (typeof c === 'number' ? Math.round((c * 9) / 5 + 32) : null);
     const kmhToMph = (k) => (typeof k === 'number' ? Math.round(k * 0.621371) : null);
