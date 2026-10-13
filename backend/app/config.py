@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     cors_origins: str = ""
     # Comma-separated hostnames accepted by TrustedHostMiddleware in production.
     trusted_hosts: str = ""
+    # TW-484: owner SSO — comma-separated emails that bypass all plan gates.
+    # The owner signs in once via Clerk; backend + frontend unlock everything.
+    owner_emails: str = ""
     api_secret: str | None = None          # not currently used; remove weak default
     # Development/demo only: lets testers rerun free-tier audits without monthly gating.
     demo_allow_unlimited_audits: bool = False

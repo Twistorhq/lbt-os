@@ -86,10 +86,19 @@ class UserContext:
 
 class AuthContext:
     """Full auth — verified user with a resolved org UUID."""
-    def __init__(self, user_id: str, org_id: str, plan: str = "basic"):
+    def __init__(self, user_id: str, org_id: str, plan: str = "basic", is_owner: bool = False):
         self.user_id = user_id
         self.org_id  = org_id
         self.plan    = plan
+        self.is_owner = is_owner  # TW-484: owner SSO bypasses all plan gates
+
+
+def is_owner_email(email: str | None) -> bool:
+    """TW-484: check an email against the OWNER_EMAILS allowlist (case-insensitive)."""
+    if not email:
+        return False
+    allowed = {e.strip().lower() for e in settings.owner_emails.split(",") if e.strip()}
+    return email.strip().lower() in allowed
 
 
 async def get_user(
@@ -131,6 +140,8 @@ async def get_auth(
         user_id=user_id,
         org_id=result.data["id"],
         plan=result.data.get("plan", "basic"),
+        # TW-484: owner SSO — the owner's email unlocks every plan gate.
+        is_owner=is_owner_email(get_clerk_user_email(user_id)),
     )
 
 
@@ -183,6 +194,9 @@ def require_plan(minimum_plan: str):
     PLAN_ORDER = {"basic": 0, "pro": 1, "premium": 2, "enterprise": 3}
 
     def _check(auth: AuthContext = Depends(get_auth)) -> AuthContext:
+        # TW-484: owner SSO bypasses all plan gates.
+        if auth.is_owner:
+            return auth
         if PLAN_ORDER.get(auth.plan, 0) < PLAN_ORDER.get(minimum_plan, 99):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

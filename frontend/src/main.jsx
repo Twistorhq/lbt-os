@@ -6,6 +6,10 @@ import { ClerkProviderWithNavigate } from './auth/ClerkProviderWithNavigate'
 import App from './App'
 import './styles/index.css'
 import './styles/twistor.css' // TW-159: Twistor Trades marketing design system
+import { applyDevUnlockFromUrl } from './lib/pro'
+
+// TW-480: dev unlock flag — ?dev_unlock=1 unlocks Pro UI in this browser.
+applyDevUnlockFromUrl()
 
 const PUBLISHABLE_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY
 

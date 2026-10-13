@@ -1,3 +1,4 @@
+import { isProUnlocked } from '../lib/pro'
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -106,7 +107,7 @@ export default function Connections() {
     () => Object.fromEntries(providers.map((provider) => [provider.key, provider])),
     [providers],
   )
-  const isPro = org?.plan === 'pro' || org?.plan === 'premium'
+  const isPro = isProUnlocked(org) // TW-484: owner SSO + dev flag
   const workspaceMode = workspaceStatus?.workspace_mode || 'blank'
 
   function updateManualCredential(provider, key, value) {
