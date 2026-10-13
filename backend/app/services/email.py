@@ -282,10 +282,15 @@ def send_weekly_brief(
     to: str,
     org_name: str,
     metrics: dict[str, Any],
+    actions: list[dict[str, Any]] | None = None,
 ) -> None:
     """
     Weekly Monday morning operating brief.
     Called by the recurring scheduler — not triggered by user actions.
+
+    `actions`: precomputed top money moves from brief_actions.top_brief_actions
+    (TW-212 wire-in). Rendered as the "top money moves" section; omitted when
+    empty. Never raises because of actions — rendering is total.
     """
     r = metrics.get("revenue", {})
     leads_m = metrics.get("leads", {})
@@ -322,6 +327,15 @@ def send_weekly_brief(
             f"have a follow-up scheduled but haven't been contacted.</p></div>"
         )
 
+    # TW-212 wire-in: ranked money moves from the next-best-action engine.
+    # Rendering is total (empty string when no actions); never breaks the send.
+    try:
+        from .brief_actions import render_email_section
+
+        actions_html = render_email_section(actions or [])
+    except Exception:
+        actions_html = ""
+
     revenue_str  = _d(r.get("total"))
     conv_str     = f"{leads_m.get('conversion_rate_pct', 0):.0f}"
 
@@ -336,6 +350,8 @@ def send_weekly_brief(
       </table>
 
       {followup_alert}
+
+      {actions_html}
 
       <p style="margin:0;font-size:13px;color:#64748b;line-height:1.6;">
         Open your dashboard for the full analyst brief, revenue trend chart, and this week's action board.
