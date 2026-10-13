@@ -97,8 +97,42 @@ def is_owner_email(email: str | None) -> bool:
     """TW-484: check an email against the OWNER_EMAILS allowlist (case-insensitive)."""
     if not email:
         return False
-    allowed = {e.strip().lower() for e in settings.owner_emails.split(",") if e.strip()}
-    return email.strip().lower() in allowed
+    return email.strip().lower() in _owner_allowlist()
+
+
+_owner_allowlist_cache: frozenset = frozenset()
+_owner_allowlist_raw: str | None = None
+
+
+def _owner_allowlist() -> frozenset:
+    """Parse OWNER_EMAILS once; re-parse only when the raw value changes."""
+    global _owner_allowlist_cache, _owner_allowlist_raw
+    raw = settings.owner_emails
+    if raw != _owner_allowlist_raw:
+        _owner_allowlist_cache = frozenset(
+            e.strip().lower() for e in raw.split(",") if e.strip()
+        )
+        _owner_allowlist_raw = raw
+    return _owner_allowlist_cache
+
+
+_owner_status_cache: dict = {}  # user_id -> (is_owner, fetched_at)
+_owner_status_lock = threading.Lock()
+OWNER_STATUS_TTL = 600  # 10 minutes — owner changes take effect shortly after
+
+
+def resolve_owner_status(user_id: str) -> bool:
+    """TW-484: cached owner check. Hits Clerk's API at most once per user
+    per 10 minutes instead of on every authenticated request."""
+    now = time.time()
+    with _owner_status_lock:
+        cached = _owner_status_cache.get(user_id)
+        if cached and now - cached[1] < OWNER_STATUS_TTL:
+            return cached[0]
+    is_owner = is_owner_email(get_clerk_user_email(user_id))
+    with _owner_status_lock:
+        _owner_status_cache[user_id] = (is_owner, now)
+    return is_owner
 
 
 async def get_user(
@@ -140,8 +174,8 @@ async def get_auth(
         user_id=user_id,
         org_id=result.data["id"],
         plan=result.data.get("plan", "basic"),
-        # TW-484: owner SSO — the owner's email unlocks every plan gate.
-        is_owner=is_owner_email(get_clerk_user_email(user_id)),
+        # TW-484: owner SSO — cached lookup, not a Clerk call per request.
+        is_owner=resolve_owner_status(user_id),
     )
 
 

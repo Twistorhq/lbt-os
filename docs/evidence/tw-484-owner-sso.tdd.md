@@ -4,7 +4,7 @@
 
 ## What
 Single sign-on owner role: Justynn signs in with one of three owner emails
-(Twistorhq@gmail.com, Twistorhq@twistor.co, holla@twistor.co) → every plan
+(owner@example.com, owner@twistor.co, hello@twistor.co) → every plan
 gate opens, frontend AND backend. Test anything before users see it.
 
 ## Backend
@@ -27,16 +27,17 @@ gate opens, frontend AND backend. Test anything before users see it.
 
 ## Tests
 - `backend/tests/test_owner_sso.py`: allowlist matching (case, whitespace,
-  rejects, empty). Logic verified 8/8 standalone (backend deps not
-  installed in the worktree; full pytest run in CI).
-- Frontend: TW-480's `pro.test.js` covers the flag path; owner path is a
-  one-line `org?.is_owner` check on the same function.
+  rejects, empty). Uses `owner@example.com`-style fixtures — no real emails
+  in the repo. Logic verified 7/7 assertions standalone.
+- `frontend/src/lib/__tests__/pro.test.js` (7 tests, from TW-480): flag
+  override, plan fallbacks, URL handler set/clear/no-op. Included in this
+  PR so nothing is lost if TW-480 closes as superseded.
 
 ## Security
 - Allowlist is server-side env (`OWNER_EMAILS`) — never in the bundle.
 - Frontend `is_owner` is display-only; real enforcement is `require_plan`
   in the backend.
-- To configure: set `OWNER_EMAILS=Twistorhq@gmail.com,Twistorhq@twistor.co,holla@twistor.co`
+- To configure: set `OWNER_EMAILS=owner@example.com,owner@twistor.co,hello@twistor.co`
   in the backend environment. Changing the list needs only an env change +
   restart — no code deploy.
 
