@@ -65,6 +65,7 @@ flyctl secrets set \
   CLERK_SECRET_KEY=... \
   CLERK_PUBLISHABLE_KEY=... \
   CLERK_WEBHOOK_SECRET=... \
+  CLERK_JWT_AUDIENCE=... \
   STRIPE_SECRET_KEY=... \
   STRIPE_WEBHOOK_SECRET=... \
   STRIPE_PRICE_BASIC=... \
@@ -72,10 +73,15 @@ flyctl secrets set \
   STRIPE_PRICE_PREMIUM=... \
   OWNER_EMAILS="Twistorhq@gmail.com,Twistorhq@twistor.co,holla@twistor.co" \
   FRONTEND_URL=https://twistorhq.github.io/lbt-os \
-  CORS_ORIGINS=https://twistorhq.github.io
+  CORS_ORIGINS=https://twistorhq.github.io \
+  TRUSTED_HOSTS=lbt-os-backend.fly.dev
 # 4. Deploy:
 flyctl deploy
 ```
+> **Note:** `llm_provider` defaults to `ollama` (localhost:11434) — no Ollama
+> runs on Fly, so `ai_audit` (Pro/Premium tiers) will degrade unless you set
+> `LLM_PROVIDER=openai` + `OPENAI_API_KEY` as secrets.
+
 
 The app serves at `https://lbt-os-backend.fly.dev` (or your chosen name).
 Free tier: 1 shared CPU / 512MB, sleeps when idle, wakes on request —
