@@ -10,6 +10,7 @@ whole detector.
 """
 import math
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from ..registry import Detector, register
@@ -91,38 +92,144 @@ def _num(value: Any, default: float | None = None) -> float | None:
 # equipment-age-graveyard
 # ---------------------------------------------------------------------------
 
+_ML_SCORER = None
+_ML_SCORER_TRIED = False
+
+
+def _log_ml(msg, *args):
+    import logging
+
+    logging.getLogger(__name__).warning("[graveyard-ml] " + msg, *args)
+
+
+def _ml_scorer():
+    """Lazily load the ML survival scorer (TW-213 wire-in, TW-470 surge).
+
+    Returns None when the artifact is missing or corrupt — the detector
+    then runs static-floor-only and says so loudly. The load is attempted
+    once per process; a loud log line marks the fallback.
+    """
+    global _ML_SCORER, _ML_SCORER_TRIED
+    if _ML_SCORER_TRIED:
+        return _ML_SCORER
+    _ML_SCORER_TRIED = True
+    try:
+        from ...services.equipment_survival import SurvivalScorer
+
+        artifact = (
+            Path(__file__).resolve().parents[2]
+            / "data"
+            / "survival_artifact.v1.json"
+        )
+        _ML_SCORER = SurvivalScorer.from_path(artifact)
+        _log_ml("ML survival artifact loaded: %s (%s calibration)",
+                artifact.name, _ML_SCORER.provenance)
+    except Exception as exc:
+        _log_ml("ML survival scorer unavailable (%s) — graveyard runs static-floor-only", exc)
+        _ML_SCORER = None
+    return _ML_SCORER
+
+
+def log_ml(msg, *args):
+    import logging
+
+    logging.getLogger(__name__).warning("[graveyard-ml] " + msg, *args)
+
+
+def _ml_estimate_for(asset: dict, age_days: float):
+    """Score one asset with the ML survival model. None => static fallback.
+
+    Never raises: every undecidable case returns None and the caller labels
+    the row 'static-floor'.
+    """
+    try:
+        scorer = _ml_scorer()
+        if scorer is None:
+            return None
+        from ...services.equipment_survival import brand_tier_for
+
+        atype = (asset.get("asset_type") or "").lower()
+        tier, assumed = brand_tier_for(asset.get("brand"))
+        return scorer.score_asset(
+            age_years=age_days / 365.25,
+            equipment_type=atype,
+            brand_tier=tier,
+            metro_key="",  # orgs carry no metro; global conformal + honest label
+            brand_assumed=assumed,
+        )
+    except Exception:
+        return None
+
+
 def _equipment_graveyard_run(db, org_id: str):
     assets = _fetch(db, "service_assets", org_id)
-    past, entering = [], []
+    past, entering = [], []  # (sort_key, info, is_ml)
     skipped = 0
+    ml_rows = 0
     for a in assets:
         try:
             age = _age_days(a.get("install_date"))
             if age is None:
                 continue
             atype = (a.get("asset_type") or "").lower()
-            floor = _TYPE_LIFE_FLOOR.get(atype, _DEFAULT_LIFE)
-            # TW-204: "N/A" and friends fall back to the documented default,
-            # exactly like a missing value — the row is otherwise valid.
-            stated = _num(a.get("expected_life_years"), _DEFAULT_LIFE)
-            effective_days = min(floor, stated) * 365
             info = _entity(
                 a,
                 asset_type=atype or None,
                 brand=a.get("brand"),
                 age_years=round(age / 365.25, 1),
             )
+            # TW-213 wire-in: ML survival dates first, static floor as the
+            # labeled fallback. Provenance on every row — never a bare number.
+            est = _ml_estimate_for(a, age)
+            if est is not None:
+                ml_rows += 1
+                info["replacement_basis"] = "ml"
+                info["remaining_years"] = est.median_remaining_years
+                info["remaining_window"] = (
+                    f"{est.remaining_lo_years}\u2013{est.remaining_hi_years} yrs "
+                    f"(80% interval, {est.provenance})"
+                )
+                info["p_fail_2y"] = est.p_fail_within_2y
+                info["cohort_median_life_years"] = est.cohort_median_life_years
+                if est.brand_assumed:
+                    info["brand_assumed_mid"] = True
+                # TW-213 rule: "past expected life" = the unit outlived its
+                # cohort's median replacement age (age >= L50); "entering" =
+                # inside one window-year of L50. Replaces the static band
+                # floors with model dates — every row labeled by basis.
+                age_years = age / 365.25
+                l50 = est.cohort_median_life_years
+                if age_years >= l50:
+                    past.append((est.p_fail_within_2y, info, True))
+                elif l50 - age_years <= _WINDOW_DAYS / 365.25:
+                    entering.append((est.p_fail_within_2y, info, True))
+                continue
+            # Static-floor fallback (unchanged legacy path, now labeled).
+            floor = _TYPE_LIFE_FLOOR.get(atype, _DEFAULT_LIFE)
+            # TW-204: "N/A" and friends fall back to the documented default,
+            # exactly like a missing value — the row is otherwise valid.
+            stated = _num(a.get("expected_life_years"), _DEFAULT_LIFE)
+            effective_days = min(floor, stated) * 365
+            info["replacement_basis"] = "static-floor"
             if age >= effective_days:
-                past.append((age, info))
+                past.append((age, info, False))
             elif effective_days - age <= _WINDOW_DAYS:
-                entering.append((age, info))
+                entering.append((age, info, False))
         except Exception:
             # TW-204: backstop — one bad row skips loudly, never kills the
             # detector.
             skipped += 1
 
     findings = []
+    ml_basis_note = (
+        f" {ml_rows} of these used the ML survival model (80% intervals, "
+        "synthetic calibration); the rest used static life floors."
+        if ml_rows
+        else ""
+    )
     if past:
+        # ML rows sort by failure probability, static rows by age — most
+        # urgent first either way.
         past.sort(key=lambda t: t[0], reverse=True)
         findings.append({
             "ladder": "happened",
@@ -132,11 +239,11 @@ def _equipment_graveyard_run(db, org_id: str):
                 "These customers are running equipment past its expected "
                 "lifespan. When it fails — usually the hottest or coldest "
                 "week of the year — the replacement goes to whoever answers "
-                "first. It should be you."
+                "first. It should be you." + ml_basis_note
             ),
             "count": len(past),
             "estimated_value": None,
-            "entities": [info for _, info in past[:10]],
+            "entities": [info for _, info, _ in past[:10]],
             "recommended_action": "Call the oldest units first with a replacement quote before failure season.",
         })
     if entering:
@@ -148,11 +255,11 @@ def _equipment_graveyard_run(db, org_id: str):
             "detail": (
                 "These units are inside a year of their expected lifespan. "
                 "A proactive inspection now turns an emergency replacement "
-                "later into a planned sale."
+                "later into a planned sale." + ml_basis_note
             ),
             "count": len(entering),
             "estimated_value": None,
-            "entities": [info for _, info in entering[:10]],
+            "entities": [info for _, info, _ in entering[:10]],
             "recommended_action": "Book end-of-life inspections this month; quote replacements on the visit.",
         })
     if past or entering:
@@ -161,10 +268,13 @@ def _equipment_graveyard_run(db, org_id: str):
             "ladder": "should",
             "severity": "urgent" if past else "watch",
             "title": "Your replacement call list",
-            "detail": "Prioritized by equipment age — oldest first.",
+            "detail": (
+                "Prioritized by failure probability (ML rows) then equipment "
+                "age (static-floor rows) — most urgent first." + ml_basis_note
+            ),
             "count": len(ordered),
             "estimated_value": None,
-            "entities": [info for _, info in ordered[:10]],
+            "entities": [info for _, info, _ in ordered[:10]],
             "recommended_action": "Work this list top to bottom before the next extreme-weather week.",
         })
     return findings, {"skipped_rows": skipped}

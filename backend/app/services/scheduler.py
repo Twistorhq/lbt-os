@@ -43,7 +43,13 @@ def _send_sms(*, to: str, body: str) -> None:
         log.warning("SMS failed (%s): %s", to, exc)
 
 
-def _weekly_brief_sms(*, to: str, org_name: str, metrics: dict[str, Any]) -> None:
+def _weekly_brief_sms(
+    *,
+    to: str,
+    org_name: str,
+    metrics: dict[str, Any],
+    actions: list[dict[str, Any]] | None = None,
+) -> None:
     """Compose and send the Monday morning brief as a short SMS."""
     r = metrics.get("revenue", {})
     leads_m = metrics.get("leads", {})
@@ -59,6 +65,15 @@ def _weekly_brief_sms(*, to: str, org_name: str, metrics: dict[str, Any]) -> Non
     ]
     if missed:
         lines.append(f"⚠ {missed} lead{'s' if missed != 1 else ''} need follow-up")
+    # TW-212 wire-in: the single top money move. Rendering is total.
+    try:
+        from .brief_actions import render_sms_line
+
+        sms_action = render_sms_line(actions or [])
+    except Exception:
+        sms_action = ""
+    if sms_action:
+        lines.append(sms_action)
     lines.append(f"Dashboard: {dashboard}")
 
     _send_sms(to=to, body="\n".join(lines))
@@ -131,10 +146,20 @@ def _job_weekly_brief() -> None:
             email   = get_clerk_user_email(clerk_uid)
             phone   = get_clerk_user_phone(clerk_uid)
 
+            # TW-212 wire-in: ranked money moves for the brief. Total —
+            # returns [] on any failure, never blocks the send.
+            try:
+                from .brief_actions import top_brief_actions
+
+                brief_actions = top_brief_actions(db, org_id)
+            except Exception as exc:
+                log.warning("[scheduler] brief actions failed for org %s: %s", org_id, exc)
+                brief_actions = []
+
             if email:
-                send_weekly_brief(to=email, org_name=org_name, metrics=metrics)
+                send_weekly_brief(to=email, org_name=org_name, metrics=metrics, actions=brief_actions)
             if phone:
-                _weekly_brief_sms(to=phone, org_name=org_name, metrics=metrics)
+                _weekly_brief_sms(to=phone, org_name=org_name, metrics=metrics, actions=brief_actions)
 
             log.info("[scheduler] Weekly brief sent for org %s (email=%s, sms=%s)", org_id, bool(email), bool(phone))
         except Exception as exc:
