@@ -5,6 +5,8 @@
 // read-only SQL sandbox, and insight-layer toggles.
 // Data: clearly-labeled SAMPLE records (no real businesses, no invented
 // metrics). Storm layer is LIVE NWS data (keyless, api.weather.gov).
+// TW-446: permits + current-conditions layers are LIVE public data
+// (Denver ArcGIS Hub, NWS) via framework-agnostic overlay modules.
 // Basemap: Leaflet + Esri Dark Gray canvas (dark) / OSM standard (terrain).
 // Both keyless — no API keys, no accounts. Esri tiles require attribution.
 
@@ -23,10 +25,14 @@ import { safeHttpsUrl } from './tradeview/urlSafe'
 import { buildOpportunities, OPPORTUNITY_ESTIMATE_NOTE } from './tradeview/stormOpportunity'
 import { tradeviewApi } from '../lib/api'
 import { isSampleMode } from '../lib/sampleMode'
+// TW-446: framework-agnostic public-data overlays (vanilla JS, zero deps).
+// Same modules the Astro website imports verbatim — no React/Leaflet inside.
+import { fetchRecentPermits, PERMIT_SOURCE, fetchAlerts, fetchCurrentConditions, NWS_SOURCE, safeFetch } from '../overlays/index.js'
 
 const DENVER = [39.7392, -104.9903]
 const STORM_COLORS = { tornado: '#FF4D5E', wind: '#FFB020', hail: '#6FD3FF', other: '#7C5CFF' }
 const OPP_COLOR = '#FFC94D' // revenue gold — opportunity layer is visually distinct from risk red
+const PERMIT_COLORS = { residential: '#F0B35D', commercial: '#F97316' } // TW-446: amber / safety-orange
 const SQL_COLUMNS = ['id', 'name', 'kind', 'trade', 'address', 'phone', 'owner', 'email']
 
 function stormColor(event) {
@@ -352,6 +358,12 @@ export default function TradeView() {
   const [oppOn, setOppOn] = useState(false)
   const [stormNote, setStormNote] = useState('')
   const [stormFeatures, setStormFeatures] = useState([])
+  const [stormFetchedAt, setStormFetchedAt] = useState(null)
+  // TW-446: public-data overlay layers (live, keyless).
+  const [permitsOn, setPermitsOn] = useState(false)
+  const [permitsNote, setPermitsNote] = useState('')
+  const [wxOn, setWxOn] = useState(false)
+  const [wxNote, setWxNote] = useState('')
   const [selectedId, setSelectedId] = useState(null)
   const [showReport, setShowReport] = useState(false)
   // TW-301: live backend state. Signed-in users get real pins/dossiers/
@@ -381,6 +393,8 @@ export default function TradeView() {
   const markersRef = useRef({})
   const stormLayerRef = useRef(null)
   const oppLayerRef = useRef(null)
+  const permitsLayerRef = useRef(null) // TW-446
+  const wxLayerRef = useRef(null) // TW-446
   const baseLayersRef = useRef({})
   const isTest = typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.MODE === 'test'
 
@@ -703,15 +717,31 @@ export default function TradeView() {
     }
     let cancelled = false
     setStormNote('Loading NWS alerts…')
-    fetch('https://api.weather.gov/alerts/active?point=39.7392,-104.9903')
-      .then((r) => {
-        if (!r.ok) throw new Error(`NWS responded ${r.status}`)
-        return r.json()
-      })
-      .then((data) => {
+    // TW-446: alerts now flow through the shared overlay module (timeout,
+    // caching, normalized shape) instead of a bare fetch.
+    safeFetch(() => fetchAlerts({ lat: DENVER[0], lon: DENVER[1] }))
+      .then((result) => {
         if (cancelled) return
-        const features = (data.features || []).filter((f) => f.geometry)
+        if (!result.ok) throw new Error(result.error)
+        const { alerts, fetchedAt } = result.data
+        // Normalize back to GeoJSON feature shape for the Leaflet layers and
+        // buildOpportunities below (they read f.properties / f.geometry).
+        const features = alerts
+          .filter((a) => a.geometry)
+          .map((a) => ({
+            type: 'Feature',
+            id: a.id,
+            geometry: a.geometry,
+            properties: {
+              event: a.event,
+              severity: a.severity,
+              headline: a.headline,
+              onset: a.onset,
+              expires: a.expires,
+            },
+          }))
         setStormFeatures(features)
+        setStormFetchedAt(fetchedAt)
         clearLayer(stormLayerRef)
         clearLayer(oppLayerRef)
         const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
@@ -780,8 +810,8 @@ export default function TradeView() {
           features.length > 0
             ? `${features.length} active alert${features.length === 1 ? '' : 's'}${
                 oppOn ? ` · ${inSwath} sample ${inSwath === 1 ? 'company' : 'companies'} in swath` : ''
-              } · live from NWS api.weather.gov`
-            : 'No active storm alerts right now · live from NWS api.weather.gov'
+              } · live from NWS api.weather.gov · as of ${new Date(fetchedAt).toLocaleTimeString()}`
+            : `No active storm alerts right now · live from NWS api.weather.gov · as of ${new Date(fetchedAt).toLocaleTimeString()}`
         )
       })
       .catch(() => {
@@ -791,6 +821,125 @@ export default function TradeView() {
       cancelled = true
     }
   }, [stormOn, oppOn])
+
+  // TW-446: building-permit pins — live Denver open data (ArcGIS Hub).
+  // Amber = residential, safety-orange = commercial. Popup carries source
+  // attribution + "as of" timestamp. Labeled fallback on fetch failure.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    if (permitsLayerRef.current) {
+      map.removeLayer(permitsLayerRef.current)
+      permitsLayerRef.current = null
+    }
+    if (!permitsOn) {
+      setPermitsNote('')
+      return
+    }
+    let cancelled = false
+    setPermitsNote('Loading Denver permits…')
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]))
+    safeFetch(() => fetchRecentPermits({ days: 30, limit: 150 }))
+      .then((result) => {
+        if (cancelled) return
+        if (!result.ok) throw new Error(result.error)
+        const { permits, fetchedAt, source } = result.data
+        const layer = L.layerGroup()
+        permits.forEach((p) => {
+          const color = PERMIT_COLORS[p.kind] || PERMIT_COLORS.residential
+          const marker = L.circleMarker([p.lat, p.lon], {
+            radius: 6,
+            color,
+            weight: 2,
+            fillColor: color,
+            fillOpacity: 0.55,
+          })
+          const issued = p.issuedAt ? new Date(p.issuedAt).toLocaleDateString() : 'unknown date'
+          const valuation = p.valuationUsd != null ? `$${p.valuationUsd.toLocaleString()}` : 'not listed'
+          marker.bindPopup(
+            `<strong>${esc(p.permitNum)}</strong> · ${esc(p.kind)}<br>` +
+            `${esc(p.address)}<br>` +
+            `${esc(p.permitClass)} · ${esc(valuation)} · issued ${esc(issued)}<br>` +
+            (p.contractor ? `${esc(p.contractor)}<br>` : '') +
+            `<small>Source: ${esc(source.name)} · as of ${esc(new Date(fetchedAt).toLocaleString())}</small>`
+          )
+          marker.addTo(layer)
+        })
+        layer.addTo(map)
+        permitsLayerRef.current = layer
+        setPermitsNote(
+          `${permits.length} permits (30 days) · live from ${source.name} · as of ${new Date(fetchedAt).toLocaleTimeString()}`
+        )
+      })
+      .catch(() => {
+        if (!cancelled)
+          setPermitsNote('Permits unavailable — Denver open data unreachable. Showing map without permit pins.')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [permitsOn])
+
+  // TW-446: current conditions — live NWS observation for Denver.
+  // Readout lives in the HUD; a sky-blue station marker anchors the map.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    if (wxLayerRef.current) {
+      map.removeLayer(wxLayerRef.current)
+      wxLayerRef.current = null
+    }
+    if (!wxOn) {
+      setWxNote('')
+      return
+    }
+    let cancelled = false
+    setWxNote('Loading current conditions…')
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]))
+    safeFetch(() => fetchCurrentConditions({ lat: DENVER[0], lon: DENVER[1] }))
+      .then((result) => {
+        if (cancelled) return
+        if (!result.ok) throw new Error(result.error)
+        const { tempF, humidityPct, windMph, condition, observedAt, stationId, fetchedAt, source } = result.data
+        const layer = L.layerGroup()
+        const marker = L.circleMarker(DENVER, {
+          radius: 9,
+          color: '#38BDF8',
+          weight: 2,
+          fillColor: '#38BDF8',
+          fillOpacity: 0.4,
+        })
+        const bits = [
+          tempF != null ? `${tempF}°F` : 'temp n/a',
+          condition || 'no description',
+          humidityPct != null ? `${humidityPct}% humidity` : null,
+          windMph != null ? `${windMph} mph wind` : null,
+        ].filter(Boolean)
+        marker.bindPopup(
+          `<strong>Current conditions — Denver</strong><br>` +
+          `${esc(bits.join(' · '))}<br>` +
+          `<small>Station ${esc(stationId)} · observed ${esc(observedAt ? new Date(observedAt).toLocaleString() : 'n/a')}<br>` +
+          `Source: ${esc(source.name)} · as of ${esc(new Date(fetchedAt).toLocaleString())}</small>`
+        )
+        marker.addTo(layer)
+        layer.addTo(map)
+        wxLayerRef.current = layer
+        setWxNote(
+          `${bits.join(' · ')} · live from ${source.name} · as of ${new Date(fetchedAt).toLocaleTimeString()}`
+        )
+      })
+      .catch(() => {
+        if (!cancelled)
+          setWxNote('Conditions unavailable — NWS unreachable. Showing map without weather readout.')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [wxOn])
 
   const toggleKind = (k) => setKinds((p) => ({ ...p, [k]: !p[k] }))
   const toggleTrade = (t) => setTrades((p) => ({ ...p, [t]: !p[t] }))
@@ -903,6 +1052,15 @@ export default function TradeView() {
               <input type="checkbox" checked={oppOn} onChange={(e) => setOppOn(e.target.checked)} />
               Storm opportunity (revenue)
             </label>
+            {/* TW-446: live public-data overlays */}
+            <label className="tv-check" title="Live Denver building permits — residential (amber) and commercial (safety-orange) pins, last 30 days">
+              <input type="checkbox" checked={permitsOn} onChange={(e) => setPermitsOn(e.target.checked)} />
+              Building permits (live)
+            </label>
+            <label className="tv-check" title="Live NWS current conditions for Denver">
+              <input type="checkbox" checked={wxOn} onChange={(e) => setWxOn(e.target.checked)} />
+              Current conditions (live)
+            </label>
             <label
               className="tv-check"
               title={liveMode ? 'Every leak finding pinned with its dollar figure' : 'Sign in to scan your real data for leaks'}
@@ -928,6 +1086,8 @@ export default function TradeView() {
               Digital maturity grade
             </label>
             {stormNote && <p className="tv-note">{stormNote}</p>}
+            {permitsNote && <p className="tv-note">{permitsNote}</p>}
+            {wxNote && <p className="tv-note">{wxNote}</p>}
             {oppOn && stormFeatures.length > 0 && (
               <div className="tv-opp-banner" role="status">
                 <strong>Surge alert:</strong> {surgeTotal} sample{' '}
