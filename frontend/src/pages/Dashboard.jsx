@@ -1,3 +1,4 @@
+import { isProUnlocked } from '../lib/pro'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { metricsApi, orgApi } from '../lib/api'
@@ -94,7 +95,7 @@ export default function Dashboard() {
   const c = metrics?.customers || {}
   const e = metrics?.expenses  || {}
   const brief = metrics?.analyst_brief || {}
-  const isPro = org?.plan === 'pro' || org?.plan === 'premium'
+  const isPro = isProUnlocked(org) // TW-480: dev flag bypasses Pro gates
   const hasActivity = [r.total, l.total, c.total, e.total].some((value) => Number(value) > 0)
   const template = workspaceStatus?.template
   const latestSync = workspaceStatus?.latest_sync

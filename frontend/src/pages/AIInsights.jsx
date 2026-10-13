@@ -1,3 +1,4 @@
+import { isProUnlocked } from '../lib/pro'
 import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { auditApi, metricsApi, orgApi } from '../lib/api'
@@ -114,7 +115,7 @@ export default function AIInsights() {
     queryFn: () => orgApi.getMe().then((r) => r.data),
   })
   const plan  = org?.plan || 'basic'
-  const isPro = plan === 'pro' || plan === 'premium' || plan === 'enterprise'
+  const isPro = isProUnlocked(org) // TW-480: dev flag bypasses Pro gates
 
   const { data: report, isLoading, error } = useQuery({
     queryKey: ['audit-latest'],
