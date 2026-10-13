@@ -67,6 +67,7 @@ export async function fetchJson(url, { timeoutMs = 10_000, maxBytes = 2_000_000 
   const controller = new AbortController();
   // TW-473: the timer covers the whole read, not just time-to-first-byte —
   // a server that sends headers then stalls the body must not hang us.
+  // It is cleared on every exit path below; no path leaves it dangling.
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let res;
   try {
@@ -76,6 +77,7 @@ export async function fetchJson(url, { timeoutMs = 10_000, maxBytes = 2_000_000 
     // on synthetic Responses in tests — fall back to the validated request URL.)
     assertAllowedUrl(res.url || url);
   } catch (err) {
+    clearTimeout(timer);
     if (err instanceof OverlayError) throw err;
     throw new OverlayError(`Fetch failed: ${url}`, { cause: err });
   }
@@ -114,6 +116,10 @@ const _cache = new Map(); // key -> { expiresAt, value }
  */
 export async function cached(key, ttlMs, fn) {
   const now = Date.now();
+  // Lazy eviction: drop expired entries on each write so the map stays bounded.
+  for (const [k, entry] of _cache) {
+    if (entry.expiresAt <= now) _cache.delete(k);
+  }
   const hit = _cache.get(key);
   if (hit && hit.expiresAt > now) return hit.value;
   const value = await fn();

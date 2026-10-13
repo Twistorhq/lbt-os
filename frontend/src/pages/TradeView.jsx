@@ -33,6 +33,11 @@ const DENVER = [39.7392, -104.9903]
 const STORM_COLORS = { tornado: '#FF4D5E', wind: '#FFB020', hail: '#6FD3FF', other: '#7C5CFF' }
 const OPP_COLOR = '#FFC94D' // revenue gold — opportunity layer is visually distinct from risk red
 const PERMIT_COLORS = { residential: '#F0B35D', commercial: '#F97316' } // TW-446: amber / safety-orange
+
+// TW-446: single HTML-escaping helper for Leaflet popup templates.
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+}[c]))
 const SQL_COLUMNS = ['id', 'name', 'kind', 'trade', 'address', 'phone', 'owner', 'email']
 
 function stormColor(event) {
@@ -358,7 +363,6 @@ export default function TradeView() {
   const [oppOn, setOppOn] = useState(false)
   const [stormNote, setStormNote] = useState('')
   const [stormFeatures, setStormFeatures] = useState([])
-  const [stormFetchedAt, setStormFetchedAt] = useState(null)
   // TW-446: public-data overlay layers (live, keyless).
   const [permitsOn, setPermitsOn] = useState(false)
   const [permitsNote, setPermitsNote] = useState('')
@@ -475,9 +479,7 @@ export default function TradeView() {
       leakLayerRef.current = null
     }
     if (!leakOn || !leakData || !leakData.leaks) return
-    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
-      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-    }[c]))
+    // esc() is module-level (TW-446 dedupe)
     const colorFor = (severity) =>
       severity === 'urgent' ? '#FF4D5E' : severity === 'watch' ? '#FFB020' : '#7C5CFF'
     const layer = L.layerGroup()
@@ -741,12 +743,9 @@ export default function TradeView() {
             },
           }))
         setStormFeatures(features)
-        setStormFetchedAt(fetchedAt)
         clearLayer(stormLayerRef)
         clearLayer(oppLayerRef)
-        const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
-          '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-        }[c]))
+        // esc() is module-level (TW-446 dedupe)
         if (stormOn) {
           const layer = L.geoJSON(features, {
             style: (f) => ({
@@ -838,9 +837,7 @@ export default function TradeView() {
     }
     let cancelled = false
     setPermitsNote('Loading Denver permits…')
-    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
-      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-    }[c]))
+    // esc() is module-level (TW-446 dedupe)
     safeFetch(() => fetchRecentPermits({ days: 30, limit: 150 }))
       .then((result) => {
         if (cancelled) return
@@ -897,9 +894,7 @@ export default function TradeView() {
     }
     let cancelled = false
     setWxNote('Loading current conditions…')
-    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
-      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-    }[c]))
+    // esc() is module-level (TW-446 dedupe)
     safeFetch(() => fetchCurrentConditions({ lat: DENVER[0], lon: DENVER[1] }))
       .then((result) => {
         if (cancelled) return
