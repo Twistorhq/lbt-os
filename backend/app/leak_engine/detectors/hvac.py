@@ -8,6 +8,7 @@ TW-204: per-row resilience. Pilot CSV imports arrive as hostile strings
 cell skips its row — counted loudly in the brief — instead of killing the
 whole detector.
 """
+import logging
 import math
 from datetime import datetime, timezone
 from pathlib import Path
@@ -97,8 +98,6 @@ _ML_SCORER_TRIED = False
 
 
 def _log_ml(msg, *args):
-    import logging
-
     logging.getLogger(__name__).warning("[graveyard-ml] " + msg, *args)
 
 
@@ -128,12 +127,6 @@ def _ml_scorer():
         _log_ml("ML survival scorer unavailable (%s) — graveyard runs static-floor-only", exc)
         _ML_SCORER = None
     return _ML_SCORER
-
-
-def log_ml(msg, *args):
-    import logging
-
-    logging.getLogger(__name__).warning("[graveyard-ml] " + msg, *args)
 
 
 def _ml_estimate_for(asset: dict, age_days: float):
@@ -263,7 +256,17 @@ def _equipment_graveyard_run(db, org_id: str):
             "recommended_action": "Book end-of-life inspections this month; quote replacements on the visit.",
         })
     if past or entering:
-        ordered = sorted(past + entering, key=lambda t: t[0], reverse=True)
+        # Sort matches the customer-facing copy below: ML rows by failure
+        # probability (sharpest signal first), then static-floor rows by age.
+        # (Rosa nit: raw t[0] mixed p_fail<=1 with age-in-days, which always
+        # ranked static rows first regardless of urgency.)
+        ml_rows_first = sorted(
+            [t for t in past + entering if t[2]], key=lambda t: t[0], reverse=True
+        )
+        static_rows = sorted(
+            [t for t in past + entering if not t[2]], key=lambda t: t[0], reverse=True
+        )
+        ordered = ml_rows_first + static_rows
         findings.append({
             "ladder": "should",
             "severity": "urgent" if past else "watch",
