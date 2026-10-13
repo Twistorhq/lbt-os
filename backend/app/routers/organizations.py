@@ -65,7 +65,10 @@ def create_organization(
 def get_my_org(auth: Annotated[AuthContext, Depends(get_auth)]):
     db = get_db()
     result = db.table("organizations").select("*").eq("id", auth.org_id).single().execute()
-    return result.data
+    data = result.data
+    # TW-484: owner SSO — frontend unlocks all Pro UI for the owner.
+    data["is_owner"] = auth.is_owner
+    return data
 
 
 @router.patch("/me")
