@@ -8,6 +8,7 @@ Idempotency: idempotency_key is UNIQUE — a retried emission returns the
 existing row instead of double-tolling. Unknown event types fail loud
 (ValueError), never silent $0.
 """
+
 from __future__ import annotations
 
 import logging
@@ -28,6 +29,8 @@ def record_toll_event(
     source_type: str | None = None,
     source_id: str | None = None,
     amount_cents: int | None = None,
+    applied_tier: str | None = None,
+    plan_id: str | None = None,
 ) -> dict:
     """
     Record one metered action as a toll.
@@ -36,12 +39,18 @@ def record_toll_event(
     - Percent-of-value events (e.g. booking.recovered): pass amount_cents
       computed by the emitter; unit_rate_cents is recorded as 0 with the
       amount intact.
+    - Data API tolls: pass amount_cents computed by the toll worker from
+      the key's plan; applied_tier stamps the volume tier in force
+      (DATA LAYER DOCTRINE, dynamic pricing LAW); plan_id references
+      the data_api_plans row that priced it.
     - Unknown event_type raises ValueError — never a silent $0.
     - Duplicate idempotency_key returns the existing row (no double-toll).
     """
     if event_type in TOLL_RATES:
         unit_rate_cents = TOLL_RATES[event_type]
-        total = int(quantity * unit_rate_cents) if amount_cents is None else amount_cents
+        total = (
+            int(quantity * unit_rate_cents) if amount_cents is None else amount_cents
+        )
     elif amount_cents is not None:
         unit_rate_cents = 0
         total = amount_cents
@@ -60,6 +69,8 @@ def record_toll_event(
         "idempotency_key": idempotency_key,
         "source_type": source_type,
         "source_id": source_id,
+        "applied_tier": applied_tier,
+        "plan_id": plan_id,
     }
     try:
         result = db.table("toll_events").insert(row).execute()

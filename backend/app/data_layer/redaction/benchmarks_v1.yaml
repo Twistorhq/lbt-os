@@ -1,0 +1,49 @@
+# Prepared by Twistor Holdings LLC
+# TW-569: per-niche redaction list for trades_benchmarks (v1).
+# TW-564 Major 3: the promotion job applies this list BEFORE any
+# dead_letters write. dead_letters.redaction_spec_version pins v1.
+#
+# The byproduct benchmark pipeline carries NO customer PII by design:
+# emitters aggregate operational tables into per-org metric snapshots.
+# This list is the defense-in-depth contract for what gets stripped or
+# HMAC'd if a record ever fails validation and lands in dead_letters.
+
+version: 1
+niche: trades_benchmarks
+rules:
+  # Internal org UUID. Not PII, but org-linkable: HMAC it so a dead
+  # letter can never be joined back to an org.
+  - field: org_id
+    action: hmac
+    hmac_secret_ref: datalayer/hmac/trades_benchmarks
+    note: "org linkage must die before the dead-letter write"
+
+  # Customer identifiers must never appear in emitter payloads. If one
+  # does (schema drift, bad join), drop it and flag the record.
+  - field: customer_id
+    action: drop
+    note: "never expected; presence indicates an emitter bug"
+
+  - field: lead_id
+    action: drop
+    note: "never expected; presence indicates an emitter bug"
+
+  # Contact PII: belt and suspenders. Emitters must not select these.
+  - field: phone
+    action: drop
+  - field: email
+    action: drop
+  - field: address
+    action: drop
+  - field: name
+    action: drop
+    note: "technician/customer names never belong in metric batches"
+
+  # Free-text notes can smuggle PII. Never stored in dead letters.
+  - field: notes
+    action: drop
+  - field: description
+    action: drop
+
+# Fields that PASS THROUGH (aggregates only, no identifiers):
+#   cohort_key, period, computed_at, metric_name, metric_value, sample_size

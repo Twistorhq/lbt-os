@@ -19,6 +19,7 @@ from .routers import (
     admin,
     audit,
     customers,
+    data_v1,
     expenses,
     integrations,
     leads,
@@ -123,6 +124,7 @@ app.include_router(revenue_intelligence.router,    prefix="/api/v1")
 app.include_router(leak_engine.router,              prefix="/api/v1")
 app.include_router(tradeview.router,                prefix="/api/v1")
 app.include_router(visitor_events.router,          prefix="/api/v1")
+app.include_router(data_v1.router)  # TW-569: data API serves its own /data/v1 prefix
 
 
 @app.get("/health", include_in_schema=False)
