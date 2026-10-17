@@ -128,13 +128,14 @@ def refresh_gold(db, batch_id: str | None = None) -> dict[str, Any]:
                 "consecutive_passes": passes,
                 "published": is_published,
             }
+            # Atomic upsert: the UNIQUE(cohort_key, metric_name, period)
+            # backstop makes the select-then-write race a no-op, not a crash.
+            db.table("benchmark_cohort_stats").upsert(
+                payload, on_conflict="cohort_key,metric_name,period"
+            ).execute()
             if existing:
-                db.table("benchmark_cohort_stats").update(payload).eq(
-                    "id", existing[0]["id"]
-                ).execute()
                 updated += 1
             else:
-                db.table("benchmark_cohort_stats").insert(payload).execute()
                 published += 1
         else:
             # Below threshold: flip published=false if a row exists.

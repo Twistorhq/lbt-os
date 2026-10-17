@@ -161,11 +161,14 @@ CREATE TABLE IF NOT EXISTS data_api_subscriptions (
 );
 
 -- "Never double-toll" as mechanism (TW-564 Major 5b).
+-- Idempotency keys are namespaced per API key: two clients reusing the
+-- same key value must not collide (TW-569 Rosa MAJOR 2).
 CREATE TABLE IF NOT EXISTS data_toll_dedupe (
-    idempotency_key TEXT PRIMARY KEY,  -- the client's key, verbatim
     key_id          UUID NOT NULL REFERENCES data_api_keys(id),
+    idempotency_key TEXT NOT NULL,     -- the client's key, verbatim
     endpoint        TEXT NOT NULL,
-    tolled_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+    tolled_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (key_id, idempotency_key)
 );
 
 -- Out-of-band toll queue (durable; worker drains with retry + backoff).
@@ -181,7 +184,8 @@ CREATE TABLE IF NOT EXISTS toll_emit_queue (
                    -- 'queued' | 'processing' | 'done' | 'dead'
     next_retry_at  TIMESTAMPTZ,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (idempotency_key)  -- the queue itself cannot double-enqueue
+    UNIQUE (key_id, idempotency_key)  -- per-client namespace; the queue
+                                       -- itself cannot double-enqueue
 );
 
 -- Reconciliation record for rate limits (flushed every 60s; NOT the
@@ -223,6 +227,16 @@ ALTER TABLE benchmark_cohort_stats
 -- silver rows carry it so the rollup never re-derives dimensions.
 ALTER TABLE benchmark_org_metrics
     ADD COLUMN IF NOT EXISTS cohort_key TEXT;
+
+-- Silver idempotency (TW-569 Rosa MAJOR 4): every silver row links to the
+-- bronze artifact it was promoted from. UNIQUE(artifact_id, metric_name)
+-- makes replayed promotions a no-op instead of duplicate rows.
+-- (NULL artifact_id rows predate this column; Postgres treats NULLs as
+-- distinct in UNIQUE constraints, so they are unaffected.)
+ALTER TABLE benchmark_org_metrics
+    ADD COLUMN IF NOT EXISTS artifact_id UUID REFERENCES bronze_artifacts(id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_bom_artifact_metric
+    ON benchmark_org_metrics (artifact_id, metric_name);
 
 -- ----------------------------------------------------------
 -- RLS: framework + serving tables are service_role only.

@@ -16,10 +16,17 @@ skips the insert — then still ensures the silver rows exist.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
+import os
 from datetime import datetime, timezone
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
+
+import jsonschema
+import yaml
 
 from . import emitters
 
@@ -28,19 +35,63 @@ log = logging.getLogger("twistor.data_layer.benchmarks")
 NICHE = "trades_benchmarks"
 BRONZE_BUCKET = "data-bronze-trades_benchmarks"
 SCHEMA_VERSION = 1
-REDACTION_SPEC_VERSION = 1
 
-# Fields the redaction spec strips before any dead_letters write.
-_DROP_FIELDS = {
-    "customer_id",
-    "lead_id",
-    "phone",
-    "email",
-    "address",
-    "name",
-    "notes",
-    "description",
-}
+_DATA_LAYER_DIR = Path(__file__).resolve().parent.parent
+
+
+def _hmac_secret() -> bytes:
+    # Vault path: datalayer/hmac/trades_benchmarks (versioned).
+    # Env-configured here; the Vault mount is an ops step, documented.
+    return os.environ.get("DATALAYER_HMAC_SECRET", "dev-only-insecure").encode()
+
+
+@lru_cache(maxsize=1)
+def _redaction_spec() -> dict:
+    """Load the canonical per-niche redaction list (TW-564 Major 3).
+
+    backend/app/data_layer/redaction/benchmarks_v1.yaml — Dre owns it.
+    No list, no niche ships: _dead_letter refuses to write without it.
+    """
+    path = _DATA_LAYER_DIR / "redaction" / "benchmarks_v1.yaml"
+    with open(path, encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+@lru_cache(maxsize=1)
+def _batch_schema() -> dict:
+    """Load the schema-registry contract for metric batches (TW-569 MAJOR 1)."""
+    path = _DATA_LAYER_DIR / "schemas" / "benchmarks" / "v1.json"
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _hmac_id(value: str) -> str:
+    """Real HMAC-SHA256 of an identifier (TW-564 Major 2: never bare sha256).
+
+    Keyed by the per-niche Vault secret; the digest is unlinkable without it.
+    """
+    return hmac.new(_hmac_secret(), value.encode(), hashlib.sha256).hexdigest()
+
+
+def _redact(record: dict) -> dict:
+    """Apply the YAML redaction spec. org_id -> HMAC (non-joinable);
+    identifier/PII fields -> dropped. Unlisted fields are dropped loudly
+    rather than leaked quietly."""
+    spec = _redaction_spec()
+    rules = {r["field"]: r["action"] for r in spec.get("rules", [])}
+    out = {}
+    for k, v in record.items():
+        action = rules.get(k)
+        if action == "drop":
+            continue
+        if action == "hmac":
+            out[k] = "hmac:" + _hmac_id(str(v))
+            continue
+        if k in ("cohort_key", "period", "computed_at", "metrics"):
+            out[k] = v
+        else:
+            log.warning("redact: unlisted field %s dropped", k)
+    return out
 
 
 def _canonical(obj: Any) -> bytes:
@@ -53,25 +104,14 @@ def _content_hash(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def _redact(record: dict) -> dict:
-    """Apply benchmarks_v1 redaction list. org_id -> HMAC placeholder.
+def _validate_snapshot(snap: dict) -> None:
+    """Enforce the schema-registry contract (TW-569 MAJOR 1).
 
-    In production the HMAC uses the per-niche Vault secret
-    (datalayer/hmac/trades_benchmarks). Here we mark the transform; the
-    dead letter must never carry a joinable org identifier.
+    Raises jsonschema.ValidationError on contract violation; the caller
+    routes rejects to dead_letters — never silently dropped, never
+    promoted unvalidated.
     """
-    out = {}
-    for k, v in record.items():
-        if k in _DROP_FIELDS:
-            continue
-        if k == "org_id":
-            out["org_ref"] = (
-                "hmac:"
-                + hashlib.sha256(f"trades_benchmarks:v1:{v}".encode()).hexdigest()[:16]
-            )
-            continue
-        out[k] = v
-    return out
+    jsonschema.validate(instance=snap, schema=_batch_schema())
 
 
 def _get_source_id(db) -> str | None:
@@ -184,13 +224,25 @@ def _promote_org(db, source_id: str, run_id: str, org_id: str) -> bool:
         #  org has no activity in-window.)
         return True
 
+    # Schema-registry enforcement (TW-569 MAJOR 1): the contract is law.
+    # Violations go to dead_letters — never silently dropped, never promoted.
+    try:
+        _validate_snapshot(snap)
+    except jsonschema.ValidationError as exc:
+        log.warning(
+            "promote: snapshot failed schema contract for %s: %s", org_id, exc.message
+        )
+        _dead_letter(db, run_id, snap, f"schema_violation: {exc.message[:200]}")
+        return False
+
     payload = _canonical(snap)
     digest = _content_hash(payload)
 
-    # Idempotency backstop: same source + same bytes = same artifact.
+    # Idempotency: same source + same bytes = same artifact. A replay that
+    # finds an already-promoted artifact is a no-op (TW-569 MAJOR 4).
     existing = (
         db.table("bronze_artifacts")
-        .select("id")
+        .select("id, promotion_status")
         .eq("source_id", source_id)
         .eq("content_hash", digest)
         .limit(1)
@@ -199,6 +251,8 @@ def _promote_org(db, source_id: str, run_id: str, org_id: str) -> bool:
         or []
     )
     if existing:
+        if existing[0].get("promotion_status") == "promoted":
+            return True
         artifact_id = existing[0]["id"]
     else:
         storage_path = f"{run_id}/{org_id}.json"
@@ -227,10 +281,12 @@ def _promote_org(db, source_id: str, run_id: str, org_id: str) -> bool:
             .data[0]["id"]
         )
 
-    # Silver write: org-private rows (Class 1 RLS).
+    # Silver write: org-private rows (Class 1 RLS). Keyed by artifact_id so
+    # a replayed promotion upserts instead of duplicating (MAJOR 4).
     rows = [
         {
             "org_id": org_id,
+            "artifact_id": artifact_id,
             "vertical": snap["cohort_key"].split(":")[0],
             "cohort_key": snap["cohort_key"],
             "metric_name": m["metric_name"],
@@ -241,7 +297,13 @@ def _promote_org(db, source_id: str, run_id: str, org_id: str) -> bool:
         }
         for m in snap["metrics"]
     ]
-    inserted = db.table("benchmark_org_metrics").insert(rows).execute().data or []
+    inserted = (
+        db.table("benchmark_org_metrics")
+        .upsert(rows, on_conflict="artifact_id,metric_name")
+        .execute()
+        .data
+        or []
+    )
 
     # Lineage: org-private rows MAY carry artifact_id (the org reads its own
     # lineage via data_events_org_lineage). Shared-asset events never do.
@@ -269,12 +331,13 @@ def _promote_org(db, source_id: str, run_id: str, org_id: str) -> bool:
 
 
 def _dead_letter(db, run_id: str, record: dict, reason: str) -> None:
+    spec = _redaction_spec()  # raises if the list is missing: no list, no write
     redacted = _redact(record)
     db.table("dead_letters").insert(
         {
             "run_id": run_id,
             "niche": NICHE,
-            "redaction_spec_version": REDACTION_SPEC_VERSION,
+            "redaction_spec_version": int(spec.get("version", 0)),
             "raw_payload": json.dumps(redacted, sort_keys=True),
             "reason": reason,
         }

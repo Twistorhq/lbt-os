@@ -51,8 +51,9 @@ def get_platform_volume(db, window_days: int = 30) -> int:
     """Aggregate data-API call volume across the platform in-window.
 
     Source of truth: data_api_usage reconciliation rows. Falls back to 0
-    (tier_0) on read failure — pricing degrades to the declared base tier,
-    never to a surprise.
+    (tier_0) on read failure. tier_0 is the plan's DECLARED base rate
+    (per_call_cents), not a penalty: volume tiers are discounts for proven
+    volume, so no proven volume means no discount. Documented, not silent.
     """
     try:
         since = (datetime.now(timezone.utc) - timedelta(days=window_days)).isoformat()
@@ -130,10 +131,13 @@ def drain_queue(db, batch_size: int = 100) -> dict[str, Any]:
 
 def _process_job(db, job: dict, volume: int) -> str:
     key = job["idempotency_key"]
-    # Dedupe first: never double-toll.
+    key_id = job["key_id"]
+    # Dedupe first, namespaced per API key (TW-569 MAJOR 2): two clients
+    # reusing the same key value must never collide. Never double-toll.
     seen = (
         db.table("data_toll_dedupe")
-        .select("idempotency_key")
+        .select("key_id")
+        .eq("key_id", key_id)
         .eq("idempotency_key", key)
         .limit(1)
         .execute()
@@ -165,17 +169,17 @@ def _process_job(db, job: dict, volume: int) -> str:
         org_id=job["billing_org_id"],
         event_type="data.benchmark.query",
         quantity=1,
-        idempotency_key=f"toll:{key}",
+        idempotency_key=f"toll:{key_id}:{key}",
         source_type="data_api",
-        source_id=job["key_id"],
+        source_id=key_id,
         amount_cents=charge["amount_cents"],
         applied_tier=charge["applied_tier"],
         plan_id=job.get("plan_id"),
     )
     db.table("data_toll_dedupe").insert(
         {
+            "key_id": key_id,
             "idempotency_key": key,
-            "key_id": job["key_id"],
             "endpoint": job["endpoint"],
         }
     ).execute()

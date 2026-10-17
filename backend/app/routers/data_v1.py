@@ -28,7 +28,7 @@ import threading
 import time
 from typing import Annotated
 
-from fastapi import APIRouter, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Header, HTTPException, Query
 
 from ..database import get_db
 from ..services.benchmarks import METRIC_ALLOWLIST
@@ -121,30 +121,34 @@ def flush_usage(db) -> int:
 def _authenticate(db, raw_key: str | None) -> dict:
     if not raw_key:
         raise HTTPException(status_code=401, detail="X-API-Key required")
+    # Indexed exact match on the deterministic HMAC (TW-569 MAJOR 3):
+    # key_hash is HMAC(raw_key, server_secret), so the lookup is a single
+    # indexed row fetch, never a full-table scan. compare_digest kills
+    # timing oracles on the (impossible-by-index) multi-match path.
+    digest = hash_api_key(raw_key)
     rows = (
         db.table("data_api_keys")
         .select(
             "id, key_hash, partner_id, billing_org_id, niche_scope,"
             " plan_id, rate_limit_per_min, is_active"
         )
+        .eq("key_hash", digest)
         .eq("is_active", True)
+        .limit(1)
         .execute()
         .data
         or []
     )
-    for row in rows:
-        if verify_api_key(raw_key, row["key_hash"]):
-            if NICHE not in (row.get("niche_scope") or []):
-                raise HTTPException(
-                    status_code=403, detail="key not scoped for this niche"
-                )
-            return row
-    raise HTTPException(status_code=401, detail="invalid API key")
+    if not rows or not verify_api_key(raw_key, rows[0]["key_hash"]):
+        raise HTTPException(status_code=401, detail="invalid API key")
+    row = rows[0]
+    if NICHE not in (row.get("niche_scope") or []):
+        raise HTTPException(status_code=403, detail="key not scoped for this niche")
+    return row
 
 
 @router.get("/benchmarks/{cohort_key}")
 def get_benchmarks(
-    request: Request,
     cohort_key: str,
     metric: str | None = Query(default=None),
     period: str = Query(default="30d", pattern="^(30d|90d)$"),

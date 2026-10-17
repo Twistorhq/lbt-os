@@ -20,7 +20,20 @@
 | Serving API | `backend/app/routers/data_v1.py` (+ main.py registration) |
 | toll_service: `applied_tier` + `plan_id` params (backward compatible) | `backend/app/services/toll_service.py` |
 
-## Test results
+## Fix round (Rosa round 1: REQUEST_CHANGES — 1 blocker, 4 majors, nits)
+
+| Finding | Fix |
+|---|---|
+| BLOCKER: `_redact` was static-salt sha256 labeled "hmac:", YAML loaded by nothing | Real `hmac.new(secret, org_id)` (env/Vault `DATALAYER_HMAC_SECRET`); `_redact` loads `redaction/benchmarks_v1.yaml` via `_redaction_spec()` (lru_cached); `_dead_letter` refuses without the spec; tests assert 64-hex HMAC, PII drops, unlisted-field drops |
+| MAJOR 1: `schemas/benchmarks/v1.json` never enforced | `_validate_snapshot()` with `jsonschema` in `_promote_org`; violations → dead_letters with `schema_violation` reason; `jsonschema` + `pyyaml` pinned in requirements.txt |
+| MAJOR 2: idempotency namespace global | Composite `(key_id, idempotency_key)`: `toll_emit_queue` UNIQUE + `data_toll_dedupe` PK changed; worker dedupes on both; `record_toll_event` key becomes `toll:{key_id}:{key}`; test proves two clients sharing a key value both get tolled |
+| MAJOR 3: `_authenticate` full-table scan | Indexed exact match: `.eq("key_hash", hash_api_key(raw))` (uses `idx_data_api_keys_hash`); `compare_digest` retained |
+| MAJOR 4: `promote_run` not idempotent on silver | `benchmark_org_metrics.artifact_id` + UNIQUE(artifact_id, metric_name); replay finding a promoted artifact returns True early; upsert backstop |
+| Nits | Removed unused `calls`/`request` params; rollup cohort write is now atomic upsert (race backstop); `get_platform_volume` fallback documented as the plan's declared base rate (tiers are discounts, no proven volume = no discount) |
+
+Post-fix: **26/26 new tests green, full suite 252 passed**, ruff clean, migration 38 statements parse under pglast.
+
+## Test results (updated)
 
 - New: `backend/tests/test_data_layer_benchmarks.py` — **20/20 pass**
 - Full suite: **246 passed, 8 subtests passed** (was 226 + 8 before this ticket)

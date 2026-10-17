@@ -78,7 +78,7 @@ class TollDedupeTests(unittest.TestCase):
         dedupe_tbl = MagicMock()
         dedupe_res = MagicMock()
         dedupe_res.data = [{"idempotency_key": "abc-123"}]
-        dedupe_tbl.select.return_value.eq.return_value.limit.return_value.execute.return_value = dedupe_res
+        dedupe_tbl.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = dedupe_res
 
         def table_side_effect(name):
             return dedupe_tbl if name == "data_toll_dedupe" else tbl
@@ -103,7 +103,7 @@ class TollDedupeTests(unittest.TestCase):
         dedupe_tbl = MagicMock()
         dedupe_res = MagicMock()
         dedupe_res.data = []
-        dedupe_tbl.select.return_value.eq.return_value.limit.return_value.execute.return_value = dedupe_res
+        dedupe_tbl.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = dedupe_res
         plan_tbl = MagicMock()
         plan_res = MagicMock()
         plan_res.data = [
@@ -157,7 +157,7 @@ class EmitterMathTests(unittest.TestCase):
                 "call_started_at": "2026-10-10T12:00:00+00:00",
             },
         ]
-        snap = emitters.compute_snapshot("o1", [], recs, [], [], 0)
+        snap = emitters.compute_snapshot("o1", recs, [], [], 0)
         by_name = {m["metric_name"]: m["metric_value"] for m in snap["metrics"]}
         self.assertAlmostEqual(by_name["missed_call_recovery_rate"], 0.5)
         self.assertAlmostEqual(by_name["time_to_first_response_min"], 10.0)
@@ -174,14 +174,14 @@ class EmitterMathTests(unittest.TestCase):
             {"status": "completed", "total": 600.0},
             {"status": "scheduled", "total": 999.0},
         ]
-        snap = emitters.compute_snapshot("o1", [], [], quotes, jobs, 100)
+        snap = emitters.compute_snapshot("o1", [], quotes, jobs, 100)
         by_name = {m["metric_name"]: m["metric_value"] for m in snap["metrics"]}
         self.assertAlmostEqual(by_name["estimate_close_rate"], 2 / 3)
         self.assertAlmostEqual(by_name["avg_job_value_cents"], 50000.0)
         self.assertAlmostEqual(by_name["toll_spend_per_booked_job_cents"], 50.0)
 
     def test_empty_inputs_yield_no_metrics_not_zeros(self):
-        snap = emitters.compute_snapshot("o1", [], [], [], [], 0)
+        snap = emitters.compute_snapshot("o1", [], [], [], 0)
         self.assertEqual(snap["metrics"], [])
 
     def test_cohort_key_format(self):
@@ -286,7 +286,7 @@ class HoldAndSuppressTests(unittest.TestCase):
         for passes, expect_published in [(0, False), (1, False), (2, True)]:
             db, cohort_tbl = self._db_with_existing(passes, False)
             rollup.refresh_gold(db, batch_id="b")
-            payload = cohort_tbl.update.call_args[0][0]
+            payload = cohort_tbl.upsert.call_args[0][0]
             self.assertEqual(payload["published"], expect_published, f"passes={passes}")
             self.assertEqual(payload["consecutive_passes"], passes + 1)
 
@@ -331,7 +331,6 @@ class ApiContractTests(unittest.TestCase):
         with patch.object(data_v1, "get_db") as mock_db:
             with self.assertRaises(HTTPException) as ctx:
                 data_v1.get_benchmarks(
-                    request=MagicMock(),
                     cohort_key="hvac:co:smb",
                     metric=None,
                     period="30d",
@@ -345,7 +344,6 @@ class ApiContractTests(unittest.TestCase):
         with patch.object(data_v1, "get_db"):
             with self.assertRaises(HTTPException) as ctx:
                 data_v1.get_benchmarks(
-                    request=MagicMock(),
                     cohort_key="hvac:co:smb",
                     metric="not_a_metric",
                     period="30d",
@@ -366,6 +364,182 @@ class ApiContractTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as ctx:
             data_v1._check_rate_limit("k-test", 3)
         self.assertEqual(ctx.exception.status_code, 429)
+
+
+class FixRoundTests(unittest.TestCase):
+    """TW-569 Rosa round-1 findings: blocker + 4 majors, all with tests."""
+
+    def test_redact_uses_real_hmac_not_static_salt(self):
+        """BLOCKER 1: org_id -> real HMAC-SHA256, 64 hex chars, keyed."""
+        import os
+
+        os.environ["DATALAYER_HMAC_SECRET"] = "test-secret-xyz"
+        from app.data_layer.benchmarks import promote
+
+        promote._redaction_spec.cache_clear()
+        out = promote._redact({"org_id": "org-123", "cohort_key": "hvac:co:smb"})
+        ref = out["org_id"]
+        self.assertTrue(ref.startswith("hmac:"))
+        digest = ref.split("hmac:")[1]
+        self.assertEqual(len(digest), 64)  # full SHA-256, not truncated
+        # Deterministic for the same secret...
+        out2 = promote._redact({"org_id": "org-123"})
+        self.assertEqual(out2["org_id"], ref)
+        # ...and different without the static-salt construction.
+        import hashlib
+
+        fake = (
+            "hmac:" + hashlib.sha256(b"trades_benchmarks:v1:org-123").hexdigest()[:16]
+        )
+        self.assertNotEqual(ref, fake)
+
+    def test_redact_drops_pii_and_unlisted_fields(self):
+        """BLOCKER 1: the YAML spec is actually loaded and enforced."""
+        from app.data_layer.benchmarks import promote
+
+        promote._redaction_spec.cache_clear()
+        out = promote._redact(
+            {
+                "org_id": "o1",
+                "phone": "+15551234567",
+                "email": "a@b.c",
+                "customer_id": "c9",
+                "notes": "called twice",
+                "surprise_field": "should not leak",
+                "cohort_key": "hvac:co:smb",
+                "metrics": [],
+            }
+        )
+        for gone in ("phone", "email", "customer_id", "notes", "surprise_field"):
+            self.assertNotIn(gone, out)
+        self.assertIn("cohort_key", out)  # aggregates pass through
+
+    def test_schema_contract_rejects_unknown_metric(self):
+        """MAJOR 1: v1.json is enforced; bad snapshots raise."""
+        import jsonschema
+
+        from app.data_layer.benchmarks import promote
+
+        promote._batch_schema.cache_clear()
+        bad = {
+            "org_id": "o1",
+            "cohort_key": "hvac:co:smb",
+            "period": "30d",
+            "computed_at": "2026-10-16T00:00:00+00:00",
+            "metrics": [{"metric_name": "not_a_real_metric", "metric_value": 1.0}],
+        }
+        with self.assertRaises(jsonschema.ValidationError):
+            promote._validate_snapshot(bad)
+        good = dict(
+            bad, metrics=[{"metric_name": "estimate_close_rate", "metric_value": 0.5}]
+        )
+        promote._validate_snapshot(good)  # must not raise
+
+    def test_idempotency_namespace_is_per_client(self):
+        """MAJOR 2: same idempotency key, different key_ids -> both tolled."""
+        db, tbl = _fake_db()
+        dedupe_tbl = MagicMock()
+        dedupe_res = MagicMock()
+        dedupe_res.data = []
+        dedupe_tbl.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = dedupe_res
+        plan_tbl = MagicMock()
+        plan_res = MagicMock()
+        plan_res.data = []
+        plan_tbl.select.return_value.eq.return_value.limit.return_value.execute.return_value = plan_res
+
+        seen_queries = []
+
+        def table_side_effect(name):
+            if name == "data_toll_dedupe":
+                return dedupe_tbl
+            if name == "data_api_plans":
+                return plan_tbl
+            return tbl
+
+        db.table.side_effect = table_side_effect
+
+        for key_id in ("key-A", "key-B"):
+            job = {
+                "id": f"job-{key_id}",
+                "idempotency_key": "SAME-KEY",
+                "key_id": key_id,
+                "billing_org_id": "org-1",
+                "endpoint": "GET /x",
+                "plan_id": None,
+            }
+            with patch.object(toll_worker.toll_service, "record_toll_event") as rec:
+                outcome = toll_worker._process_job(db, job, volume=0)
+            self.assertEqual(outcome, "done")
+            seen_queries.append(rec.call_args[1]["idempotency_key"])
+        # Namespaced: the two tolls carry distinct idempotency keys.
+        self.assertEqual(seen_queries, ["toll:key-A:SAME-KEY", "toll:key-B:SAME-KEY"])
+
+    def test_replay_promotion_is_silver_noop(self):
+        """MAJOR 4: artifact already promoted -> no silver re-insert."""
+        from app.data_layer.benchmarks import promote
+
+        db, tbl = _fake_db()
+        # _get_source_id
+        src_tbl = MagicMock()
+        src_res = MagicMock()
+        src_res.data = [{"id": "src-1"}]
+        src_tbl.select.return_value.eq.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = src_res
+        # bronze_artifacts: already promoted
+        bronze_tbl = MagicMock()
+        bronze_res = MagicMock()
+        bronze_res.data = [{"id": "art-1", "promotion_status": "promoted"}]
+        bronze_tbl.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = bronze_res
+
+        def table_side_effect(name):
+            return {"data_sources": src_tbl, "bronze_artifacts": bronze_tbl}.get(
+                name, tbl
+            )
+
+        db.table.side_effect = table_side_effect
+
+        snap = {
+            "org_id": "org-9",
+            "cohort_key": "hvac:co:smb",
+            "period": "30d",
+            "computed_at": "2026-10-16T00:00:00+00:00",
+            "metrics": [{"metric_name": "estimate_close_rate", "metric_value": 0.5}],
+        }
+        with patch.object(promote.emitters, "emit_org_snapshot", return_value=snap):
+            ok = promote._promote_org(db, "src-1", "run-1", "org-9")
+        self.assertTrue(ok)
+        # No silver upsert happened: find the benchmark_org_metrics table mock
+        # and assert upsert was never called on it.
+        silver_upsert_calls = [c for c in tbl.upsert.call_args_list]
+        self.assertEqual(silver_upsert_calls, [])
+
+    def test_authenticate_uses_indexed_exact_match(self):
+        """MAJOR 3: no full-table scan; the query pins key_hash."""
+        db, tbl = _fake_db()
+        captured = {}
+
+        class CapTable:
+            def select(self, *a):
+                return self
+
+            def eq(self, col, val):
+                captured[col] = val
+                return self
+
+            def limit(self, *a):
+                return self
+
+            def execute(self):
+                r = MagicMock()
+                r.data = []
+                return r
+
+        db.table.side_effect = lambda name: CapTable()
+        with self.assertRaises(HTTPException) as ctx:
+            data_v1._authenticate(db, "sk_test_abc123")
+        self.assertEqual(ctx.exception.status_code, 401)
+        self.assertIn("key_hash", captured)
+        # The queried hash must equal the deterministic HMAC of the key.
+        self.assertEqual(captured["key_hash"], data_v1.hash_api_key("sk_test_abc123"))
 
 
 if __name__ == "__main__":

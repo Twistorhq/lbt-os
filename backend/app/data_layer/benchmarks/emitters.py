@@ -68,7 +68,6 @@ def _median_or_none(values: list[float]) -> float | None:
 
 def compute_snapshot(
     org_id: str,
-    calls: list[dict],
     recoveries: list[dict],
     quotes: list[dict],
     jobs: list[dict],
@@ -76,7 +75,6 @@ def compute_snapshot(
 ) -> dict[str, Any]:
     """Pure computation: rows in, metric snapshot out. No DB, no network.
 
-    - calls: call_logs rows (started_at, sms timing via recoveries)
     - recoveries: missed_call_recoveries rows (sms_sent_at, recovered_at, started via call)
     - quotes: quotes rows (status, sent_at)
     - jobs: jobs rows (status, total)
@@ -231,7 +229,7 @@ def emit_org_snapshot(db, org_id: str) -> dict[str, Any]:
     tech_rows = _q("technicians", "id")
     size_bucket = shop_size_bucket(len(tech_rows))
 
-    snap = compute_snapshot(org_id, [], flat_recoveries, quotes, jobs, toll_cents)
+    snap = compute_snapshot(org_id, flat_recoveries, quotes, jobs, toll_cents)
     return {
         "org_id": org_id,
         "cohort_key": cohort_key(org.get("industry"), org.get("state"), size_bucket),
