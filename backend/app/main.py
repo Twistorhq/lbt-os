@@ -1,6 +1,7 @@
 """
 LBT OS — FastAPI Application Entry Point
 """
+
 import logging
 import time
 import uuid
@@ -28,6 +29,7 @@ from .routers import (
     metrics,
     organizations,
     revenue_intelligence,
+    roofing,
     sales,
     strategy,
     stripe_webhooks,
@@ -108,23 +110,24 @@ async def request_lifecycle(request: Request, call_next) -> Response:
 
 
 # --- Routers ---
-app.include_router(admin.router,                   prefix="/api/v1")
-app.include_router(calls.router,                   prefix="/api/v1")
-app.include_router(organizations.router,           prefix="/api/v1")
-app.include_router(leads.router,                   prefix="/api/v1")
-app.include_router(customers.router,               prefix="/api/v1")
-app.include_router(sales.router,                   prefix="/api/v1")
-app.include_router(expenses.router,                prefix="/api/v1")
-app.include_router(metrics.router,                 prefix="/api/v1")
-app.include_router(audit.router,                   prefix="/api/v1")
-app.include_router(integrations.router,            prefix="/api/v1")
-app.include_router(stripe_webhooks.router,         prefix="/api/stripe")
-app.include_router(strategy.router,                prefix="/api/v1")
-app.include_router(messages.router,                prefix="/api/v1")
-app.include_router(revenue_intelligence.router,    prefix="/api/v1")
-app.include_router(leak_engine.router,              prefix="/api/v1")
-app.include_router(tradeview.router,                prefix="/api/v1")
-app.include_router(visitor_events.router,          prefix="/api/v1")
+app.include_router(admin.router, prefix="/api/v1")
+app.include_router(calls.router, prefix="/api/v1")
+app.include_router(organizations.router, prefix="/api/v1")
+app.include_router(leads.router, prefix="/api/v1")
+app.include_router(customers.router, prefix="/api/v1")
+app.include_router(sales.router, prefix="/api/v1")
+app.include_router(expenses.router, prefix="/api/v1")
+app.include_router(metrics.router, prefix="/api/v1")
+app.include_router(audit.router, prefix="/api/v1")
+app.include_router(integrations.router, prefix="/api/v1")
+app.include_router(stripe_webhooks.router, prefix="/api/stripe")
+app.include_router(strategy.router, prefix="/api/v1")
+app.include_router(messages.router, prefix="/api/v1")
+app.include_router(revenue_intelligence.router, prefix="/api/v1")
+app.include_router(roofing.router, prefix="/api/v1")
+app.include_router(leak_engine.router, prefix="/api/v1")
+app.include_router(tradeview.router, prefix="/api/v1")
+app.include_router(visitor_events.router, prefix="/api/v1")
 
 
 @app.get("/health", include_in_schema=False)

@@ -1,4 +1,3 @@
-
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -17,21 +16,21 @@ class Settings(BaseSettings):
     # LLM — supports OpenAI or Ollama
     # For Ollama: set llm_provider=ollama, ollama_model=llama3.2, leave openai_api_key empty
     # For OpenAI: set llm_provider=openai, openai_api_key=sk-...
-    llm_provider: str = "ollama"          # "openai" | "ollama"
-    openai_api_key: str = "not-needed"   # only required when llm_provider=openai
-    openai_model: str = "gpt-4o-mini"    # used when llm_provider=openai, plan=pro
-    openai_premium_model: str = "gpt-4o" # used for premium/enterprise plan
+    llm_provider: str = "ollama"  # "openai" | "ollama"
+    openai_api_key: str = "not-needed"  # only required when llm_provider=openai
+    openai_model: str = "gpt-4o-mini"  # used when llm_provider=openai, plan=pro
+    openai_premium_model: str = "gpt-4o"  # used for premium/enterprise plan
     ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "llama3.2"       # any model you have pulled
+    ollama_model: str = "llama3.2"  # any model you have pulled
 
     # Stripe
     stripe_secret_key: str
     stripe_webhook_secret: str
-    stripe_price_basic: str = "legacy-grandfathered"   # grandfathered; not sold
-    stripe_price_pro: str = "legacy-grandfathered"     # grandfathered; not sold
-    stripe_price_premium: str = "legacy-grandfathered" # grandfathered; not sold
+    stripe_price_basic: str = "legacy-grandfathered"  # grandfathered; not sold
+    stripe_price_pro: str = "legacy-grandfathered"  # grandfathered; not sold
+    stripe_price_premium: str = "legacy-grandfathered"  # grandfathered; not sold
     stripe_price_trades_starter: str  # $299/shop/mo flat (TW-550)
-    stripe_price_trades_pro: str      # $499/shop/mo flat (TW-550)
+    stripe_price_trades_pro: str  # $499/shop/mo flat (TW-550)
 
     # App
     app_env: str = "development"
@@ -43,7 +42,7 @@ class Settings(BaseSettings):
     # TW-484: owner SSO — comma-separated emails that bypass all plan gates.
     # The owner signs in once via Clerk; backend + frontend unlock everything.
     owner_emails: str = ""
-    api_secret: str | None = None          # not currently used; remove weak default
+    api_secret: str | None = None  # not currently used; remove weak default
     # Development/demo only: lets testers rerun free-tier audits without monthly gating.
     demo_allow_unlimited_audits: bool = False
     audit_rate_limit: str = "5/hour"
@@ -64,7 +63,9 @@ class Settings(BaseSettings):
     twilio_account_sid: str | None = None
     twilio_auth_token: str | None = None
     twilio_from_number: str | None = None  # e.g. +15555550100
-    twilio_10dlc_configured: bool = False  # TW-556: M2 recovery SMS requires 10DLC registration
+    twilio_10dlc_configured: bool = (
+        False  # TW-556: M2 recovery SMS requires 10DLC registration
+    )
 
     # Integration / OAuth
     integration_secret_key: str | None = None
@@ -89,26 +90,32 @@ class Settings(BaseSettings):
 
     @property
     def parsed_cors_origins(self) -> list[str]:
-        configured = [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+        configured = [
+            origin.strip() for origin in self.cors_origins.split(",") if origin.strip()
+        ]
         origins = configured or [self.frontend_url]
         if not self.is_production:
-            origins.extend([
-                "http://localhost:5173",
-                "http://localhost:5174",
-                "http://localhost:5175",
-                "http://localhost:5176",
-                "http://localhost:5177",
-                "http://127.0.0.1:5173",
-                "http://127.0.0.1:5174",
-                "http://127.0.0.1:5175",
-                "http://127.0.0.1:5176",
-                "http://127.0.0.1:5177",
-            ])
+            origins.extend(
+                [
+                    "http://localhost:5173",
+                    "http://localhost:5174",
+                    "http://localhost:5175",
+                    "http://localhost:5176",
+                    "http://localhost:5177",
+                    "http://127.0.0.1:5173",
+                    "http://127.0.0.1:5174",
+                    "http://127.0.0.1:5175",
+                    "http://127.0.0.1:5176",
+                    "http://127.0.0.1:5177",
+                ]
+            )
         return list(dict.fromkeys(origins))
 
     @property
     def parsed_trusted_hosts(self) -> list[str]:
-        configured = [host.strip() for host in self.trusted_hosts.split(",") if host.strip()]
+        configured = [
+            host.strip() for host in self.trusted_hosts.split(",") if host.strip()
+        ]
         if configured:
             return configured
         if self.is_production:
@@ -132,19 +139,32 @@ class Settings(BaseSettings):
                 "STRIPE_PRICE_TRADES_STARTER": self.stripe_price_trades_starter,
                 "STRIPE_PRICE_TRADES_PRO": self.stripe_price_trades_pro,
             }
-            missing = [name for name, value in required_stripe.items() if not value or "placeholder" in value.lower()]
+            missing = [
+                name
+                for name, value in required_stripe.items()
+                if not value or "placeholder" in value.lower()
+            ]
             if missing:
-                raise ValueError(f"Production Stripe configuration is incomplete: {', '.join(missing)}.")
+                raise ValueError(
+                    f"Production Stripe configuration is incomplete: {', '.join(missing)}."
+                )
             if not self.stripe_secret_key.startswith("sk_"):
-                raise ValueError("STRIPE_SECRET_KEY must be a Stripe secret key in production.")
+                raise ValueError(
+                    "STRIPE_SECRET_KEY must be a Stripe secret key in production."
+                )
             if not self.stripe_webhook_secret.startswith("whsec_"):
-                raise ValueError("STRIPE_WEBHOOK_SECRET must be a Stripe webhook signing secret in production.")
+                raise ValueError(
+                    "STRIPE_WEBHOOK_SECRET must be a Stripe webhook signing secret in production."
+                )
             bad_prices = [
-                name for name in ("STRIPE_PRICE_TRADES_STARTER", "STRIPE_PRICE_TRADES_PRO")
+                name
+                for name in ("STRIPE_PRICE_TRADES_STARTER", "STRIPE_PRICE_TRADES_PRO")
                 if not required_stripe[name].startswith("price_")
             ]
             if bad_prices:
-                raise ValueError(f"Stripe price IDs must start with price_: {', '.join(bad_prices)}.")
+                raise ValueError(
+                    f"Stripe price IDs must start with price_: {', '.join(bad_prices)}."
+                )
 
 
 settings = Settings()
@@ -154,13 +174,13 @@ settings = Settings()
 # via webhook metadata passthrough, but no new checkouts are sold on them.
 PLAN_PRICE_MAP: dict[str, str] = {
     "trades_starter": settings.stripe_price_trades_starter,  # $299/shop/mo
-    "trades_pro":     settings.stripe_price_trades_pro,      # $499/shop/mo
+    "trades_pro": settings.stripe_price_trades_pro,  # $499/shop/mo
 }
 
 # Explicit technician limits. None = unlimited, declared — never an absent check.
 PLAN_LIMITS: dict[str, dict] = {
     "trades_starter": {"max_techs": None},
-    "trades_pro":     {"max_techs": None},
+    "trades_pro": {"max_techs": None},
 }
 
 # Land motion (TW-549): 14-day trial, zero credit risk.
@@ -171,9 +191,12 @@ TRIAL_PERIOD_DAYS = 14
 # Percent-of-value events (e.g. booking.recovered at 10% of job value) are NOT
 # in this map: the emitter computes the amount and passes amount_cents.
 TOLL_RATES: dict[str, int] = {
-    "missed_call.detected": 10,   # $0.10 per detected missed call
-    "sms.auto_reply":         5,  # $0.05 per auto-SMS
-    "call.ai_handled":       50,  # $0.50 per AI-handled call
+    "missed_call.detected": 10,  # $0.10 per detected missed call
+    "sms.auto_reply": 5,  # $0.05 per auto-SMS
+    "call.ai_handled": 50,  # $0.50 per AI-handled call
+    "takeoff.computed": 25,  # $0.25 per estimating takeoff (TW-571)
+    "po.sent": 50,  # $0.50 per purchase order sent (TW-571)
+    "storm.campaign_launched": 100,  # $1.00 per storm campaign (TW-571)
 }
 
 # NOTE (TW-550): PLAN_FEATURES removed — it had no consumers and listed only

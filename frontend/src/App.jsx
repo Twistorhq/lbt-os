@@ -13,6 +13,7 @@ import Dashboard from './pages/Dashboard'
 import Leads from './pages/Leads'
 import Sales from './pages/Sales'
 import Customers from './pages/Customers'
+import Roofing from './pages/Roofing'
 import Expenses from './pages/Expenses'
 import AIInsights from './pages/AIInsights'
 import Onboarding from './pages/Onboarding'
@@ -214,6 +215,7 @@ export default function App() {
           <Route path="leads" element={<Leads />} />
           <Route path="sales" element={<Sales />} />
           <Route path="customers" element={<Customers />} />
+          <Route path="roofing" element={<Roofing />} />
           <Route path="expenses" element={<Expenses />} />
           <Route path="insights" element={<AIInsights />} />
           <Route path="brief" element={<MorningBrief />} />

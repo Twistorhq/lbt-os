@@ -21,6 +21,7 @@ const navGroups = [
       { to: '/app/leads', label: 'Leads', icon: '◎' },
       { to: '/app/sales', label: 'Sales', icon: '$' },
       { to: '/app/customers', label: 'Customers', icon: '◉' },
+      { to: '/app/roofing', label: 'Roofing', icon: '⌂' },
       { to: '/app/expenses', label: 'Expenses', icon: '↗' },
     ],
   },

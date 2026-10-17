@@ -195,6 +195,28 @@ export const visitorEventsApi = {
   summary: (days = 7)         => api.get('/visitor-events/summary', { params: { days } }),
 }
 
+// ---- Roofing pro pack (TW-571) ----
+export const roofingApi = {
+  suppliers: {
+    list:   ()        => api.get('/roofing/suppliers'),
+    create: (data)    => api.post('/roofing/suppliers', data),
+    get:    (id)      => api.get(`/roofing/suppliers/${id}`),
+    update: (id, d)   => api.patch(`/roofing/suppliers/${id}`, d),
+    delete: (id)      => api.delete(`/roofing/suppliers/${id}`),
+  },
+  purchaseOrders: {
+    list:   ()        => api.get('/roofing/purchase-orders'),
+    create: (data)    => api.post('/roofing/purchase-orders', data),
+    get:    (id)      => api.get(`/roofing/purchase-orders/${id}`),
+    send:   (id)      => api.post(`/roofing/purchase-orders/${id}/send`),
+  },
+  takeoff: (quoteId, data) => api.post(`/roofing/quotes/${quoteId}/takeoff`, data),
+  storms: {
+    recent:   (zip)   => api.get('/roofing/storms/recent', { params: { zip } }),
+    campaign: (data)  => api.post('/roofing/storms/campaigns', data),
+  },
+}
+
 export default api
 
 // TW-295: unauthenticated visitors browse on sample data; writes are gated
