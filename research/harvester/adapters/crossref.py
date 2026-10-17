@@ -2,6 +2,7 @@
 
 Prepared by Twistor Holdings LLC.
 """
+
 from __future__ import annotations
 
 import re
@@ -30,11 +31,16 @@ def _license_label(url: str | None) -> str | None:
 class CrossrefAdapter(SourceAdapter):
     key = "crossref"
 
-    def __init__(self, mailto: str = "holla@twistor.co", rows: int = 100):
+    def __init__(
+        self,
+        mailto: str = "holla@twistor.co",
+        rows: int = 100,
+        rate_limit_s: float | None = None,
+    ):
         self.mailto = mailto
         self.rows = rows
         self.session = make_session()
-        self.limiter = limiter_for(urlparse(API).netloc, 2.0)
+        self.limiter = limiter_for(urlparse(API).netloc, rate_limit_s or 2.0)
 
     @staticmethod
     def normalize(work: dict) -> RawRecord:
@@ -71,18 +77,20 @@ class CrossrefAdapter(SourceAdapter):
             source_url=source_url,
             fulltext_url=fulltext_url,
             license=license_label,
-            access_status="open" if license_label and license_label != "other" else "unknown",
+            access_status="open"
+            if license_label and license_label != "other"
+            else "unknown",
         )
 
-    def discover(self, query: str, max_records: int = 100) -> tuple[list[RawRecord], str | None]:
+    def discover(
+        self, query: str, max_records: int = 100
+    ) -> tuple[list[RawRecord], str | None]:
         records: list[RawRecord] = []
         rows = min(self.rows, 100)
         offset = 0
         note = None
         while len(records) < max_records:
-            if not self.limiter.acquire(urlparse(API).netloc):
-                import time
-                time.sleep(self.limiter.wait_s(urlparse(API).netloc))
+            self.limiter.wait_and_acquire(urlparse(API).netloc)
             try:
                 resp = self.session.get(
                     f"{API}/works",

@@ -2,6 +2,7 @@
 
 Prepared by Twistor Holdings LLC.
 """
+
 from __future__ import annotations
 
 import requests
@@ -23,8 +24,9 @@ def make_session(user_agent: str = DEFAULT_USER_AGENT) -> requests.Session:
     return s
 
 
-def fetch_pdf_bytes(url: str, session: requests.Session,
-                    max_bytes: int = 20_000_000) -> bytes | None:
+def fetch_pdf_bytes(
+    url: str, session: requests.Session, max_bytes: int = 20_000_000
+) -> bytes | None:
     """Best-effort PDF fetch honoring robots.txt. None when not allowed."""
     if not url or not is_fetch_allowed(url):
         return None

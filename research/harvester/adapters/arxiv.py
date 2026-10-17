@@ -2,9 +2,9 @@
 
 Prepared by Twistor Holdings LLC.
 """
+
 from __future__ import annotations
 
-import time
 import xml.etree.ElementTree as ET
 from urllib.parse import urlparse
 
@@ -20,10 +20,10 @@ ATOM = "{http://www.w3.org/2005/Atom}"
 class ArxivAdapter(SourceAdapter):
     key = "arxiv"
 
-    def __init__(self, max_results: int = 100):
+    def __init__(self, max_results: int = 100, rate_limit_s: float | None = None):
         self.max_results = max_results
         self.session = make_session()
-        self.limiter = limiter_for(urlparse(API).netloc, 3.0)
+        self.limiter = limiter_for(urlparse(API).netloc, rate_limit_s or 3.0)
 
     @staticmethod
     def normalize(entry: ET.Element) -> RawRecord:
@@ -32,8 +32,10 @@ class ArxivAdapter(SourceAdapter):
             return (el.text or "").strip() if el is not None and el.text else ""
 
         arxiv_id = text("id").split("/abs/")[-1]
-        authors = [a.findtext(f"{ATOM}name", default="").strip()
-                   for a in entry.findall(f"{ATOM}author")]
+        authors = [
+            a.findtext(f"{ATOM}name", default="").strip()
+            for a in entry.findall(f"{ATOM}author")
+        ]
         pdf_url = None
         for link in entry.findall(f"{ATOM}link"):
             if link.get("title") == "pdf":
@@ -50,16 +52,19 @@ class ArxivAdapter(SourceAdapter):
             access_status="open",
         )
 
-    def discover(self, query: str, max_records: int = 100) -> tuple[list[RawRecord], str | None]:
+    def discover(
+        self, query: str, max_records: int = 100
+    ) -> tuple[list[RawRecord], str | None]:
         host = urlparse(API).netloc
-        if not self.limiter.acquire(host):
-            time.sleep(self.limiter.wait_s(host))
+        self.limiter.wait_and_acquire(host)
         try:
             resp = self.session.get(
                 f"{API}/query",
-                params={"search_query": f"all:{query}",
-                        "max_results": min(max_records, self.max_results),
-                        "sortBy": "relevance"},
+                params={
+                    "search_query": f"all:{query}",
+                    "max_results": min(max_records, self.max_results),
+                    "sortBy": "relevance",
+                },
                 timeout=30,
             )
         except Exception as exc:

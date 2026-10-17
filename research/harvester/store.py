@@ -7,6 +7,7 @@ rows can join later without migration.
 
 Prepared by Twistor Holdings LLC.
 """
+
 from __future__ import annotations
 
 import json
@@ -108,20 +109,33 @@ class CorpusStore:
         self._conn.commit()
 
     # -- documents ------------------------------------------------------
-    def insert_document(self, doc: dict) -> int:
-        """Insert or return existing id (dedupe on external_id, then DOI)."""
+    @staticmethod
+    def _norm_doi(doi: str | None) -> str | None:
+        # N2: DOI dedupe is case-insensitive and whitespace-tolerant.
+        if doi is None:
+            return None
+        doi = doi.strip().lower()
+        return doi or None
+
+    def insert_document(self, doc: dict) -> tuple[int, bool]:
+        """Insert or return existing id (dedupe on external_id, then DOI).
+
+        Returns (doc_id, is_new). Callers must only run extraction for new
+        rows — re-running extraction on deduped docs duplicates properties.
+        """
         row = self._conn.execute(
             "SELECT id FROM documents WHERE external_id = ?",
             (doc["external_id"],),
         ).fetchone()
         if row:
-            return int(row["id"])
-        if doc.get("doi"):
+            return int(row["id"]), False
+        doi = self._norm_doi(doc.get("doi"))
+        if doi:
             row = self._conn.execute(
-                "SELECT id FROM documents WHERE doi = ?", (doc["doi"],)
+                "SELECT id FROM documents WHERE doi = ?", (doi,)
             ).fetchone()
             if row:
-                return int(row["id"])
+                return int(row["id"]), False
         cur = self._conn.execute(
             """INSERT INTO documents
                (source_key, run_id, external_id, title, authors_json,
@@ -130,22 +144,40 @@ class CorpusStore:
                 origin, retrieved_at)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
-                doc.get("source_key"), doc.get("run_id"), doc["external_id"],
-                doc.get("title", ""), json.dumps(doc.get("authors", [])),
-                doc.get("institution"), doc.get("year"), doc.get("doi"),
-                doc.get("doc_type"), doc.get("abstract"),
-                doc.get("source_url"), doc.get("fulltext_url"),
-                doc.get("fulltext_path"), doc.get("license"),
-                doc.get("access_status"), doc.get("origin", "harvested"),
+                doc.get("source_key"),
+                doc.get("run_id"),
+                doc["external_id"],
+                doc.get("title", ""),
+                json.dumps(doc.get("authors", [])),
+                doc.get("institution"),
+                doc.get("year"),
+                doi,
+                doc.get("doc_type"),
+                doc.get("abstract"),
+                doc.get("source_url"),
+                doc.get("fulltext_url"),
+                doc.get("fulltext_path"),
+                doc.get("license"),
+                doc.get("access_status"),
+                doc.get("origin", "harvested"),
                 _utcnow(),
             ),
         )
         self._conn.commit()
-        return int(cur.lastrowid)
+        return int(cur.lastrowid), True
+
+    def set_fulltext_path(self, doc_id: int, path: str) -> None:
+        """Record where a fetched PDF was persisted (B1)."""
+        self._conn.execute(
+            "UPDATE documents SET fulltext_path = ? WHERE id = ?",
+            (path, doc_id),
+        )
+        self._conn.commit()
 
     def get_document(self, doc_id: int) -> dict | None:
         row = self._conn.execute(
-            "SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
+            "SELECT * FROM documents WHERE id = ?", (doc_id,)
+        ).fetchone()
         if not row:
             return None
         d = dict(row)
@@ -163,9 +195,14 @@ class CorpusStore:
                 context, extraction_method, confidence)
                VALUES (?,?,?,?,?,?,?,?,?)""",
             (
-                document_id, prop.get("material"), prop["property"],
-                prop["value"], prop["unit"], prop.get("test_method"),
-                prop.get("context"), prop["extraction_method"],
+                document_id,
+                prop.get("material"),
+                prop["property"],
+                prop["value"],
+                prop["unit"],
+                prop.get("test_method"),
+                prop.get("context"),
+                prop["extraction_method"],
                 prop["confidence"],
             ),
         )
@@ -196,11 +233,19 @@ class CorpusStore:
                 access_cost, detected_at)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
-                hit.get("source_key"), hit.get("run_id"), hit["external_id"],
-                hit.get("title", ""), json.dumps(hit.get("authors", [])),
-                hit.get("year"), hit.get("doi"), hit.get("doc_type"),
-                hit.get("source_url"), hit.get("what_it_contains"),
-                hit.get("why_valuable"), hit.get("access_cost"), _utcnow(),
+                hit.get("source_key"),
+                hit.get("run_id"),
+                hit["external_id"],
+                hit.get("title", ""),
+                json.dumps(hit.get("authors", [])),
+                hit.get("year"),
+                hit.get("doi"),
+                hit.get("doc_type"),
+                hit.get("source_url"),
+                hit.get("what_it_contains"),
+                hit.get("why_valuable"),
+                hit.get("access_cost"),
+                _utcnow(),
             ),
         )
         self._conn.commit()
@@ -208,7 +253,8 @@ class CorpusStore:
 
     def list_paywall_hits(self) -> list[dict]:
         rows = self._conn.execute(
-            "SELECT * FROM paywall_hits ORDER BY detected_at DESC").fetchall()
+            "SELECT * FROM paywall_hits ORDER BY detected_at DESC"
+        ).fetchall()
         out = []
         for r in rows:
             d = dict(r)
@@ -227,8 +273,14 @@ class CorpusStore:
         self._conn.commit()
         return int(cur.lastrowid)
 
-    def finish_run(self, run_id: int, status: str, records_found: int = 0,
-                   records_stored: int = 0, notes: str | None = None) -> None:
+    def finish_run(
+        self,
+        run_id: int,
+        status: str,
+        records_found: int = 0,
+        records_stored: int = 0,
+        notes: str | None = None,
+    ) -> None:
         self._conn.execute(
             """UPDATE harvest_runs SET finished_at = ?, status = ?,
                records_found = ?, records_stored = ?, notes = ?
@@ -239,5 +291,6 @@ class CorpusStore:
 
     def get_run(self, run_id: int) -> dict | None:
         row = self._conn.execute(
-            "SELECT * FROM harvest_runs WHERE id = ?", (run_id,)).fetchone()
+            "SELECT * FROM harvest_runs WHERE id = ?", (run_id,)
+        ).fetchone()
         return dict(row) if row else None

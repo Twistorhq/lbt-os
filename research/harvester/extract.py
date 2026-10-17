@@ -5,6 +5,7 @@ a confidence score — it is a triage signal, never ground truth.
 
 Prepared by Twistor Holdings LLC.
 """
+
 from __future__ import annotations
 
 import re
@@ -61,7 +62,11 @@ _PROPERTY_PATTERNS: list[tuple[str, str, tuple[str, ...]]] = [
     ("impact_strength", r"impact\s+strength", ("kJ/m2", "kJ/m²", "J/m")),
     ("elongation_at_break", r"elongation(?:\s+at\s+break)?", ("%",)),
     ("density", r"density", ("g/cm3", "g/cm³", "kg/m3")),
-    ("fiber_fraction", r"(?:fiber|fibre)(?:\s+content|\s+fraction|\s+loading)?", ("wt%", "vol%", "%")),
+    (
+        "fiber_fraction",
+        r"(?:fiber|fibre)(?:\s+content|\s+fraction|\s+loading)?",
+        ("wt%", "vol%", "%"),
+    ),
 ]
 
 _UNIT_RE = r"(GPa|MPa|kJ/m2|kJ/m²|J/m|g/cm3|g/cm³|kg/m3|wt%|vol%|%)"
@@ -74,13 +79,19 @@ def _normalize_unit(value: float, unit: str) -> tuple[float, str]:
 
 
 def extract_properties(text: str | None) -> list[dict]:
-    """Heuristically extract material-property values from free text."""
+    """Heuristically extract material-property values from free text.
+
+    M1: each property only accepts its own configured units — a unit that
+    does not belong to the property is not a match (e.g. 'tensile strength
+    500 J/m' and 'density 50%' are correctly rejected).
+    """
     if not text:
         return []
     records: list[dict] = []
-    for prop, label, _units in _PROPERTY_PATTERNS:
+    for prop, label, units in _PROPERTY_PATTERNS:
+        unit_alt = "|".join(re.escape(u) for u in units)
         pattern = re.compile(
-            rf"{label}[^.\n]{{0,60}}?(\d+(?:\.\d+)?)\s*{_UNIT_RE}",
+            rf"{label}[^.\n]{{0,60}}?(\d+(?:\.\d+)?)\s*({unit_alt})",
             re.IGNORECASE,
         )
         for m in pattern.finditer(text):
@@ -88,15 +99,17 @@ def extract_properties(text: str | None) -> list[dict]:
             raw_unit = m.group(2)
             value, unit = _normalize_unit(raw_value, raw_unit)
             start = max(0, m.start() - 40)
-            records.append({
-                "property": prop,
-                "value": value,
-                "unit": unit,
-                "test_method": None,
-                "context": text[start:m.end()].strip(),
-                "extraction_method": HEURISTIC_METHOD,
-                "confidence": HEURISTIC_CONFIDENCE,
-            })
+            records.append(
+                {
+                    "property": prop,
+                    "value": value,
+                    "unit": unit,
+                    "test_method": None,
+                    "context": text[start : m.end()].strip(),
+                    "extraction_method": HEURISTIC_METHOD,
+                    "confidence": HEURISTIC_CONFIDENCE,
+                }
+            )
     # Dedupe identical (property, value, unit) hits from overlapping patterns.
     seen: set[tuple[str, float, str]] = set()
     unique: list[dict] = []

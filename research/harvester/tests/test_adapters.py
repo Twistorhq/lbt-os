@@ -1,4 +1,5 @@
 """RED: adapter normalization — Crossref JSON and OAI-PMH XML fixtures."""
+
 import json
 import os
 
@@ -50,11 +51,30 @@ class TestOaiPmhAdapter:
         ids = [r.external_id for r in records]
         assert not any("deleted" in i for i in ids)
 
+    def test_pdf_identifier_becomes_fulltext_url(self):
+        # M2: a .pdf dc:identifier populates fulltext_url so fetch_fulltext
+        # is a live path, not a dead one.
+        xml = load("oai_listrecords.xml").replace(
+            "<dc:identifier>https://krex.k-state.edu/handle/123456789/42</dc:identifier>",
+            "<dc:identifier>https://krex.k-state.edu/handle/123456789/42</dc:identifier>"
+            "<dc:identifier>https://krex.k-state.edu/bitstream/123456789/42/1/thesis.pdf</dc:identifier>",
+        )
+        records, _ = OaiPmhAdapter.parse_records(xml)
+        assert (
+            records[0].fulltext_url
+            == "https://krex.k-state.edu/bitstream/123456789/42/1/thesis.pdf"
+        )
+
 
 class TestOaiMatchTerms:
     def test_and_semantics(self):
-        assert OaiPmhAdapter.matches("Hemp fiber biocomposites", ["hemp", "fiber"]) is True
-        assert OaiPmhAdapter.matches("Hemp fiber biocomposites", ["hemp", "titanium"]) is False
+        assert (
+            OaiPmhAdapter.matches("Hemp fiber biocomposites", ["hemp", "fiber"]) is True
+        )
+        assert (
+            OaiPmhAdapter.matches("Hemp fiber biocomposites", ["hemp", "titanium"])
+            is False
+        )
 
     def test_case_insensitive(self):
         assert OaiPmhAdapter.matches("HEMP Fiber", ["hemp"]) is True
@@ -65,9 +85,14 @@ class TestOaiMatchTerms:
 
 
 class TestOpenAlexDegrade:
-    def test_429_returns_empty_with_note(self):
+    def test_429_returns_empty_with_note(self, monkeypatch):
+        # N3: no test seam in the production signature — monkeypatch instead.
+        class FakeResp:
+            status_code = 429
+
         adapter = OpenAlexAdapter()
-        records, note = adapter.discover("hemp composite",
-                                         _http_status_for_test=429)
+        monkeypatch.setattr(adapter.session, "get", lambda *a, **k: FakeResp())
+        monkeypatch.setattr(adapter.limiter, "wait_and_acquire", lambda host: None)
+        records, note = adapter.discover("hemp composite")
         assert records == []
         assert "rate" in note.lower() or "429" in note

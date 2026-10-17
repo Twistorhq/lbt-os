@@ -2,9 +2,9 @@
 
 Prepared by Twistor Holdings LLC.
 """
+
 from __future__ import annotations
 
-import time
 from urllib.parse import urlparse
 
 from ..extract import normalize_authors, normalize_year
@@ -32,11 +32,13 @@ def _dig(d, *keys):
 class OpenaireAdapter(SourceAdapter):
     key = "openaire"
 
-    def __init__(self, size: int = 100, format: str = "json"):
+    def __init__(
+        self, size: int = 100, format: str = "json", rate_limit_s: float | None = None
+    ):
         self.size = size
         self.format = format
         self.session = make_session()
-        self.limiter = limiter_for(urlparse(API).netloc, 2.0)
+        self.limiter = limiter_for(urlparse(API).netloc, rate_limit_s or 2.0)
 
     @staticmethod
     def normalize(result: dict) -> RawRecord:
@@ -62,7 +64,7 @@ class OpenaireAdapter(SourceAdapter):
                 web_url = wr["url"]
             if inst.get("license") and not license_:
                 license_ = inst["license"]
-        collected = (entity.get("collectedfrom") or {})
+        collected = entity.get("collectedfrom") or {}
         source_name = collected.get("@name") if isinstance(collected, dict) else None
         pid = entity.get("pid") or result.get("id") or ""
         return RawRecord(
@@ -71,22 +73,30 @@ class OpenaireAdapter(SourceAdapter):
             authors=normalize_authors(authors),
             institution=source_name,
             year=normalize_year(date),
-            doc_type=entity.get("instancetype") if isinstance(entity.get("instancetype"), str) else None,
-            abstract=entity.get("description") if isinstance(entity.get("description"), str) else None,
+            doc_type=entity.get("instancetype")
+            if isinstance(entity.get("instancetype"), str)
+            else None,
+            abstract=entity.get("description")
+            if isinstance(entity.get("description"), str)
+            else None,
             source_url=web_url,
             license=license_,
             access_status="open" if license_ else "unknown",
         )
 
-    def discover(self, query: str, max_records: int = 100) -> tuple[list[RawRecord], str | None]:
+    def discover(
+        self, query: str, max_records: int = 100
+    ) -> tuple[list[RawRecord], str | None]:
         host = urlparse(API).netloc
-        if not self.limiter.acquire(host):
-            time.sleep(self.limiter.wait_s(host))
+        self.limiter.wait_and_acquire(host)
         try:
             resp = self.session.get(
                 f"{API}/search/publications",
-                params={"title": query, "size": min(max_records, self.size),
-                        "format": self.format},
+                params={
+                    "title": query,
+                    "size": min(max_records, self.size),
+                    "format": self.format,
+                },
                 timeout=30,
             )
         except Exception as exc:

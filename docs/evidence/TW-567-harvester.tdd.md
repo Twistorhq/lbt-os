@@ -77,8 +77,41 @@ Live seed run (not a test — real network):
   skipped. Backfill run over the seed corpus produced 17 hits.
 - OAI filter fix: first live OAI run admitted 15 off-topic records
   (OR-semantics on "fiber"); switched to AND-semantics with distinctive-term
-  pinning (`match_terms: [hemp]` in sources.yaml), junk removed from corpus,
+  pinning (`match_terms: [hemp, composite]` in sources.yaml), junk removed from corpus,
   re-harvest in progress at time of writing.
+
+## 7. Rosa round-1 fix list (all 14 addressed 2026-10-16)
+
+- B1: `--fetch-pdfs` wired — fetches via adapter, persists under
+  `<db_dir>/pdfs/`, records `fulltext_path` (new `set_fulltext_path`).
+  Verified live with a stub adapter: bytes persisted, path recorded.
+- B2: `insert_document` now returns `(doc_id, is_new)`; extraction and the
+  `stored` counter run only for new rows. Verified live: re-harvest of 20
+  Crossref records against the real corpus added 0 property rows, 0 docs.
+- B3: `_CANDIDATE_DOC_TYPES` widened with `article` and `publication`
+  (OpenAlex/OpenAIRE labels); unit tests added for both.
+- M1: per-property unit validation — the regex now uses each property's own
+  accepted units; `tensile strength 500 J/m` and `density 50%` rejected
+  (unit tests).
+- M2: OAI `parse_records` populates `fulltext_url` from `.pdf`
+  dc:identifiers (unit test); `fetch_fulltext` is a live path.
+- N1: run summary reports per-run `paywall_hits`, not the cumulative DB count.
+- N2: DOI normalized (strip + lowercase) at the store choke point.
+- N3: `_http_status_for_test` seam removed from OpenAlex; test uses
+  monkeypatch.
+- N4: new `RateLimiter.wait_and_acquire()`; all adapters use it (`_last`
+  always updated).
+- N5: `rate_limit_s` from sources.yaml passed through `build_adapter` into
+  every adapter constructor.
+- N6/N7: evidence report and proposal corrected (9 enabled sources,
+  `[hemp, composite]`).
+- N8: `ruff format` applied to research/; CI gains a `Lint research
+  harvester` step (`.github/workflows/ci.yml`).
+- N9: Semantic Scholar docstring corrected (query-based discovery, low volume).
+
+Final validation this round: `pytest research/harvester/tests` -> 57 passed;
+`ruff check --config backend/ruff.toml research/harvester` -> clean;
+`ruff format --check` -> clean.
 
 ## 5. Plan-safety notes
 

@@ -1,4 +1,5 @@
 """RED: metadata normalization and heuristic property extraction."""
+
 import pytest
 
 from research.harvester.extract import (
@@ -10,11 +11,17 @@ from research.harvester.extract import (
 
 class TestNormalizeAuthors:
     def test_crossref_style_list(self):
-        people = [{"given": "Ada", "family": "Okafor"}, {"given": "B.", "family": "Reyes"}]
+        people = [
+            {"given": "Ada", "family": "Okafor"},
+            {"given": "B.", "family": "Reyes"},
+        ]
         assert normalize_authors(people) == ["Ada Okafor", "B. Reyes"]
 
     def test_plain_string_list(self):
-        assert normalize_authors(["Ada Okafor", "B. Reyes"]) == ["Ada Okafor", "B. Reyes"]
+        assert normalize_authors(["Ada Okafor", "B. Reyes"]) == [
+            "Ada Okafor",
+            "B. Reyes",
+        ]
 
     def test_single_string_splits_on_semicolon(self):
         assert normalize_authors("Ada Okafor; B. Reyes") == ["Ada Okafor", "B. Reyes"]
@@ -88,3 +95,19 @@ class TestExtractProperties:
 
     def test_none_safe(self):
         assert extract_properties(None) == []
+
+    def test_wrong_unit_rejected(self):
+        # M1: per-property unit validation — J/m is not a strength unit.
+        recs = extract_properties("The tensile strength was 500 J/m in testing.")
+        assert [r for r in recs if r["property"] == "tensile_strength"] == []
+
+    def test_density_percent_rejected(self):
+        # M1: % is not a density unit.
+        recs = extract_properties("The density was 50% of the reference.")
+        assert [r for r in recs if r["property"] == "density"] == []
+
+    def test_right_unit_still_matches(self):
+        recs = extract_properties("Tensile strength 500 MPa and density 1.2 g/cm3.")
+        by_prop = {r["property"]: r for r in recs}
+        assert by_prop["tensile_strength"]["value"] == pytest.approx(500.0)
+        assert by_prop["density"]["value"] == pytest.approx(1.2)

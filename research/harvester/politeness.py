@@ -2,6 +2,7 @@
 
 Prepared by Twistor Holdings LLC.
 """
+
 from __future__ import annotations
 
 import threading
@@ -36,16 +37,25 @@ class RateLimiter:
         remaining = self.min_interval_s - (time.monotonic() - last)
         return max(0.0, remaining)
 
+    def wait_and_acquire(self, host: str) -> None:
+        """Block until the host's interval has elapsed, then acquire.
 
-def is_fetch_allowed(url: str, user_agent: str = DEFAULT_USER_AGENT,
-                     timeout_s: int = 10) -> bool:
+        N4: replaces the acquire/sleep-without-reacquire pattern so _last is
+        always updated on the actual request path.
+        """
+        while not self.acquire(host):
+            time.sleep(self.wait_s(host))
+
+
+def is_fetch_allowed(
+    url: str, user_agent: str = DEFAULT_USER_AGENT, timeout_s: int = 10
+) -> bool:
     """Check robots.txt before fetching. Fail-closed: if robots.txt cannot
     be retrieved, the fetch is NOT allowed (skip rather than guess)."""
     try:
         parts = urlparse(url)
         robots_url = f"{parts.scheme}://{parts.netloc}/robots.txt"
-        req = urllib.request.Request(robots_url,
-                                     headers={"User-Agent": user_agent})
+        req = urllib.request.Request(robots_url, headers={"User-Agent": user_agent})
         with urllib.request.urlopen(req, timeout=timeout_s) as resp:
             body = resp.read().decode("utf-8", errors="ignore").splitlines()
     except Exception:

@@ -2,6 +2,7 @@
 
 Prepared by Twistor Holdings LLC.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -10,6 +11,7 @@ from dataclasses import dataclass, field
 @dataclass
 class RawRecord:
     """One normalized metadata record from any source adapter."""
+
     external_id: str
     title: str = ""
     authors: list = field(default_factory=list)

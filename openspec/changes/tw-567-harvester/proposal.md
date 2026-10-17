@@ -34,7 +34,7 @@ A self-contained harvester package at `research/harvester/`:
 
 1. **Pluggable source adapters** (`adapters/`) behind one `SourceAdapter`
    interface: `discover(query) -> [RawRecord]`, `fetch_fulltext(record)`.
-   Ten enabled sources in `sources.yaml`; each entry records verification
+   Nine enabled sources in `sources.yaml` (a tenth, FSU DigiNole, is registered but disabled pending endpoint verification); each entry records verification
    status and politeness parameters.
 2. **Politeness layer** (`politeness.py`): per-host rate limiting, robots.txt
    check before any PDF fetch, identifying User-Agent with contact email.

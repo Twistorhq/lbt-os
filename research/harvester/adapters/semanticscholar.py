@@ -1,13 +1,14 @@
-"""Semantic Scholar adapter: enrichment lookups, low volume, no key.
+"""Semantic Scholar adapter: query-based discovery at low volume, no key.
 
-Used for single-paper enrichment (open-access PDF links, citation counts),
-not bulk harvesting — the unauthenticated tier is throttled.
+The unauthenticated tier is throttled, so this adapter is best for targeted
+queries and single-paper enrichment (open-access PDF links), not exhaustive
+crawls. Politeness layer keeps it inside the free tier.
 
 Prepared by Twistor Holdings LLC.
 """
+
 from __future__ import annotations
 
-import time
 from urllib.parse import urlparse
 
 from ..extract import normalize_authors, normalize_year
@@ -22,11 +23,13 @@ FIELDS = "title,authors,year,abstract,url,openAccessPdf,externalIds"
 class SemanticscholarAdapter(SourceAdapter):
     key = "semanticscholar"
 
-    def __init__(self, limit: int = 100, fields: str = FIELDS):
+    def __init__(
+        self, limit: int = 100, fields: str = FIELDS, rate_limit_s: float | None = None
+    ):
         self.limit = limit
         self.fields = fields
         self.session = make_session()
-        self.limiter = limiter_for(urlparse(API).netloc, 2.0)
+        self.limiter = limiter_for(urlparse(API).netloc, rate_limit_s or 2.0)
 
     @staticmethod
     def normalize(paper: dict) -> RawRecord:
@@ -36,8 +39,9 @@ class SemanticscholarAdapter(SourceAdapter):
         return RawRecord(
             external_id=paper.get("paperId") or "",
             title=paper.get("title") or "",
-            authors=normalize_authors([(a.get("name") or "")
-                                       for a in paper.get("authors") or []]),
+            authors=normalize_authors(
+                [(a.get("name") or "") for a in paper.get("authors") or []]
+            ),
             year=normalize_year(paper.get("year")),
             doi=doi,
             doc_type="paper",
@@ -47,15 +51,19 @@ class SemanticscholarAdapter(SourceAdapter):
             access_status="open" if oapdf.get("url") else "unknown",
         )
 
-    def discover(self, query: str, max_records: int = 100) -> tuple[list[RawRecord], str | None]:
+    def discover(
+        self, query: str, max_records: int = 100
+    ) -> tuple[list[RawRecord], str | None]:
         host = urlparse(API).netloc
-        if not self.limiter.acquire(host):
-            time.sleep(self.limiter.wait_s(host))
+        self.limiter.wait_and_acquire(host)
         try:
             resp = self.session.get(
                 f"{API}/graph/v1/paper/search",
-                params={"query": query, "limit": min(max_records, self.limit),
-                        "fields": self.fields},
+                params={
+                    "query": query,
+                    "limit": min(max_records, self.limit),
+                    "fields": self.fields,
+                },
                 timeout=30,
             )
         except Exception as exc:

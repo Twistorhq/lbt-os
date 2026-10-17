@@ -2,6 +2,7 @@
 
 Prepared by Twistor Holdings LLC.
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -16,7 +17,9 @@ class SourceAdapter(ABC):
     key: str = ""
 
     @abstractmethod
-    def discover(self, query: str, max_records: int = 100) -> tuple[list[RawRecord], str | None]:
+    def discover(
+        self, query: str, max_records: int = 100
+    ) -> tuple[list[RawRecord], str | None]:
         """Return (records, note). `note` carries degradation info
         (e.g. rate-limited) or None when the run was clean."""
 

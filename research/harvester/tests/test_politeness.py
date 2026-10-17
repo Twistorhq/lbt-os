@@ -1,4 +1,5 @@
 """RED: politeness primitives — rate limiting and robots.txt handling."""
+
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -38,10 +39,12 @@ class TestRateLimiter:
     def test_thread_safe(self):
         rl = RateLimiter(min_interval_s=0.01)
         results = []
+
         def worker():
             for _ in range(20):
                 results.append(rl.acquire("t.example.com"))
                 time.sleep(0.002)
+
         threads = [threading.Thread(target=worker) for _ in range(4)]
         for t in threads:
             t.start()
@@ -78,16 +81,22 @@ def robots_server():
 
 class TestRobots:
     def test_allowed_path(self, robots_server):
-        assert is_fetch_allowed(robots_server + "/papers/a.pdf",
-                                user_agent="TestBot/1.0") is True
+        assert (
+            is_fetch_allowed(robots_server + "/papers/a.pdf", user_agent="TestBot/1.0")
+            is True
+        )
 
     def test_disallowed_path(self, robots_server):
-        assert is_fetch_allowed(robots_server + "/private/b.pdf",
-                                user_agent="TestBot/1.0") is False
+        assert (
+            is_fetch_allowed(robots_server + "/private/b.pdf", user_agent="TestBot/1.0")
+            is False
+        )
 
     def test_unreachable_robots_means_allowed(self):
         # No server on this port: fail-open would hammer; fail-closed is
         # wrong too for dead hosts. Spec: treat fetch error as NOT allowed
         # so the harvester skips rather than guesses.
-        assert is_fetch_allowed("http://127.0.0.1:9/nope.pdf",
-                                user_agent="TestBot/1.0") is False
+        assert (
+            is_fetch_allowed("http://127.0.0.1:9/nope.pdf", user_agent="TestBot/1.0")
+            is False
+        )
