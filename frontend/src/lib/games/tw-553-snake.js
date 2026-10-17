@@ -136,14 +136,15 @@ export function mountSnake(container, opts) {
   function die() {
     dead = true
     running = false
-    if (score > best) {
+    const isBest = score > 0 && score > best
+    if (isBest) {
       best = score
       try { localStorage.setItem(bestKey, String(best)) } catch (e) {}
     }
     over.innerHTML =
       '<div class="tw572-card" role="alertdialog" aria-label="Game over">' +
       '<h3>Tangled up.</h3>' +
-      '<p>' + score + (score === 1 ? ' bite' : ' bites') + (score >= best && score > 0 ? ' · new best.' : ' · Best ' + best + '.') + '</p>' +
+      '<p>' + score + (score === 1 ? ' bite' : ' bites') + (isBest ? ' · new best.' : ' · Best ' + best + '.') + '</p>' +
       '<button type="button">Go again</button></div>'
     over.hidden = false
     const btn = over.querySelector('button')
@@ -267,8 +268,7 @@ export function mountSnake(container, opts) {
   document.addEventListener('visibilitychange', onVis)
 
   resize()
-  hud.textContent = '0'
-  raf = requestAnimationFrame(tick)
+  reset()
 
   return {
     destroy() {

@@ -126,14 +126,15 @@ export function mountCar(container, opts) {
   function die() {
     dead = true
     running = false
-    if (score > best) {
+    const isBest = score > 0 && score > best
+    if (isBest) {
       best = score
       try { localStorage.setItem(bestKey, String(best)) } catch (e) {}
     }
     over.innerHTML =
       '<div class="tw572-card" role="alertdialog" aria-label="Game over">' +
       '<h3>Pile-up.</h3>' +
-      '<p>' + score + ' m' + (score >= best && score > 0 ? ' · new best.' : ' · Best ' + best + ' m.') + '</p>' +
+      '<p>' + score + ' m' + (isBest ? ' · new best.' : ' · Best ' + best + ' m.') + '</p>' +
       '<button type="button">Drive again</button></div>'
     over.hidden = false
     const btn = over.querySelector('button')
