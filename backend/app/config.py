@@ -27,9 +27,11 @@ class Settings(BaseSettings):
     # Stripe
     stripe_secret_key: str
     stripe_webhook_secret: str
-    stripe_price_basic: str
-    stripe_price_pro: str
-    stripe_price_premium: str
+    stripe_price_basic: str = "legacy-grandfathered"   # grandfathered; not sold
+    stripe_price_pro: str = "legacy-grandfathered"     # grandfathered; not sold
+    stripe_price_premium: str = "legacy-grandfathered" # grandfathered; not sold
+    stripe_price_trades_starter: str  # $299/shop/mo flat (TW-550)
+    stripe_price_trades_pro: str      # $499/shop/mo flat (TW-550)
 
     # App
     app_env: str = "development"
@@ -126,9 +128,8 @@ class Settings(BaseSettings):
             required_stripe = {
                 "STRIPE_SECRET_KEY": self.stripe_secret_key,
                 "STRIPE_WEBHOOK_SECRET": self.stripe_webhook_secret,
-                "STRIPE_PRICE_BASIC": self.stripe_price_basic,
-                "STRIPE_PRICE_PRO": self.stripe_price_pro,
-                "STRIPE_PRICE_PREMIUM": self.stripe_price_premium,
+                "STRIPE_PRICE_TRADES_STARTER": self.stripe_price_trades_starter,
+                "STRIPE_PRICE_TRADES_PRO": self.stripe_price_trades_pro,
             }
             missing = [name for name, value in required_stripe.items() if not value or "placeholder" in value.lower()]
             if missing:
@@ -138,7 +139,7 @@ class Settings(BaseSettings):
             if not self.stripe_webhook_secret.startswith("whsec_"):
                 raise ValueError("STRIPE_WEBHOOK_SECRET must be a Stripe webhook signing secret in production.")
             bad_prices = [
-                name for name in ("STRIPE_PRICE_BASIC", "STRIPE_PRICE_PRO", "STRIPE_PRICE_PREMIUM")
+                name for name in ("STRIPE_PRICE_TRADES_STARTER", "STRIPE_PRICE_TRADES_PRO")
                 if not required_stripe[name].startswith("price_")
             ]
             if bad_prices:
@@ -147,10 +148,31 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
+# TW-550: flat per-shop pricing (the anti-ServiceTitan wedge). Legacy
+# basic/pro/premium are grandfathered — existing subscriptions keep syncing
+# via webhook metadata passthrough, but no new checkouts are sold on them.
 PLAN_PRICE_MAP: dict[str, str] = {
-    "basic":   settings.stripe_price_basic,
-    "pro":     settings.stripe_price_pro,
-    "premium": settings.stripe_price_premium,
+    "trades_starter": settings.stripe_price_trades_starter,  # $299/shop/mo
+    "trades_pro":     settings.stripe_price_trades_pro,      # $499/shop/mo
+}
+
+# Explicit technician limits. None = unlimited, declared — never an absent check.
+PLAN_LIMITS: dict[str, dict] = {
+    "trades_starter": {"max_techs": None},
+    "trades_pro":     {"max_techs": None},
+}
+
+# Land motion (TW-549): 14-day trial, zero credit risk.
+TRIAL_PERIOD_DAYS = 14
+
+# Micro-toll rates in cents per event (TW-549 Twistor staple). The toll ledger
+# owns this vocabulary; M2/M3 emit events, the ledger prices them.
+# Percent-of-value events (e.g. booking.recovered at 10% of job value) are NOT
+# in this map: the emitter computes the amount and passes amount_cents.
+TOLL_RATES: dict[str, int] = {
+    "missed_call.detected": 10,   # $0.10 per detected missed call
+    "sms.auto_reply":         5,  # $0.05 per auto-SMS
+    "call.ai_handled":       50,  # $0.50 per AI-handled call
 }
 
 PLAN_FEATURES: dict[str, list[str]] = {

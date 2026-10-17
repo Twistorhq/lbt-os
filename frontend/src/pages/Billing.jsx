@@ -5,60 +5,33 @@ import { billingApi, orgApi } from '../lib/api'
 
 const plans = [
   {
-    key: 'basic',
-    name: 'Starter',
-    price: '$49/mo',
-    description: 'One dashboard that replaces four spreadsheets.',
-    features: [
-      'Lead & sales pipeline',
-      'Customer management',
-      'Revenue & expense tracking',
-      'Real-time profit dashboard',
-      'Basic metrics & reports',
-    ],
-  },
-  {
-    key: 'pro',
-    name: 'Growth',
-    price: '$129/mo',
-    description: 'For teams that need AI-powered revenue intelligence.',
-    features: [
-      'Everything in Starter',
-      'AI Revenue Audit (recurring scans)',
-      'Expense management',
-      'QuickBooks & HubSpot integrations',
-      'Up to 5 team members',
-      'PDF audit exports',
-    ],
-  },
-  {
-    key: 'premium',
-    name: 'Scale',
+    key: 'trades_starter',
+    name: 'Trades Starter',
     price: '$299/mo',
-    description: 'Multi-location operators and agencies.',
+    perShop: 'per shop, unlimited techs',
+    description: 'Everything one shop needs to run the day. Flat price, no per-tech tax.',
     features: [
-      'Everything in Growth',
-      'Unlimited team members',
-      'White-label audit reports',
-      'API access',
-      'Custom playbooks',
+      'Dispatch board: jobs, appointments, technicians',
+      'Customer & lead management',
+      'Quoting with line items',
+      'Real-time profit dashboard',
+      'Unlimited technicians',
+    ],
+  },
+  {
+    key: 'trades_pro',
+    name: 'Trades Pro',
+    price: '$499/mo',
+    perShop: 'per shop, unlimited techs',
+    description: 'The full money-finding stack. Missed calls become booked jobs.',
+    features: [
+      'Everything in Trades Starter',
+      'Missed-call layer: instant auto-SMS recovery',
+      'White-label BI dashboards',
+      'Estimating takeoff + supplier ordering',
+      'Unlimited technicians',
       'Priority support',
     ],
-  },
-  {
-    key: 'enterprise',
-    name: 'Enterprise + DOTs',
-    price: 'Custom',
-    description: 'For teams that want LBT OS plus a professional video editing and scheduling layer.',
-    features: [
-      'Everything in Scale',
-      'DOTs raw video import pipeline',
-      'Industry-specific video templates',
-      'Short-form and long-form edit generation',
-      'Review, approval, and posting schedule workflow',
-      'White-glove implementation and media ops support',
-    ],
-    contactOnly: true,
   },
 ]
 
@@ -82,7 +55,7 @@ export default function Billing() {
     retryDelay: 2500,
   })
 
-  // Stripe's redirect to this page already confirms payment — always refresh org data
+  // Stripe's redirect to this page already confirms payment - always refresh org data
   useEffect(() => {
     if (!upgradedPlan && !checkoutSessionId) return
     qc.invalidateQueries({ queryKey: ['org-me'] })
@@ -128,7 +101,7 @@ export default function Billing() {
         // Verification error → degrade gracefully (Stripe redirect already confirms payment)
         const isVerified   = checkoutStatus.isSuccess
         const isVerifying  = checkoutStatus.isPending
-        // Treat any verification failure as a soft success — plan will sync via webhook
+        // Treat any verification failure as a soft success: plan will sync via webhook
         const softSuccess  = checkoutStatus.isError || (!checkoutSessionId && upgradedPlan)
         const displayPlan  = checkoutStatus.data?.plan || upgradedPlan
         const displayLabel = plans.find((p) => p.key === displayPlan)?.name
@@ -155,10 +128,10 @@ export default function Billing() {
               </div>
               <p className={`mt-1 text-sm leading-6 ${isVerifying ? 'text-blue-700' : 'text-emerald-700'}`}>
                 {isVerifying
-                  ? 'Confirming with Stripe — this only takes a moment.'
+                  ? 'Confirming with Stripe (this only takes a moment.'
                   : isVerified
                     ? 'Verified with Stripe. Your paid features are active now.'
-                    : 'Your payment went through. Your plan will update momentarily — refresh if it takes more than a minute.'}
+                    : 'Your payment went through. Your plan will update momentarily. Refresh if it takes more than a minute.'}
               </p>
             </div>
 
@@ -178,10 +151,10 @@ export default function Billing() {
         <div>
           <div className="section-kicker">Access</div>
           <h1 className="page-title">Billing</h1>
-          <p className="page-copy">Replace your spreadsheets. Know your numbers. Start with Starter, scale when you're ready.</p>
+          <p className="page-copy">One flat price per shop. Unlimited techs. Start with a 14-day trial.</p>
         </div>
         <div className="flex items-center gap-3">
-          <span className="text-sm text-slate-500">Current plan: {org?.plan || 'basic'}</span>
+          <span className="text-sm text-slate-500">Current plan: {org?.plan || 'none'}</span>
           {subscriptionActive && (
             <button className="btn-secondary" onClick={() => portal.mutate()} disabled={portal.isPending}>
               Manage Billing
@@ -190,20 +163,22 @@ export default function Billing() {
         </div>
       </section>
 
-      <section className="grid gap-5 xl:grid-cols-4">
+      <section className="grid gap-5 xl:grid-cols-2">
         {plans.map((plan) => {
           const isCurrent = subscriptionActive && org?.plan === plan.key
-          const actionLabel = subscriptionActive ? `Switch to ${plan.name}` : `Start ${plan.name}`
+          const actionLabel = subscriptionActive ? `Switch to ${plan.name}` : `Start ${plan.name} (14-day trial)`
+          const featured = plan.key === 'trades_pro'
           return (
-            <div key={plan.key} className={`group relative overflow-hidden card-surface p-6 ${plan.key === 'pro' ? 'ring-2 ring-gold-400/60 shadow-[0_24px_60px_-30px_rgba(245,185,66,0.45)]' : ''}`}>
-              <div className={`absolute inset-x-0 top-0 h-1 ${plan.key === 'pro' ? 'bg-[linear-gradient(90deg,#6366f1_0%,#f5b942_100%)]' : 'bg-[linear-gradient(90deg,rgba(148,163,184,0.15),rgba(148,163,184,0.55),rgba(148,163,184,0.15))]'}`} />
+            <div key={plan.key} className={`group relative overflow-hidden card-surface p-6 ${featured ? 'ring-2 ring-gold-400/60 shadow-[0_24px_60px_-30px_rgba(245,185,66,0.45)]' : ''}`}>
+              <div className={`absolute inset-x-0 top-0 h-1 ${featured ? 'bg-[linear-gradient(90deg,#6366f1_0%,#f5b942_100%)]' : 'bg-[linear-gradient(90deg,rgba(148,163,184,0.15),rgba(148,163,184,0.55),rgba(148,163,184,0.15))]'}`} />
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="text-[0.7rem] font-semibold uppercase tracking-[0.22em] text-slate-400">{plan.name}</div>
                   <div className="mt-3 text-4xl font-semibold tracking-tight text-slate-950">{plan.price}</div>
+                  <div className="mt-1 text-xs font-medium uppercase tracking-[0.14em] text-slate-400">{plan.perShop}</div>
                   <div className="mt-2 text-sm leading-6 text-slate-500">{plan.description}</div>
                 </div>
-                {plan.key === 'pro' && (
+                {featured && (
                   <div className="animate-glowPulse rounded-full bg-gold-400/20 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-gold-600 ring-1 ring-gold-400/50">
                     Recommended
                   </div>
@@ -212,7 +187,7 @@ export default function Billing() {
               <div className="mt-6 space-y-3">
                 {plan.features.map((feature) => (
                   <div key={feature} className="flex items-start gap-3 text-sm leading-6 text-slate-600">
-                    <div className={`mt-2 h-2.5 w-2.5 rounded-full ${plan.key === 'pro' ? 'bg-gold-500' : plan.key === 'premium' ? 'bg-violet-500' : 'bg-emerald-500'}`} />
+                    <div className={`mt-2 h-2.5 w-2.5 rounded-full ${featured ? 'bg-gold-500' : 'bg-emerald-500'}`} />
                     <span>{feature}</span>
                   </div>
                 ))}
@@ -222,13 +197,6 @@ export default function Billing() {
                   <div className="inline-flex rounded-full border border-emerald-100 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-700 shadow-sm">
                     Current plan
                   </div>
-                ) : plan.contactOnly ? (
-                  <a
-                    className="btn-secondary w-full justify-center"
-                    href="mailto:sales@lbt-os.com?subject=DOTs%20Enterprise%20for%20LBT%20OS"
-                  >
-                    Talk to sales
-                  </a>
                 ) : (
                   <button className="btn-primary w-full justify-center" onClick={() => checkout.mutate(plan.key)} disabled={checkout.isPending}>
                     {checkout.isPending ? 'Opening Stripe...' : actionLabel}

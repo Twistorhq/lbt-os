@@ -1,9 +1,8 @@
-"""TW-550 M1 flat billing engine — TDD prove-it tests (RED first)."""
+"""TW-550 M1 flat billing engine: TDD prove-it tests (RED first)."""
 import unittest
 from unittest.mock import MagicMock, patch
 
-from app.services import stripe_service
-from app.services import toll_service
+from app.services import stripe_service, toll_service
 
 
 def _fake_db():

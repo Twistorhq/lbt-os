@@ -34,7 +34,10 @@ from ..services.stripe_service import (
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/billing")
-_ALLOWED_CHECKOUT_PLANS = {"basic", "pro", "premium"}
+# TW-550: flat trades tiers only. Legacy basic/pro/premium are grandfathered —
+# existing subscriptions keep syncing via webhook metadata passthrough, but no
+# new checkouts are sold on them.
+_ALLOWED_CHECKOUT_PLANS = {"trades_starter", "trades_pro"}
 
 
 @router.post("/checkout")

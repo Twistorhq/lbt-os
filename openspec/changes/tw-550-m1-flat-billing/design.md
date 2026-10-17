@@ -18,9 +18,9 @@ TOLL_RATES = {  # unit_rate_cents per event_type; M2 vocabulary, ledger-owned
     "missed_call.detected": 10,    # $0.10
     "sms.auto_reply":         5,   # $0.05
     "call.ai_handled":       50,   # $0.50
-    # booking.recovered is percent-of-value (10%) — computed by the emitter,
-    # recorded with unit_rate_cents=1000 (basis points) and quantity=job cents.
 }
+# Percent-of-value events (booking.recovered at 10% of job value): NOT in the
+# map — the emitter computes the amount and passes amount_cents directly.
 ```
 
 New settings: `stripe_price_trades_starter`, `stripe_price_trades_pro`
