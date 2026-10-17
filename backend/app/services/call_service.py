@@ -111,6 +111,14 @@ def _ten_dlc_configured() -> bool:
 # SMS sending (single attempt; retry loop lives in the recovery worker)
 # ---------------------------------------------------------------------------
 
+def _sanitize_error(text: str) -> str:
+    """Twilio exception text can echo the destination number (e.g. errors
+    21211/21608). Scrub digit runs before storing, logging, or returning —
+    PII doctrine TW-552 bans phone numbers in app logs and API responses."""
+    import re
+    return re.sub(r"\d{7,}", "[redacted]", text)
+
+
 def _send_recovery_sms(*, to: str, body: str) -> None:
     from ..config import settings
     if not all([settings.twilio_account_sid, settings.twilio_auth_token,
@@ -262,7 +270,7 @@ def _run_recovery(*, db, org_id: str, call_log_id: str,
             sms_error = None
             break
         except Exception as exc:  # noqa: BLE001 — self-healing: retry then dead-letter
-            sms_error = str(exc)
+            sms_error = _sanitize_error(str(exc))
             log.warning("recovery SMS attempt %d failed: %s", attempt + 1, sms_error)
             time.sleep(0.5 * (2 ** attempt))
 
@@ -343,7 +351,8 @@ def recover_call(*, db, org_id: str, call_log_id: str, outcome: str,
     if not logs:
         raise _WebhookError(404, "call log not found")
     now = datetime.now(timezone.utc).isoformat()
-    # Revenue is only meaningful on a won outcome; a lost call attributes $0.
+    # Revenue is only meaningful on a won outcome; a lost call records NULL
+    # (SUM ignores NULLs, so lost calls never inflate attributed revenue).
     attributed = revenue if outcome in ("booked", "won") else None
     db.table("missed_call_recoveries").update({
         "recovered_at": now,

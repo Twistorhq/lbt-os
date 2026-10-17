@@ -231,6 +231,52 @@ class MissedCallTests(unittest.TestCase):
         self.assertEqual(leads[0]["source"], "missed_call")
         self.assertIsNotNone(leads[0]["follow_up_at"])
 
+    def test_duplicate_race_returns_winner_not_500(self):
+        """Concurrent duplicate delivery: insert loses the UNIQUE race ->
+        returns the winner's row as duplicate, no 500, no extra row."""
+        real_table = self.db.table
+
+        def flaky_table(name):
+            q = real_table(name)
+            if name == "call_logs":
+
+                def racing_insert(row):
+                    raise Exception('duplicate key value violates unique constraint "call_logs_twilio_call_sid_key"')
+
+                q.insert = racing_insert
+            return q
+
+        # seed the "winner" row as if the concurrent delivery committed first
+        self.db._tables["call_logs"].append({
+            "id": "winner-1", "org_id": ORG_ID, "twilio_call_sid": CALL_SID,
+            "direction": "inbound", "from_number": CALLER,
+            "from_number_hash": "h", "to_number": SHOP_NUMBER,
+            "started_at": "2026-10-16T10:00:00Z", "status": "no-answer",
+        })
+        with mock.patch.object(self.db, "table", side_effect=flaky_table):
+            with mock.patch("app.services.call_service._in_business_hours",
+                             return_value=True), \
+                 mock.patch("app.services.call_service._ten_dlc_configured",
+                            return_value=True), \
+                 mock.patch("app.services.call_service._send_recovery_sms"):
+                resp = self._post_voice(_voice_params())
+        self.assertEqual(resp.status_code, 200)
+        # duplicate path: no extra row, no recovery run for the loser
+        # (the endpoint returns TwiML, so duplicate-ness is proven by state)
+        self.assertEqual(len(self.db._tables["call_logs"]), 1)
+        self.assertEqual(self.db._tables["call_logs"][0]["id"], "winner-1")
+        self.assertEqual(len(self.db._tables["missed_call_recoveries"]), 0)
+        self.assertEqual(len(self.db._tables["leads"]), 0)
+
+    def test_sanitize_error_strips_phone_numbers(self):
+        from app.services.call_service import _sanitize_error
+        err = ("Twilio Error 21211: Invalid 'To' Phone Number: "
+               "+13035550199 is not valid")
+        clean = _sanitize_error(err)
+        self.assertNotIn("13035550199", clean)
+        self.assertIn("[redacted]", clean)
+        self.assertIn("21211", clean)  # short codes survive
+
     # -- money view: masking + tenant isolation --
     def test_sms_failure_dead_letters_without_500(self):
         """Twilio down 3x -> sms_error recorded, sms_sent_at NULL, still 200."""

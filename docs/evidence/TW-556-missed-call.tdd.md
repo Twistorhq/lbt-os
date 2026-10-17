@@ -33,9 +33,9 @@ Per behavior, RED then GREEN. RED commit: `TW-556 RED: missed-call layer tests`
   path (retry loop) — live Twilio failure not simulated (no network in tests).
 
 Validation commands (all fresh, this session):
-- `pytest tests/test_missed_call.py -q` → 8 passed
-- `pytest tests/ -q -p no:cacheprovider` → 234 passed, 8 subtests passed
-- `ruff check` (CI 0.16.8, via jalen-ci venv) on all touched files → clean
+- `pytest tests/test_missed_call.py -q` → 11 passed
+- `pytest tests/ -q -p no:cacheprovider` → 237 passed, 8 subtests passed
+- `ruff check app tests` (CI's 0.16.8), run AFTER the final edit → All checks passed
 - Test-isolation fix: `settings.twilio_auth_token` pinned via
   `mock.patch.object` in setUp (the settings singleton is import-order
   dependent; env setdefault was racy and failed 4 tests under full-suite runs).
@@ -50,9 +50,12 @@ Validation commands (all fresh, this session):
 | 5 | After-hours → callback lead, no SMS | test_after_hours_creates_callback_lead_no_sms | unit | PASS | 8 passed run |
 | 6 | Missed view masks numbers | test_missed_view_masks_numbers | unit | PASS | 8 passed run |
 | 7 | Cross-org recover → 404 | test_cross_org_missed_call_returns_404 | unit | PASS | 8 passed run |
-| 8 | Recover marks + links appointment + revenue | test_recover_marks_recovered_and_links_appointment | unit | PASS | 8 passed run |
-| 9 | No regressions | `pytest tests/` full suite | CI | PASS | 234 passed |
-| 10 | Lint clean | `ruff check` (CI's 0.16.8) | CI | PASS | All checks passed |
+| 8 | Recover marks + links appointment + revenue | test_recover_marks_recovered_and_links_appointment | unit | PASS | 11 passed run |
+| 9 | SMS failure 3x → dead-letter, still 200 | test_sms_failure_dead_letters_without_500 | unit | PASS | 11 passed run |
+| 10 | Duplicate race → winner row, no 500 | test_duplicate_race_returns_winner_not_500 | unit | PASS | 11 passed run |
+| 11 | Error sanitizer strips phone numbers | test_sanitize_error_strips_phone_numbers | unit | PASS | 11 passed run |
+| 12 | No regressions | `pytest tests/` full suite | CI | PASS | 237 passed |
+| 13 | Lint clean | `ruff check app tests` (CI's 0.16.8) | CI | PASS | All checks passed |
 
 ## 4. Coverage and known gaps
 - `POST /calls/sms-webhook`: implemented (signature validation + org
