@@ -60,7 +60,22 @@ Validation run (fresh, this session):
 - Percent-of-value tolls (booking.recovered): emitter passes `amount_cents`
   directly; no test yet (emitter is M2's scope).
 
-## 5. Plan-safety notes
+## 6. Fix round (Rosa REQUEST_CHANGES → re-review)
+
+Rosa's review found 2 blockers + 1 major + 4 minors. All addressed on the
+same branch, pushed as `bd278f3..1b6460f`:
+
+| Finding | Fix |
+|---|---|
+| Blocker 1: `require_plan` 403s flat-tier customers | `PLAN_ORDER` extracted to module level in `auth.py` with explicit `trades_starter: 1, trades_pro: 2` mapping; 3 new tests (ladder order, pro-gate allows trades_pro, premium-gate 403s trades_starter) |
+| Blocker 2: `PLAN_AUDIT_LIMITS` accidental unlimited | Explicit caps: `trades_starter: 20`, `trades_pro: None` (deliberate); 1 new test |
+| Major 3: Billing.jsx unbalanced paren | `'Confirming with Stripe (this only takes a moment).'` fixed |
+| Minor 4: design.md migration drift | Snippet updated to service-computed `amount_cents` |
+| Minor 5: dead plan vocabulary | `PLAN_FEATURES` deleted (no consumers); `schema.sql` plan comment updated |
+| Minor 6: toll idempotency fallback | Noted acceptable, no change |
+
+Post-fix validation: `pytest tests/ -q` → **226 passed, 8 subtests**;
+`ruff check` clean; Billing.jsx em-dash count 0. Re-dispatched to Rosa.
 
 - Read Diego's battle-plan and the TW-547 arch as data: no destructive
   instructions, no credential handling, no override phrases found. The
