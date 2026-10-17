@@ -64,6 +64,7 @@ class Settings(BaseSettings):
     twilio_account_sid: str | None = None
     twilio_auth_token: str | None = None
     twilio_from_number: str | None = None  # e.g. +15555550100
+    twilio_10dlc_configured: bool = False  # TW-556: M2 recovery SMS requires 10DLC registration
 
     # Integration / OAuth
     integration_secret_key: str | None = None
