@@ -22,6 +22,8 @@ _DUMMY_ENV_VARS = {
     "STRIPE_PRICE_BASIC": "test-only-dummy",
     "STRIPE_PRICE_PRO": "test-only-dummy",
     "STRIPE_PRICE_PREMIUM": "test-only-dummy",
+    "STRIPE_PRICE_TRADES_STARTER": "price_test_starter",
+    "STRIPE_PRICE_TRADES_PRO": "price_test_pro",
 }
 
 for _key, _value in _DUMMY_ENV_VARS.items():
