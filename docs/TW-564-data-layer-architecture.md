@@ -417,7 +417,7 @@ Pricing semantics (TW-549 doctrine, applied to data APIs):
 - **Collar:** monthly min/max on the variable portion. `derivative_params = {floor_cents, cap_cents}`. Budget certainty for the buyer, a floor for us.
 - **Opportunity credits (`credits`):** pre-bought toll credits at a 20% discount, drawn down per call. `derivative_params = {discount_pct, block_cents}`. Locks in spend, funds our float.
 
-**Dynamic pricing (DATA LAYER DOCTRINE, Justynn 2026-10-16):** derivative terms scale with platform volume. `derivative_params` carries `volume_tiers`: as aggregate platform call volume crosses tier thresholds, per-call rates step down and found-money percentages compress - the buyer's unit cost falls as the network grows, which is the incentive to bring more volume. Tiers are declared in the plan (no surprise repricing); the toll worker reads the current tier at emit time.
+**Dynamic pricing (DATA LAYER DOCTRINE, Justynn 2026-10-16, LAW):** derivative pricing is DYNAMIC based on platform volume - rates and derivative terms scale with volume, never static schedules. `derivative_params` carries `volume_tiers`: as aggregate platform call volume crosses tier thresholds, per-call rates step down, found-money percentages compress, collar bounds widen, and credit-block discounts deepen. The buyer's unit cost falls as the network grows, which is the incentive to bring more volume. Tiers are declared in the plan (no surprise repricing); the toll worker reads the current tier at emit time and stamps the applied tier on the `toll_events` row.
 
 The toll worker computes the charge from the key's plan at emit time; the `toll_events` row carries the computed amount + plan reference. One money pipe: product tolls and data tolls land in the same ledger.
 
