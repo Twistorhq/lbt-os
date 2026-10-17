@@ -198,7 +198,7 @@ purchase_orders (
   line_items jsonb NOT NULL DEFAULT '[]',       -- sku | description | qty | unit_cost
   total_cost numeric, sent_at timestamptz, received_at timestamptz
 );
--- estimating takeoff lives on quotes: quotes.attributes JSONB gains
+-- estimating takeoff lives on quotes: the M4 migration must ADD `quotes.attributes` JSONB (it does not exist yet), storing
 -- { "takeoff": { "squares": 28.5, "pitch": "6/12", "waste_pct": 10, "material": "architectural_shingle" } }
 ```
 
@@ -234,7 +234,7 @@ M2 and M3 are independent of each other — they can build in parallel once 3B/3
 1. **Billing plan policy** (`config.py` `PLAN_PRICE_MAP`): must become flat per-shop tiers before M1. Find and remove every seat-count-based price computation — grep `per_user`, `per_seat`, `quantity` in `stripe_service.py` and `Billing.jsx` first. (Verified: plan keys flow through checkout + webhooks; the refactor is contained.)
 2. **Twilio config split**: voice needs its own number + webhook URL config distinct from the SMS sender (`twilio_voice_number`, `TWILIO_VOICE_WEBHOOK_URL`). Do not reuse the SMS from-number for voice until porting is confirmed.
 3. **`main` is 7 behind `origin/main`** in the default checkout — all work branches from `origin/main` (this worktree already does).
-4. **RLS contract**: `supabase/rls_policies.sql` + per-migration `CREATE POLICY` statements enforce org isolation at the database layer (verified: 8 policy statements in `migration_service_datamodel.sql`). Every new table in section 4 MUST ship with a matching org-isolation RLS policy in its migration — app-level `auth.org_id` scoping alone is not the contract. A table without a policy is a finding, not a follow-up.
+4. **RLS contract**: `supabase/rls_policies.sql` + per-migration `CREATE POLICY` statements enforce org isolation at the database layer (verified: 1 dynamic DO-block over 6 tables in `migration_service_datamodel.sql` + 10 static policies in `rls_policies.sql`, `auth_org_id()` from JWT). Every new table in section 4 MUST ship with a matching org-isolation RLS policy in its migration — app-level `auth.org_id` scoping alone is not the contract. A table without a policy is a finding, not a follow-up.
 
 ## 7. Risks and open questions (for Rosa / Justynn)
 
