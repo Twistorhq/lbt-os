@@ -22,7 +22,7 @@ This run is **architecture only**. No code, no migrations. Each niche becomes it
 
 TW-552 says "hashed at ingestion." This section says exactly where, per source type, and with what.
 
-**The rule: HMAC-SHA256, never bare sha256.** Bare sha256 of a phone number or a small-set partner ref is dictionary-reversible. Every hashed identifier in this lakehouse is:
+**The rule: HMAC-SHA256 for all identifiers, never bare sha256 on PII or partner refs.** Bare sha256 of a phone number or a small-set partner ref is dictionary-reversible. (Non-identifier hashes are different: `content_hash` on stored payloads and the toll fingerprint are integrity/dedupe hashes over already-hashed or non-PII content, and may use plain sha256.) Every hashed identifier in this lakehouse is:
 
 ```
 HMAC-SHA256(secret_niche_v{k},  niche || '|' || field_name || '|' || value)
@@ -209,7 +209,7 @@ dead_letters (
 **Per-niche redaction lists (Major 3):** each niche's OpenSpec proposal MUST include its redaction field list  -  the exact fields the promotion job strips or HMACs before any `dead_letters` write. Dre (DBA) owns the canonical lists in-repo at `backend/app/data_layer/redaction/{niche}_v{N}.yaml`; the `redaction_spec_version` on the dead letter pins which list was applied. No list, no niche ships.
 
 **Lineage read rules (Major 1, spelled out):**
-- **Org-private rows:** the org may read its own rows' full lineage (silver row → artifact → source). The org already knows its own data; nothing leaks.
+- **Org-private rows:** the org may read its own rows' full lineage (silver row → artifact → source) through the `data_events_org_lineage(silver_table text, silver_id uuid)` SECURITY DEFINER function, which asserts the row's `org_id = auth_org_id()` before returning artifact-level events. The org already knows its own data; nothing leaks. (Round-2 fix: named mechanism.)
 - **Shared-asset rows:** lineage terminates at `promotion_batch_id`. Reads go through the `data_events_cohort(promotion_batch_id)` SECURITY DEFINER function, which returns batch-level rows only (counts, timestamps, contract versions)  -  never `artifact_id`, never per-row contributor drill-down.
 - `bronze_artifacts.source_name` / `collector` are unreachable from any shared-asset read path: the only join key (`artifact_id`) is NULL on those events, and the registry table is service_role-only.
 
@@ -278,6 +278,7 @@ pyrolyzer_units (
 );
 telemetry_readings (
   unit_id uuid REFERENCES pyrolyzer_units(id),
+  verification_status text NOT NULL DEFAULT 'pending',  -- §3 shared convention (round-2 fix)
   ts timestamptz NOT NULL,                        -- sensor clock
   received_at timestamptz NOT NULL DEFAULT now(), -- ingest clock (Minor 10)
   temp_c numeric, feed_rate_kg_h numeric,
@@ -370,7 +371,8 @@ POST /data/v1/ingest/{niche}                   -  partner push ingestion (batch)
 ```sql
 data_api_keys (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  key_hash text NOT NULL,       -- HMAC with the server key-signing secret (§0 spirit)
+  key_hash text NOT NULL,       -- HMAC with the server key-signing secret
+                                -- (Vault: datalayer/signing/api_key_hmac, versioned)
   partner_id text NOT NULL,     -- identity: who holds the key
   billing_org_id uuid NOT NULL REFERENCES organizations(id),
                                 -- who PAYS for this key's lookups (Major 5a).
@@ -394,8 +396,8 @@ data_api_plans (
   name text NOT NULL,            -- 'mrv_payg' | 'benchmarks_found_money' | ...
   base_cents int NOT NULL DEFAULT 0,     -- flat base per month (the land)
   per_call_cents int NOT NULL DEFAULT 0, -- the micro-toll per served call (the expand)
-  derivative_type text,          -- null | 'found_money' | 'collar' | 'credits'
-  derivative_params jsonb,       -- see semantics below
+  derivative_type text,          -- null | 'found_money' | 'performance_put' | 'collar' | 'credits'
+  derivative_params jsonb,       -- see semantics below; volume tiers scale with platform volume
   created_at timestamptz NOT NULL DEFAULT now()
 );
 data_api_subscriptions (
@@ -411,13 +413,16 @@ data_api_subscriptions (
 Pricing semantics (TW-549 doctrine, applied to data APIs):
 - **Pay-per-use (derivative_type null):** `per_call_cents × calls`. The meter runs; the bill is arithmetic.
 - **Found-money call option (`found_money`):** `base_cents` + `pct` of attributed value above `baseline`. `derivative_params = {pct_of_value, baseline_cents, attribution_field}`. Example: MRV verification API  -  base $50/mo + 2% of verified credit value above the buyer's monthly baseline, attributed from `gold_mrv_credits` itself. The customer pays big only when we find big.
+- **Performance put (`performance_put`):** if the API misses its SLA (e.g. verification coverage below the contracted threshold for the month), the buyer gets toll credits. Risk reversal we can offer because the pipeline is deterministic. `derivative_params = {sla_metric, sla_threshold, credit_cents}`.
 - **Collar:** monthly min/max on the variable portion. `derivative_params = {floor_cents, cap_cents}`. Budget certainty for the buyer, a floor for us.
 - **Opportunity credits (`credits`):** pre-bought toll credits at a 20% discount, drawn down per call. `derivative_params = {discount_pct, block_cents}`. Locks in spend, funds our float.
+
+**Dynamic pricing (DATA LAYER DOCTRINE, Justynn 2026-10-16):** derivative terms scale with platform volume. `derivative_params` carries `volume_tiers`: as aggregate platform call volume crosses tier thresholds, per-call rates step down and found-money percentages compress - the buyer's unit cost falls as the network grows, which is the incentive to bring more volume. Tiers are declared in the plan (no surprise repricing); the toll worker reads the current tier at emit time.
 
 The toll worker computes the charge from the key's plan at emit time; the `toll_events` row carries the computed amount + plan reference. One money pipe: product tolls and data tolls land in the same ledger.
 
 **Idempotency  -  "never double-toll" as mechanism (Major 5b):**
-- The edge **requires** an `Idempotency-Key` header on every tollable endpoint. It is mapped 1:1 to `request_id`. Serve the read, then enqueue the toll (below). The toll worker checks `data_toll_dedupe` before emitting:
+- **Contract:** the `Idempotency-Key` header is REQUIRED on every tollable endpoint (documented in the API contract; clients that omit it get a 400 with a clear error, not a silent fallback). The key is mapped 1:1 to `request_id`. Serve the read, then enqueue the toll (below). The toll worker checks `data_toll_dedupe` before emitting:
 ```sql
 data_toll_dedupe (
   idempotency_key text PRIMARY KEY,   -- the client's key, verbatim
@@ -425,9 +430,23 @@ data_toll_dedupe (
   endpoint text NOT NULL,
   tolled_at timestamptz NOT NULL DEFAULT now()
 );
+-- Out-of-band toll queue (durable; the worker drains it with retry + backoff):
+toll_emit_queue (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  idempotency_key text NOT NULL,
+  key_id uuid NOT NULL REFERENCES data_api_keys(id),
+  billing_org_id uuid NOT NULL REFERENCES organizations(id),
+  endpoint text NOT NULL,
+  plan_id uuid REFERENCES data_api_plans(id),
+  attempts int NOT NULL DEFAULT 0,
+  status text NOT NULL DEFAULT 'queued',  -- 'queued'|'processing'|'done'|'dead'
+  next_retry_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (idempotency_key)  -- the queue itself cannot double-enqueue
+);
 ```
-- If the client omits the header, the server generates a `request_id` AND applies fingerprint-window dedupe: `fingerprint = sha256(method|path|sorted_query_params)`; a toll for the same `(key_id, endpoint, fingerprint)` inside a 60-second window is dropped. Documented fallback, not the primary path  -  clients are told to send the header.
-- **Out-of-band toll emit (TW-208):** the API serves the read FIRST, then enqueues a toll job to `toll_emit_queue` (durable Postgres queue table). A worker drains it with retry + backoff. If the `toll_events` insert fails, the read already succeeded; the queue retries. A failed toll write never fails a data read, and no toll is ever emitted twice for one idempotency key.
+- **Defense in depth (not the contract):** if a key ever arrives without the header through a legacy path, the server generates a `request_id` and applies fingerprint-window dedupe: `fingerprint = sha256(method|path|sorted_query_params)`; a toll for the same `(key_id, endpoint, fingerprint)` inside a 60-second window is dropped. This is a backstop, not the promise  -  the promise is the required header.
+- **Out-of-band toll emit (TW-208):** the API serves the read FIRST, then enqueues a toll job to `toll_emit_queue`. A worker drains it with retry + backoff. If the `toll_events` insert fails, the read already succeeded; the queue retries. A failed toll write never fails a data read, and no toll is ever emitted twice for one idempotency key.
 
 **Rate limits (Minor 9):** per-key token bucket. Enforcement lives in worker memory (in-process bucket per API worker); `data_api_usage` (key_id, window_start, count) is the reconciliation record, flushed every 60 seconds  -  not the enforcement path, so there is no hot-row write per read. 429 with `Retry-After`, logged, never a 500. The flush cadence and the in-memory fallback are both in the runbook.
 
@@ -445,7 +464,7 @@ CREATE POLICY org_isolation ON <t>
   WITH CHECK (org_id = auth_org_id());
 
 -- Class 2: shared-asset (gold_* marts, composite_samples, biochar_batches,
--- permit_records, telemetry_readings, pyrolyzer_units).
+-- mrv_attestations, permit_records, jurisdiction_norms, telemetry_readings, pyrolyzer_units).
 -- NO direct reads by any JWT role: deny-all by default (no policies created).
 -- All reads go through the data API (service_role), which enforces
 -- key.niche_scope @> ARRAY[niche] before serving. The API is the policy.
@@ -530,4 +549,5 @@ Each niche ships as: OpenSpec proposal (MUST include its per-niche redaction lis
 | Minor 13 | K-anonymity flapping via differencing | §3: hold-and-suppress, 3 consecutive refreshes |
 | Minor 14 | Bronze immutability vs deletion requests | §1: carve-out A (crypto-shredding) |
 | Minor 15 | RLS templates missing | §4: three class templates with `auth_org_id()` |
-| Justynn | Toll-metered pay-per-use APIs + derivative pricing | §4: `data_api_plans`, `data_api_subscriptions`, four pricing semantics |
+| Justynn | Toll-metered pay-per-use APIs + derivative pricing | §4: `data_api_plans`, `data_api_subscriptions`, five pricing semantics (pay-per-use, found_money, performance_put, collar, credits) + DYNAMIC volume-tiered terms (DATA LAYER DOCTRINE) |
+| Round-2 minors | telemetry_readings missing verification_status; org-private lineage unnamed; sha256 scoping; Idempotency-Key contract; signing Vault path; mrv_attestations in Class 2; data_events_cohort signature; performance_put in enum; toll_emit_queue DDL | §3 (verification_status added); §2 (`data_events_org_lineage` named); §0 (identifiers-only scoping); §4 (400 contract + Vault path `datalayer/signing/api_key_hmac` + Class 2 list + `toll_emit_queue` DDL + `performance_put`) |
