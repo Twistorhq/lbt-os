@@ -43,8 +43,10 @@ class TestRateLimiter:
                 results.append(rl.acquire("t.example.com"))
                 time.sleep(0.002)
         threads = [threading.Thread(target=worker) for _ in range(4)]
-        for t in threads: t.start()
-        for t in threads: t.join()
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
         # at most a handful should have been allowed given the interval
         assert sum(results) < len(results)
 

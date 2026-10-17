@@ -2,8 +2,6 @@
 import json
 import os
 
-import pytest
-
 from research.harvester.adapters.crossref import CrossrefAdapter
 from research.harvester.adapters.oai_pmh import OaiPmhAdapter
 from research.harvester.adapters.openalex import OpenAlexAdapter
@@ -39,7 +37,7 @@ class TestOaiPmhAdapter:
     def test_parse_list_records(self):
         xml = load("oai_listrecords.xml")
         records, token = OaiPmhAdapter.parse_records(xml)
-        assert len(records) == 2
+        assert len(records) == 1  # the deleted record is skipped
         first = records[0]
         assert first.external_id == "oai:krex.k-state.edu:123456789/42"
         assert "hemp" in first.title.lower()

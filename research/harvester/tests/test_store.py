@@ -1,5 +1,4 @@
 """RED: SQLite corpus store — schema, dedupe, run logging."""
-import os
 
 import pytest
 
