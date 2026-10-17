@@ -174,6 +174,8 @@ TOLL_RATES: dict[str, int] = {
     "missed_call.detected": 10,   # $0.10 per detected missed call
     "sms.auto_reply":         5,  # $0.05 per auto-SMS
     "call.ai_handled":       50,  # $0.50 per AI-handled call
+    "bi.embed_view":          5,  # $0.05 per public embed view (TW-570)
+    "bi.connector_sync":     25,  # $0.25 per connector sync (TW-570)
 }
 
 # NOTE (TW-550): PLAN_FEATURES removed — it had no consumers and listed only

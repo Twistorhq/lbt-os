@@ -26,6 +26,7 @@ class FakeQuery:
         self._pending_insert = None
         self._pending_update = None
         self._pending_delete = False
+        self._single = False
 
     def select(self, _cols="*"):
         return self
@@ -36,6 +37,26 @@ class FakeQuery:
 
     def neq(self, col, value):
         self._rows = [r for r in self._rows if r.get(col) != value]
+        return self
+
+    def gte(self, col, value):
+        self._rows = [r for r in self._rows
+                      if r.get(col) is not None and r.get(col) >= value]
+        return self
+
+    def lte(self, col, value):
+        self._rows = [r for r in self._rows
+                      if r.get(col) is not None and r.get(col) <= value]
+        return self
+
+    def lt(self, col, value):
+        self._rows = [r for r in self._rows
+                      if r.get(col) is not None and r.get(col) < value]
+        return self
+
+    def gt(self, col, value):
+        self._rows = [r for r in self._rows
+                      if r.get(col) is not None and r.get(col) > value]
         return self
 
     def in_(self, col, values):
@@ -51,9 +72,11 @@ class FakeQuery:
         return self
 
     def single(self):
+        self._single = True
         return self
 
     def maybe_single(self):
+        self._single = True
         return self
 
     def insert(self, row):
@@ -79,24 +102,34 @@ class FakeQuery:
                         raise RuntimeError("duplicate key value violates unique constraint")
             self._db._tables[self._table].append(row)
             self._pending_insert = None
+            if self._single:
+                self._single = False
+                return FakeResult(row)
             return FakeResult([row])
         if self._pending_update is not None:
             for r in self._rows:
                 r.update(self._pending_update)
             self._pending_update = None
+            if self._single:
+                self._single = False
+                return FakeResult(self._rows[0] if self._rows else None)
             return FakeResult(self._rows)
         if self._pending_delete:
             for r in list(self._rows):
                 self._db._tables[self._table].remove(r)
             self._pending_delete = False
             return FakeResult([])
+        if self._single:
+            self._single = False
+            return FakeResult(self._rows[0] if self._rows else None)
         return FakeResult(self._rows)
 
 
 class FakeDB:
     TABLES = (
         "organizations", "bi_dashboards", "bi_embeds", "bi_metric_snapshots",
-        "toll_events", "sales", "customers", "leads", "integration_connections",
+        "toll_events", "sales", "customers", "leads", "expenses",
+        "integration_connections",
     )
 
     def __init__(self):
@@ -136,14 +169,14 @@ def _seed_dashboard(db, org_id, dash_id="dash-1", is_public=True, widgets=None):
     })
 
 
-def _seed_embed(db, dash_id="dash-1", token="raw-token-abc", revoked=False,
-                expired=False):
+def _seed_embed(db, org_id=ORG_A, dash_id="dash-1", token="raw-token-abc",
+                revoked=False, expired=False):
     import datetime
     expires = None
     if expired:
         expires = "2000-01-01T00:00:00+00:00"
     db._tables["bi_embeds"].append({
-        "id": "embed-1", "dashboard_id": dash_id,
+        "id": "embed-1", "org_id": org_id, "dashboard_id": dash_id,
         "token_hash": hashlib.sha256(token.encode()).hexdigest(),
         "expires_at": expires, "revoked": revoked,
     })
@@ -208,7 +241,7 @@ class EmbedTokenTests(unittest.TestCase):
     def test_valid_token_renders_aggregates(self):
         payload = bi_service.render_embed(self.db, self.token)
         self.assertIn("widgets", payload)
-        self.assertIn("theme", payload)
+        self.assertIn("theme", payload["dashboard"])
         self.assertEqual(payload["widgets"][0]["metric"], "revenue_30d")
 
     def test_embed_payload_has_no_pii(self):
@@ -391,18 +424,23 @@ class ConnectorFrameworkTests(unittest.TestCase):
             self.assertNotIsInstance(v, list, "connector leaked row lists")
 
     def test_stale_snapshot_renders_updating_no_compute(self):
-        # Public path never triggers compute or writes (Rosa Minor 5).
+        # Public path never triggers compute or snapshot writes (Rosa Minor 5).
+        # If render_embed touched connector.compute, the mock raises.
         db = FakeDB()
         _seed_org(db, ORG_A)
-        _seed_dashboard(db, ORG_A, widgets=[
-            {"id": "w1", "metric": "nosuch_metric_xyz", "title": "X",
-             "chart": "kpi", "connector": "internal"},
-        ])
+        _seed_dashboard(db, ORG_A)  # revenue_30d widget, no snapshots seeded
         tok = _seed_embed(db, token="tok-stale")
-        with mock.patch.object(bi_service, "_compute_widget",
-                               side_effect=AssertionError("compute called")):
+        evil = mock.Mock()
+        evil.compute.side_effect = AssertionError("compute on public path")
+        evil.metric_definitions.return_value = \
+            bi_connectors.InternalConnector().metric_definitions()
+        snapshots_before = len(db._tables["bi_metric_snapshots"])
+        with mock.patch.dict(bi_connectors.BI_CONNECTOR_REGISTRY,
+                             {"internal": evil}):
             payload = bi_service.render_embed(db, tok)
-        self.assertIn("error", payload["widgets"][0])
+        self.assertEqual(payload["widgets"][0].get("status"), "updating")
+        self.assertEqual(len(db._tables["bi_metric_snapshots"]),
+                         snapshots_before)
 
 
 class HttpEndpointTests(unittest.TestCase):
