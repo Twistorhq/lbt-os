@@ -45,11 +45,21 @@ def _dc_text(md: ET.Element, tag: str) -> list[str]:
 class OaiPmhAdapter(SourceAdapter):
     key = "oai_pmh"
 
-    def __init__(self, base_url: str, metadataPrefix: str = "oai_dc", **_kw):
+    def __init__(self, base_url: str, metadataPrefix: str = "oai_dc",
+                 match_terms: list[str] | None = None, **_kw):
         self.base_url = base_url.rstrip("/")
         self.metadataPrefix = metadataPrefix
+        # AND-semantics filter terms. Defaults to the query's own terms.
+        # sources.yaml should pin the distinctive term (e.g. ["hemp"]) so
+        # generic words like "fiber" cannot admit irrelevant records.
+        self.match_terms = [t.lower() for t in match_terms] if match_terms else None
         self.session = make_session()
         self.limiter = limiter_for(urlparse(self.base_url).netloc, 3.0)
+
+    @staticmethod
+    def matches(text: str, terms: list[str]) -> bool:
+        haystack = text.lower()
+        return all(t.lower() in haystack for t in terms)
 
     @staticmethod
     def parse_records(xml_text: str) -> tuple[list[RawRecord], str | None]:
@@ -110,7 +120,7 @@ class OaiPmhAdapter(SourceAdapter):
         return self.parse_records(resp.text)
 
     def discover(self, query: str, max_records: int = 100) -> tuple[list[RawRecord], str | None]:
-        terms = [t.lower() for t in query.split() if len(t) > 2]
+        terms = self.match_terms or [t.lower() for t in query.split() if len(t) > 2]
         records: list[RawRecord] = []
         token: str | None = None
         note = None
@@ -123,8 +133,7 @@ class OaiPmhAdapter(SourceAdapter):
                 note = f"oai-pmh error after {len(records)} records: {exc}"
                 break
             for rec in batch:
-                haystack = f"{rec.title} {rec.abstract or ''}".lower()
-                if terms and not any(t in haystack for t in terms):
+                if not self.matches(f"{rec.title} {rec.abstract or ''}", terms):
                     continue
                 records.append(rec)
                 if len(records) >= max_records:

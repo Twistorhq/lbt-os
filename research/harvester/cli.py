@@ -33,6 +33,47 @@ ADAPTERS: dict[str, type[SourceAdapter]] = {
     "oai_pmh": OaiPmhAdapter,
 }
 
+# Doc types worth flagging when paywalled (Justynn's paywall rule).
+_CANDIDATE_DOC_TYPES = {
+    "journal-article", "dissertation", "paper", "preprint", "report",
+    "conference-paper",
+}
+
+
+def is_paywall_candidate(rec, query: str) -> bool:
+    """A record is a paywall candidate when it looks valuable (on-topic doc
+    type with an abstract) but offers no open fulltext and no open license.
+    Such hits are never silently skipped — they go to the hit-list."""
+    if rec.fulltext_url:
+        return False
+    if (rec.access_status == "open"
+            or (rec.license and rec.license not in ("other", "unknown"))):
+        return False
+    if (rec.doc_type or "").lower() not in _CANDIDATE_DOC_TYPES:
+        return False
+    return bool((rec.abstract or "").strip() or (rec.title or "").strip())
+
+
+def paywall_hit_from(rec, source_key: str, run_id: int, query: str) -> dict:
+    abstract = (rec.abstract or "").strip()
+    return {
+        "source_key": source_key,
+        "run_id": run_id,
+        "external_id": rec.external_id,
+        "title": rec.title,
+        "authors": rec.authors,
+        "year": rec.year,
+        "doi": rec.doi,
+        "doc_type": rec.doc_type,
+        "source_url": rec.source_url,
+        "what_it_contains": abstract[:500] if abstract else rec.title,
+        "why_valuable": (
+            f"On-topic {rec.doc_type} matching '{query}' with no open "
+            f"fulltext and no open license"
+        ),
+        "access_cost": None,  # check the publisher page at buy-decision time
+    }
+
 
 def build_adapter(entry: dict) -> SourceAdapter:
     cls = ADAPTERS.get(entry["adapter"])
@@ -114,11 +155,19 @@ def cmd_run(args) -> int:
                         store.insert_property(doc_id, prop)
                     except Exception:
                         continue
+                # Paywall rule: valuable but closed -> hit-list, never skipped.
+                try:
+                    if is_paywall_candidate(rec, args.query):
+                        store.log_paywall_hit(
+                            paywall_hit_from(rec, key, run_id, args.query))
+                except Exception:
+                    continue
             except Exception:
                 continue  # per-item fault isolation
         store.finish_run(run_id, "ok", found, stored, "; ".join(notes) or None)
         summary["sources"][key] = {
             "status": "ok", "found": found, "stored": stored,
+            "paywall_hits": len(store.list_paywall_hits()),
             "note": "; ".join(notes) or None,
         }
     store.close()

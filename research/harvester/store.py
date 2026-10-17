@@ -68,6 +68,25 @@ CREATE TABLE IF NOT EXISTS property_records (
     extraction_method TEXT NOT NULL,
     confidence REAL NOT NULL
 );
+-- Paywall hit-list (Justynn's standing rule, 2026-10-16): valuable sources
+-- we cannot legally fetch come back to him for buy decisions. Never silently
+-- skipped.
+CREATE TABLE IF NOT EXISTS paywall_hits (
+    id INTEGER PRIMARY KEY,
+    source_key TEXT NOT NULL,
+    run_id INTEGER,
+    external_id TEXT UNIQUE NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    authors_json TEXT NOT NULL DEFAULT '[]',
+    year INTEGER,
+    doi TEXT,
+    doc_type TEXT,
+    source_url TEXT,
+    what_it_contains TEXT,
+    why_valuable TEXT,
+    access_cost TEXT,
+    detected_at TEXT NOT NULL
+);
 """
 
 
@@ -159,6 +178,43 @@ class CorpusStore:
             (document_id,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+    # -- paywall hit-list ------------------------------------------------
+    def log_paywall_hit(self, hit: dict) -> int | None:
+        """Record a valuable paywalled source. Dedupes on external_id.
+        Returns the row id, or None if already recorded."""
+        row = self._conn.execute(
+            "SELECT id FROM paywall_hits WHERE external_id = ?",
+            (hit["external_id"],),
+        ).fetchone()
+        if row:
+            return None
+        cur = self._conn.execute(
+            """INSERT INTO paywall_hits
+               (source_key, run_id, external_id, title, authors_json, year,
+                doi, doc_type, source_url, what_it_contains, why_valuable,
+                access_cost, detected_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                hit.get("source_key"), hit.get("run_id"), hit["external_id"],
+                hit.get("title", ""), json.dumps(hit.get("authors", [])),
+                hit.get("year"), hit.get("doi"), hit.get("doc_type"),
+                hit.get("source_url"), hit.get("what_it_contains"),
+                hit.get("why_valuable"), hit.get("access_cost"), _utcnow(),
+            ),
+        )
+        self._conn.commit()
+        return int(cur.lastrowid)
+
+    def list_paywall_hits(self) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT * FROM paywall_hits ORDER BY detected_at DESC").fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["authors"] = json.loads(d["authors_json"])
+            out.append(d)
+        return out
 
     # -- runs -----------------------------------------------------------
     def start_run(self, source_key: str, query: str) -> int:

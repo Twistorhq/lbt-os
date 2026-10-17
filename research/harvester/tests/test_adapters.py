@@ -51,6 +51,19 @@ class TestOaiPmhAdapter:
         assert not any("deleted" in i for i in ids)
 
 
+class TestOaiMatchTerms:
+    def test_and_semantics(self):
+        assert OaiPmhAdapter.matches("Hemp fiber biocomposites", ["hemp", "fiber"]) is True
+        assert OaiPmhAdapter.matches("Hemp fiber biocomposites", ["hemp", "titanium"]) is False
+
+    def test_case_insensitive(self):
+        assert OaiPmhAdapter.matches("HEMP Fiber", ["hemp"]) is True
+
+    def test_distinctive_term_only(self):
+        # Generic words must not admit irrelevant records.
+        assert OaiPmhAdapter.matches("Carbon nanotube composite", ["hemp"]) is False
+
+
 class TestOpenAlexDegrade:
     def test_429_returns_empty_with_note(self):
         adapter = OpenAlexAdapter()
