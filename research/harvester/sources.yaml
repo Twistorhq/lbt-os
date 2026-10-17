@@ -63,7 +63,7 @@ sources:
     base_url: https://ecommons.cornell.edu/server/oai/request
     verified: "2026-10-16: ?verb=Identify -> live OAI-PMH XML"
     rate_limit_s: 3
-    params: { metadataPrefix: oai_dc, match_terms: [hemp] }
+    params: { metadataPrefix: oai_dc, match_terms: [hemp, composite] }
 
   - key: oai_kstate
     name: Kansas State K-REx
@@ -72,7 +72,7 @@ sources:
     base_url: https://krex.k-state.edu/server/oai/request
     verified: "2026-10-16: ?verb=Identify -> live OAI-PMH XML"
     rate_limit_s: 3
-    params: { metadataPrefix: oai_dc, match_terms: [hemp] }
+    params: { metadataPrefix: oai_dc, match_terms: [hemp, composite] }
 
   - key: oai_vtech
     name: Virginia Tech VTechWorks
@@ -81,7 +81,7 @@ sources:
     base_url: https://vtechworks.lib.vt.edu/server/oai/request
     verified: "2026-10-16: ?verb=Identify -> live OAI-PMH XML"
     rate_limit_s: 3
-    params: { metadataPrefix: oai_dc, match_terms: [hemp] }
+    params: { metadataPrefix: oai_dc, match_terms: [hemp, composite] }
 
   - key: oai_fsu
     name: FSU DigiNole
@@ -90,4 +90,4 @@ sources:
     base_url: https://diginole.lib.fsu.edu/server/oai/request
     verified: "2026-10-16: redirects to Drupal HTML, not OAI-PMH. Re-verify before enabling."
     rate_limit_s: 3
-    params: { metadataPrefix: oai_dc, match_terms: [hemp] }
+    params: { metadataPrefix: oai_dc, match_terms: [hemp, composite] }
