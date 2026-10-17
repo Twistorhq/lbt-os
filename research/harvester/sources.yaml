@@ -1,0 +1,93 @@
+# Harvester source registry. Every entry records how it was verified.
+# Polite defaults: 1 request / 2-3s per host, identifying User-Agent.
+# Public data only. No paywalled content, no ToS violations.
+sources:
+  - key: crossref
+    name: Crossref
+    adapter: crossref
+    enabled: true
+    base_url: https://api.crossref.org
+    verified: "2026-10-16: GET /works?query=hemp+composite -> 200"
+    rate_limit_s: 2
+    params: { mailto: holla@twistor.co, rows: 100 }
+
+  - key: openalex
+    name: OpenAlex
+    adapter: openalex
+    enabled: true
+    base_url: https://api.openalex.org
+    verified: "2026-10-16: 429 from sandbox egress IP (shared free budget exhausted); adapter degrades gracefully, works from non-throttled networks"
+    rate_limit_s: 3
+    params: { mailto: holla@twistor.co, per_page: 100 }
+
+  - key: openaire
+    name: OpenAIRE
+    adapter: openaire
+    enabled: true
+    base_url: https://api.openaire.eu
+    verified: "2026-10-16: GET /search/publications?size=1 -> 200"
+    rate_limit_s: 2
+    params: { size: 100, format: json }
+
+  - key: doaj
+    name: Directory of Open Access Journals
+    adapter: doaj
+    enabled: true
+    base_url: https://doaj.org/api
+    verified: "2026-10-16: GET /search/articles/hemp%20composite -> 200"
+    rate_limit_s: 2
+    params: { pageSize: 100 }
+
+  - key: arxiv
+    name: arXiv
+    adapter: arxiv
+    enabled: true
+    base_url: https://export.arxiv.org/api
+    verified: "2026-10-16: endpoint reachable (301 -> https, client follows)"
+    rate_limit_s: 3
+    params: { max_results: 100 }
+
+  - key: semanticscholar
+    name: Semantic Scholar
+    adapter: semanticscholar
+    enabled: true
+    base_url: https://api.semanticscholar.org
+    verified: "2026-10-16: unauthenticated API documented; used for enrichment only, low volume"
+    rate_limit_s: 2
+    params: { limit: 100, fields: "title,authors,year,abstract,url,openAccessPdf" }
+
+  - key: oai_cornell
+    name: Cornell eCommons
+    adapter: oai_pmh
+    enabled: true
+    base_url: https://ecommons.cornell.edu/server/oai/request
+    verified: "2026-10-16: ?verb=Identify -> live OAI-PMH XML"
+    rate_limit_s: 3
+    params: { metadataPrefix: oai_dc, match_terms: [hemp, composite] }
+
+  - key: oai_kstate
+    name: Kansas State K-REx
+    adapter: oai_pmh
+    enabled: true
+    base_url: https://krex.k-state.edu/server/oai/request
+    verified: "2026-10-16: ?verb=Identify -> live OAI-PMH XML"
+    rate_limit_s: 3
+    params: { metadataPrefix: oai_dc, match_terms: [hemp, composite] }
+
+  - key: oai_vtech
+    name: Virginia Tech VTechWorks
+    adapter: oai_pmh
+    enabled: true
+    base_url: https://vtechworks.lib.vt.edu/server/oai/request
+    verified: "2026-10-16: ?verb=Identify -> live OAI-PMH XML"
+    rate_limit_s: 3
+    params: { metadataPrefix: oai_dc, match_terms: [hemp, composite] }
+
+  - key: oai_fsu
+    name: FSU DigiNole
+    adapter: oai_pmh
+    enabled: false
+    base_url: https://diginole.lib.fsu.edu/server/oai/request
+    verified: "2026-10-16: redirects to Drupal HTML, not OAI-PMH. Re-verify before enabling."
+    rate_limit_s: 3
+    params: { metadataPrefix: oai_dc, match_terms: [hemp, composite] }
