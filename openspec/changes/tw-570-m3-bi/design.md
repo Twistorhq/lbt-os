@@ -173,7 +173,8 @@ it as CSS variables (NKC dashboard pattern).
 
 Dashboard list → create (name, slug, theme fields) → viewer rendering
 widgets from the embed-style payload with theme CSS variables → "Get embed
-code" button producing `<iframe src="{origin}/bi/embed/{token}">` snippet.
+code" button producing `<iframe src="{origin}/bi/embed/{token}/view">`
+snippet (the HTML shell route, not the JSON endpoint).
 Compact page; no chart library (KPI + trend via existing patterns).
 
 ## Test plan (`backend/tests/test_bi_whitelabel.py`)
