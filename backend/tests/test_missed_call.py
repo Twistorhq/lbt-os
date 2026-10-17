@@ -146,7 +146,7 @@ class MissedCallTests(unittest.TestCase):
         _seed_org(self.db)
         app.dependency_overrides[get_db] = lambda: self.db
         app.dependency_overrides[get_auth] = lambda: AuthContext(
-            user_id="user-1", org_id=ORG_ID, role="owner",
+            user_id="user-1", org_id=ORG_ID, plan="trades_pro", is_owner=True,
         )
         self.client = TestClient(app, raise_server_exceptions=False)
         self._overrides = (app, get_db, get_auth)
@@ -244,7 +244,7 @@ class MissedCallTests(unittest.TestCase):
         body = resp.json()
         self.assertEqual(len(body), 1)
         self.assertNotIn(CALLER, resp.text)
-        self.assertIn("0142", body[0]["from_number_masked"])
+        self.assertIn("0199", body[0]["from_number_masked"])
 
     def test_cross_org_missed_call_returns_404(self):
         self.db._tables["call_logs"].append({
