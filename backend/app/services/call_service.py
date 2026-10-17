@@ -10,10 +10,15 @@ SMS-back). Everything returned upstream is masked. No PII in logs.
 import hashlib
 import logging
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 log = logging.getLogger(__name__)
+
+
+def uuid4hex() -> str:
+    return uuid.uuid4().hex
 
 # ---------------------------------------------------------------------------
 # PII helpers
@@ -159,6 +164,10 @@ def handle_voice_webhook(*, db, url: str, params: dict,
         raise _WebhookError(404, "unknown destination number")
 
     call_sid = params.get("CallSid", "")
+    if not call_sid:
+        # Unguarded CallSid breaks idempotency (empty-string unique) — mint one.
+        call_sid = f"no-sid-{uuid4hex()}"
+        log.warning("voice webhook missing CallSid; minted %s", call_sid)
     # Idempotency: Twilio retries webhooks.
     existing = (
         db.table("call_logs").select("id").eq("twilio_call_sid", call_sid)
@@ -184,7 +193,21 @@ def handle_voice_webhook(*, db, url: str, params: dict,
         "status": status,
         "customer_id": customer_id,
     }
-    created = db.table("call_logs").insert(row).execute()
+    try:
+        created = db.table("call_logs").insert(row).execute()
+    except Exception as exc:
+        # Race: a concurrent duplicate delivery won the insert between our
+        # select and insert. UNIQUE on twilio_call_sid -> take the winner's
+        # row and run the duplicate path instead of 500ing (TW-208).
+        if "duplicate" in str(exc).lower() or "unique" in str(exc).lower():
+            winner = (
+                db.table("call_logs").select("id")
+                .eq("twilio_call_sid", call_sid).limit(1).execute()
+            )
+            if winner.data:
+                return {"ok": True, "duplicate": True,
+                        "call_log_id": winner.data[0]["id"]}
+        raise
     call_log_id = (created.data or [{}])[0].get("id")
 
     # Missed-call detection: inbound no-answer/busy/failed.
@@ -200,9 +223,12 @@ def _run_recovery(*, db, org_id: str, call_log_id: str,
     """Business-hours -> instant SMS; after-hours/no-10DLC -> callback lead."""
     from .toll_service import record_toll_event
 
-    record_toll_event(db, org_id, "missed_call.detected", 1,
-                      idempotency_key=f"m2-detect-{call_log_id}",
-                      source_type="call_log", source_id=call_log_id)
+    try:
+        record_toll_event(db, org_id, "missed_call.detected", 1,
+                          idempotency_key=f"m2-detect-{call_log_id}",
+                          source_type="call_log", source_id=call_log_id)
+    except Exception as exc:  # toll failure never breaks recovery (TW-208)
+        log.warning("detection toll emit failed (non-fatal): %s", exc)
 
     recovery = {
         "org_id": org_id,
@@ -317,10 +343,12 @@ def recover_call(*, db, org_id: str, call_log_id: str, outcome: str,
     if not logs:
         raise _WebhookError(404, "call log not found")
     now = datetime.now(timezone.utc).isoformat()
+    # Revenue is only meaningful on a won outcome; a lost call attributes $0.
+    attributed = revenue if outcome in ("booked", "won") else None
     db.table("missed_call_recoveries").update({
         "recovered_at": now,
         "resulting_appointment_id": appointment_id,
-        "revenue_attributed": revenue,
+        "revenue_attributed": attributed,
     }).eq("call_log_id", call_log_id).eq("org_id", org_id).execute()
     return {"ok": True, "outcome": outcome, "recovered_at": now}
 

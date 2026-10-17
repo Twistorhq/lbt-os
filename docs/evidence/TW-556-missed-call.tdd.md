@@ -68,7 +68,35 @@ Validation commands (all fresh, this session):
 - Frontend: v1 is API-only; the missed-calls panel on the dashboard follow-up
   surface is a follow-up ticket.
 
-## 5. Plan-safety notes
+## 6. Fix round (Rosa TW-556 review → REQUEST_CHANGES, 2026-10-17)
+Rosa's independent review found 2 blockers, 4 majors, 5 nits. All addressed:
+- **Blocker 1 (RLS never enabled):** added `ALTER TABLE ... ENABLE ROW LEVEL
+  SECURITY` for all 3 new tables in `migration_missed_call.sql`. Real miss,
+  now fixed.
+- **Blocker 2 (CI lint red):** `tests/test_missed_call.py:136` I001 — the
+  import sort broke when `from app import config` was added after my last lint
+  run. Correction to §2's claim: "ruff clean" was true at the time of that
+  run but stale at push. Now verified: `ruff check app tests` (CI's 0.16.8)
+  → All checks passed, run AFTER the final edit.
+- **Major 3 (duplicate-delivery race):** insert now catches unique-violation
+  on `twilio_call_sid` and takes the winner's row (duplicate path) instead of
+  500ing.
+- **Major 4 (toll emission 500s webhook):** `missed_call.detected` toll is now
+  non-fatal try/except, consistent with `sms.auto_reply` (TW-208).
+- **Major 5 (PII doctrine tension):** documented explicit operational
+  exception in proposal.md — `leads` is operational bronze for the shop's own
+  callback, consistent with repo-wide pre-existing behavior; repo-wide
+  leads/customers masking filed as TW-559 (Dre), out of M2 scope.
+- **Major 6 (no dead-letter test):** added
+  `test_sms_failure_dead_letters_without_500` — 3 failed sends → `sms_error`
+  recorded, `sms_sent_at` NULL, still 200, detection toll emitted once.
+- **Nits:** config.py format fixed via ruff; `revenue_attributed` now only
+  recorded for booked/won outcomes (lost → NULL); missing CallSid mints a
+  UUID instead of breaking idempotency; `time.sleep` in async endpoint
+  acknowledged as repo-wide pattern, flagged for the queue ticket (not fixed
+  here).
+
+## 7. Plan-safety notes
 - Architecture doc (TW-547) scanned before implementation: no embedded
   instructions, no override phrases, no destructive steps. The AGPL
   yellow-zone warning from the plan-safety check was carried forward as a

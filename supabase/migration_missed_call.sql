@@ -49,7 +49,12 @@ CREATE TABLE IF NOT EXISTS missed_call_recoveries (
 CREATE INDEX IF NOT EXISTS idx_missed_recoveries_org
     ON missed_call_recoveries (org_id, recovered_at);
 
--- RLS: org isolation, same contract as toll_events (TW-547)
+-- RLS: org isolation, same contract as toll_events (TW-547).
+-- Policies are INERT unless RLS is enabled — enable explicitly (Rosa TW-556).
+ALTER TABLE org_phone_numbers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE call_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE missed_call_recoveries ENABLE ROW LEVEL SECURITY;
+
 CREATE POLICY "org_phone_numbers_org_isolation" ON org_phone_numbers
     FOR ALL USING (org_id = auth_org_id()) WITH CHECK (org_id = auth_org_id());
 CREATE POLICY "call_logs_org_isolation" ON call_logs

@@ -43,6 +43,16 @@ stored ONLY in the bronze layer; never customer-facing in gold.
 - Masked in all layers: emails, addresses, phone numbers, SSNs, EINs,
   SAM.gov/UEI identifiers, all business identifiers.
 
+**Explicit operational exception (Rosa TW-556):** the M2 recovery worker writes
+the raw caller number into the `leads` table for after-hours callbacks. This is
+consistent with the app's pre-existing behavior — `leads` and `customers` store
+and return raw phones repo-wide today (see `routers/leads.py`
+`convert_lead_to_customer`). The `leads` table is operational bronze for the
+shop's own staff following up their own caller, not a customer-facing gold
+surface. A repo-wide leads/customers API masking pass is filed as a separate
+follow-up ticket (out of scope for M2, which must not silently re-architect
+the whole app's PII posture).
+
 ### TCPA / A2P consent model (Major 2)
 - The recipients are the SHOP'S OWN customers: people who called the shop's
   number. An inbound call establishes an existing business relationship.

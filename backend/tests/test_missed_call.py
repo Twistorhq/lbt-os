@@ -135,10 +135,10 @@ class MissedCallTests(unittest.TestCase):
     def setUp(self):
         from fastapi.testclient import TestClient
 
+        from app import config
         from app.auth import AuthContext, get_auth
         from app.database import get_db
         from app.main import app
-        from app import config
 
         # Pin the Twilio auth token regardless of import order: the settings
         # singleton is created at first import, so env setdefault is racy.
@@ -232,6 +232,27 @@ class MissedCallTests(unittest.TestCase):
         self.assertIsNotNone(leads[0]["follow_up_at"])
 
     # -- money view: masking + tenant isolation --
+    def test_sms_failure_dead_letters_without_500(self):
+        """Twilio down 3x -> sms_error recorded, sms_sent_at NULL, still 200."""
+        with mock.patch("app.services.call_service._in_business_hours",
+                         return_value=True), \
+             mock.patch("app.services.call_service._ten_dlc_configured",
+                        return_value=True), \
+             mock.patch("app.services.call_service._send_recovery_sms",
+                        side_effect=RuntimeError("twilio down")) as sms, \
+             mock.patch("app.services.call_service.time.sleep"):
+            resp = self._post_voice(_voice_params())
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(sms.call_count, 3)
+        recs = self.db._tables["missed_call_recoveries"]
+        self.assertEqual(len(recs), 1)
+        self.assertIsNone(recs[0].get("sms_sent_at"))
+        self.assertIn("twilio down", recs[0]["sms_error"])
+        # detection toll still emitted exactly once
+        self.assertEqual(
+            len([t for t in self.db._tables["toll_events"]
+                 if t["event_type"] == "missed_call.detected"]), 1)
+
     def test_missed_view_masks_numbers(self):
         self.db._tables["call_logs"].append({
             "id": "log-1", "org_id": ORG_ID, "twilio_call_sid": CALL_SID,
