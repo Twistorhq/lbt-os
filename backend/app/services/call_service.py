@@ -148,7 +148,6 @@ def handle_voice_webhook(*, db, url: str, params: dict,
     Raises _WebhookError with an HTTP status for 401/404 cases.
     """
     from ..config import settings
-    from .toll_service import record_toll_event
 
     if not _validate_twilio_signature(url, params, signature,
                                       settings.twilio_auth_token):
@@ -290,15 +289,15 @@ def get_missed_calls(*, db, org_id: str, days: int = 7) -> list[dict]:
     ).data or []
     rec_by_log = {r["call_log_id"]: r for r in recs}
     out = []
-    for l in logs:
-        if (l.get("started_at") or "") < since:
+    for entry in logs:
+        if (entry.get("started_at") or "") < since:
             continue
-        r = rec_by_log.get(l["id"], {})
+        r = rec_by_log.get(entry["id"], {})
         out.append({
-            "call_log_id": l["id"],
-            "from_number_masked": _mask_number(l.get("from_number", "")),
-            "started_at": l.get("started_at"),
-            "status": l.get("status"),
+            "call_log_id": entry["id"],
+            "from_number_masked": _mask_number(entry.get("from_number", "")),
+            "started_at": entry.get("started_at"),
+            "status": entry.get("status"),
             "sms_sent_at": r.get("sms_sent_at"),
             "sms_error": r.get("sms_error"),
             "recovered_at": r.get("recovered_at"),

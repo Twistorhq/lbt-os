@@ -63,8 +63,8 @@ async def sms_webhook(
     routing (BOOK/STOP handling) is a follow-up ticket — the recovery SMS
     already carries opt-out language per the TCPA consent model.
     """
-    from ..services.call_service import _resolve_org_id, _validate_twilio_signature
     from ..config import settings
+    from ..services.call_service import _resolve_org_id, _validate_twilio_signature
 
     form = await request.form()
     params = {k: v for k, v in form.items()}

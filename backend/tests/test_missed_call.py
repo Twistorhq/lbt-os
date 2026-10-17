@@ -7,12 +7,8 @@ instant auto-SMS (business hours) or callback lead (after hours). PII doctrine
 import base64
 import hashlib
 import hmac
-import os
 import unittest
-from datetime import datetime, timezone
 from unittest import mock
-
-os.environ.setdefault("TWILIO_AUTH_TOKEN", "test-auth-token")
 
 AUTH_TOKEN = "test-auth-token"
 ORG_ID = "org-m2-test"
@@ -138,9 +134,17 @@ def _voice_params(**over):
 class MissedCallTests(unittest.TestCase):
     def setUp(self):
         from fastapi.testclient import TestClient
-        from app.main import app
+
+        from app.auth import AuthContext, get_auth
         from app.database import get_db
-        from app.auth import get_auth, AuthContext
+        from app.main import app
+        from app import config
+
+        # Pin the Twilio auth token regardless of import order: the settings
+        # singleton is created at first import, so env setdefault is racy.
+        self._token_patch = mock.patch.object(
+            config.settings, "twilio_auth_token", AUTH_TOKEN)
+        self._token_patch.start()
 
         self.db = FakeDB()
         _seed_org(self.db)
@@ -152,6 +156,7 @@ class MissedCallTests(unittest.TestCase):
         self._overrides = (app, get_db, get_auth)
 
     def tearDown(self):
+        self._token_patch.stop()
         app, get_db, get_auth = self._overrides
         app.dependency_overrides.pop(get_db, None)
         app.dependency_overrides.pop(get_auth, None)
