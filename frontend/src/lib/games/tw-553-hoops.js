@@ -1,5 +1,5 @@
 /* TW-553: 404 Easter egg hoops shooter. Vanilla JS + canvas, zero dependencies.
- * mountHoops(container, opts) — flick/drag to shoot, simple gravity + bounce physics.
+ * mountHoops(container, opts): flick or drag to shoot. Simple gravity and bounce physics.
  * Pointer events (touch + mouse) and keyboard (arrows + Space). Streaks tracked.
  * Prepared by Twistor Holdings LLC.
  */
@@ -23,6 +23,8 @@ export function mountHoops(container, opts) {
     '<p class="tw553-keys">Drag back and release to shoot. Keyboard: arrows aim, Space shoots.</p>' +
     '</div>'
   const stage = container.querySelector('.tw553-stage')
+  const reduceMotion = window.matchMedia &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches
   const canvas = stage.querySelector('canvas')
   const hud = stage.querySelector('.tw553-hud')
   const ctx = canvas.getContext('2d')
@@ -143,7 +145,7 @@ export function mountHoops(container, opts) {
     ball.vy += GRAV * dt
     ball.x += ball.vx * dt
     ball.y += ball.vy * dt
-    ball.rot += ball.vx * dt * 0.02
+    ball.rot += reduceMotion ? 0 : ball.vx * dt * 0.02
 
     const g = GROUND()
     if (ball.y + BALL_R > g) {
@@ -275,7 +277,7 @@ export function mountHoops(container, opts) {
       ctx.globalAlpha = Math.max(0, f.life)
       ctx.fillStyle = C.accent
       ctx.font = '800 18px system-ui, sans-serif'
-      ctx.fillText(f.txt, f.x, f.y - (1 - f.life) * 24)
+      ctx.fillText(f.txt, f.x, reduceMotion ? f.y : f.y - (1 - f.life) * 24)
     }
     ctx.globalAlpha = 1
   }
@@ -375,10 +377,11 @@ export function mountHoops(container, opts) {
 
   const ro = new ResizeObserver(resize)
   ro.observe(stage)
-  document.addEventListener('visibilitychange', () => {
+  function onVis() {
     if (document.hidden) { running = false; cancelAnimationFrame(raf) }
     else { running = true; last = performance.now(); raf = requestAnimationFrame(tick) }
-  })
+  }
+  document.addEventListener('visibilitychange', onVis)
 
   resize()
   updateHud()
@@ -391,6 +394,7 @@ export function mountHoops(container, opts) {
       cancelAnimationFrame(raf)
       ro.disconnect()
       window.removeEventListener('keydown', onKey)
+      document.removeEventListener('visibilitychange', onVis)
       container.innerHTML = ''
     }
   }
