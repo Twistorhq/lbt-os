@@ -77,6 +77,19 @@ export const expensesApi = {
 }
 
 // ---- Metrics ----
+export const biApi = {
+  list:      () => api.get('/bi/dashboards'),
+  create:    (data) => api.post('/bi/dashboards', data),
+  get:       (id) => api.get(`/bi/dashboards/${id}`),
+  patch:     (id, data) => api.patch(`/bi/dashboards/${id}`, data),
+  remove:    (id) => api.delete(`/bi/dashboards/${id}`),
+  preview:   (id) => api.get(`/bi/dashboards/${id}/preview`),
+  issueEmbed:(id) => api.post(`/bi/dashboards/${id}/embeds`),
+  revokeEmbed:(id) => api.delete(`/bi/embeds/${id}`),
+  connectors:() => api.get('/bi/connectors'),
+  syncConnector:(key) => api.post(`/bi/connectors/${key}/sync`),
+}
+
 export const metricsApi = {
   dashboard:    (days = 30)           => api.get('/metrics/dashboard', { params: { days } }),
   revenueTrend: (weeks = 12)          => api.get('/metrics/revenue-trend', { params: { weeks } }),

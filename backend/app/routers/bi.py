@@ -81,6 +81,16 @@ def delete_dashboard(dashboard_id: str,
     return {"deleted": True}
 
 
+@router.get("/dashboards/{dashboard_id}/preview")
+def preview_dashboard(dashboard_id: str,
+                      db: Annotated[Client, Depends(get_db)],
+                      auth: Annotated[AuthContext, Depends(get_auth)]):
+    payload = bi_service.preview_dashboard(db, auth.org_id, dashboard_id)
+    if not payload:
+        raise _not_found()
+    return payload
+
+
 # ---------------------------------------------------------------------------
 # Authenticated: embed token issue / revoke
 # ---------------------------------------------------------------------------

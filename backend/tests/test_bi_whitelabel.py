@@ -8,6 +8,8 @@ import hashlib
 import unittest
 from unittest import mock
 
+from app.services import bi_connectors, bi_service
+
 ORG_A = "org-bi-a"
 ORG_B = "org-bi-b"
 ORG_NAME = "Obi Trades Co"  # fixture named for family, per tradition
@@ -171,7 +173,6 @@ def _seed_dashboard(db, org_id, dash_id="dash-1", is_public=True, widgets=None):
 
 def _seed_embed(db, org_id=ORG_A, dash_id="dash-1", token="raw-token-abc",
                 revoked=False, expired=False):
-    import datetime
     expires = None
     if expired:
         expires = "2000-01-01T00:00:00+00:00"
@@ -183,8 +184,6 @@ def _seed_embed(db, org_id=ORG_A, dash_id="dash-1", token="raw-token-abc",
     return token
 
 
-from app.services import bi_service  # noqa: E402  (RED until implemented)
-from app.services import bi_connectors  # noqa: E402
 
 
 class EmbedTokenTests(unittest.TestCase):
@@ -202,6 +201,7 @@ class EmbedTokenTests(unittest.TestCase):
 
     def test_token_guessing_returns_401(self):
         import secrets
+
         from fastapi import HTTPException
         for _ in range(25):
             with self.assertRaises(HTTPException) as ctx:
@@ -484,6 +484,15 @@ class HttpEndpointTests(unittest.TestCase):
     def test_cross_org_embed_issue_returns_404(self):
         r = self.client.post("/api/v1/bi/dashboards/dash-b/embeds")
         self.assertEqual(r.status_code, 404)
+
+    def test_cross_org_preview_returns_404(self):
+        r = self.client.get("/api/v1/bi/dashboards/dash-b/preview")
+        self.assertEqual(r.status_code, 404)
+
+    def test_preview_renders_for_owner(self):
+        r = self.client.get("/api/v1/bi/dashboards/dash-a/preview")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("widgets", r.json())
 
     def test_public_embed_unknown_token_401(self):
         r = self.client.get("/api/v1/bi/embed/does-not-exist")

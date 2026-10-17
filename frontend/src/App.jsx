@@ -17,6 +17,7 @@ import Expenses from './pages/Expenses'
 import AIInsights from './pages/AIInsights'
 import Onboarding from './pages/Onboarding'
 import Connections from './pages/Connections'
+import BI from './pages/BI'
 import Billing from './pages/Billing'
 import Admin from './pages/Admin'
 import Strategy from './pages/Strategy'
@@ -211,6 +212,7 @@ export default function App() {
         <Route path="/app" element={<Layout />}>
           <Route index element={<Dashboard />} />
           <Route path="connections" element={<Connections />} />
+          <Route path="bi" element={<BI />} />
           <Route path="leads" element={<Leads />} />
           <Route path="sales" element={<Sales />} />
           <Route path="customers" element={<Customers />} />

@@ -319,10 +319,8 @@ def _toll_best_effort(db: Client, org_id: str, event_type: str,
                                                  "error": str(exc)})
 
 
-def render_embed(db: Client, raw_token: str) -> dict[str, Any]:
-    """Public embed payload. No JWT; tenant isolation per the invariant."""
-    embed, dashboard = _resolve_embed(db, raw_token)
-    payload = {
+def _dashboard_payload(db: Client, dashboard: dict[str, Any]) -> dict[str, Any]:
+    return {
         "dashboard": {
             "name": dashboard.get("name"),
             "slug": dashboard.get("slug"),
@@ -331,10 +329,25 @@ def render_embed(db: Client, raw_token: str) -> dict[str, Any]:
         "widgets": _render_widgets(db, dashboard),
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+def render_embed(db: Client, raw_token: str) -> dict[str, Any]:
+    """Public embed payload. No JWT; tenant isolation per the invariant."""
+    embed, dashboard = _resolve_embed(db, raw_token)
+    payload = _dashboard_payload(db, dashboard)
     _toll_best_effort(
         db, dashboard["org_id"], "bi.embed_view",
         idempotency_key=f"bi_embed_view:{embed['id']}:{uuid.uuid4().hex}")
     return payload
+
+
+def preview_dashboard(db: Client, org_id: str,
+                      dashboard_id: str) -> dict[str, Any] | None:
+    """Authenticated preview for the dashboard builder. No token, no toll."""
+    dashboard = get_dashboard(db, org_id, dashboard_id)
+    if not dashboard:
+        return None
+    return _dashboard_payload(db, dashboard)
 
 
 # ---------------------------------------------------------------------------
