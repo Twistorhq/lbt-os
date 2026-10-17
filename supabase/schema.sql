@@ -13,7 +13,7 @@ CREATE TABLE organizations (
     clerk_org_id          TEXT UNIQUE NOT NULL,
     name                  TEXT NOT NULL,
     industry              TEXT,          -- hvac | plumbing | electrician | landscaping | cleaning_service | gig_worker | salon_spa | restaurant | gym | real_estate
-    plan                  TEXT NOT NULL DEFAULT 'basic',  -- basic | pro | premium
+    plan                  TEXT NOT NULL DEFAULT 'basic',  -- basic | pro | premium | trades_starter | trades_pro
     stripe_customer_id    TEXT,
     stripe_subscription_id TEXT,
     subscription_status   TEXT NOT NULL DEFAULT 'inactive', -- active | inactive | past_due | canceled

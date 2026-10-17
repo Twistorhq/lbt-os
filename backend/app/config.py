@@ -175,9 +175,6 @@ TOLL_RATES: dict[str, int] = {
     "call.ai_handled":       50,  # $0.50 per AI-handled call
 }
 
-PLAN_FEATURES: dict[str, list[str]] = {
-    "basic":   ["leads", "sales", "customers", "expenses", "dashboard"],
-    "pro":     ["leads", "sales", "customers", "expenses", "dashboard", "ai_audit"],
-    "premium": ["leads", "sales", "customers", "expenses", "dashboard", "ai_audit", "consulting"],
-    "enterprise": ["leads", "sales", "customers", "expenses", "dashboard", "ai_audit", "consulting", "dots_video"],
-}
+# NOTE (TW-550): PLAN_FEATURES removed — it had no consumers and listed only
+# legacy plans. Plan capabilities are expressed via PLAN_LIMITS (techs),
+# PLAN_AUDIT_LIMITS (ai_audit), and require_plan() (route gates).

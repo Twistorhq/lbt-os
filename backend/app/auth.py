@@ -223,9 +223,17 @@ def get_clerk_user_phone(user_id: str) -> str | None:
     return None
 
 
+# TW-550: plan entitlement ladder. Flat trades tiers are mapped explicitly —
+# trades_starter ($299) sits at legacy pro level, trades_pro ($499) at premium.
+# Unknown plan strings default to 0 (most restrictive) in the check below.
+PLAN_ORDER = {
+    "basic": 0, "pro": 1, "premium": 2, "enterprise": 3,
+    "trades_starter": 1, "trades_pro": 2,
+}
+
+
 def require_plan(minimum_plan: str):
     """Gate a route to a minimum subscription tier."""
-    PLAN_ORDER = {"basic": 0, "pro": 1, "premium": 2, "enterprise": 3}
 
     def _check(auth: AuthContext = Depends(get_auth)) -> AuthContext:
         # TW-484: owner SSO bypasses all plan gates.

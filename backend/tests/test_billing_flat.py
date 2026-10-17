@@ -2,7 +2,11 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
+from fastapi import HTTPException
+
+from app.auth import PLAN_ORDER, AuthContext, require_plan
 from app.services import stripe_service, toll_service
+from app.services.ai_audit import PLAN_AUDIT_LIMITS
 
 
 def _fake_db():
@@ -72,6 +76,31 @@ class FlatPlanCatalogTests(unittest.TestCase):
             result = stripe_service.verify_checkout_session(_fake_db(), "org_2", "cs_test_2")
         self.assertEqual(result["plan"], "trades_pro")
         self.assertEqual(result["status"], "complete")
+
+
+class PlanEntitlementTests(unittest.TestCase):
+    """Rosa blockers 1-2: the flat tiers must be honored by the entitlement layer."""
+
+    def test_plan_order_maps_flat_tiers_explicitly(self):
+        self.assertGreater(PLAN_ORDER["trades_starter"], PLAN_ORDER["basic"])
+        self.assertGreater(PLAN_ORDER["trades_pro"], PLAN_ORDER["trades_starter"])
+        self.assertEqual(PLAN_ORDER["trades_pro"], PLAN_ORDER["premium"])
+
+    def test_require_plan_pro_allows_trades_pro_customer(self):
+        check = require_plan("pro")
+        auth = AuthContext(user_id="u1", org_id="o1", plan="trades_pro")
+        self.assertIs(check(auth=auth), auth)
+
+    def test_require_plan_premium_blocks_trades_starter(self):
+        check = require_plan("premium")
+        auth = AuthContext(user_id="u1", org_id="o1", plan="trades_starter")
+        with self.assertRaises(HTTPException) as ctx:
+            check(auth=auth)
+        self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_audit_caps_explicit_for_flat_tiers(self):
+        self.assertEqual(PLAN_AUDIT_LIMITS["trades_starter"], 20)
+        self.assertIsNone(PLAN_AUDIT_LIMITS["trades_pro"])
 
 
 class TollLedgerTests(unittest.TestCase):

@@ -128,7 +128,7 @@ export default function Billing() {
               </div>
               <p className={`mt-1 text-sm leading-6 ${isVerifying ? 'text-blue-700' : 'text-emerald-700'}`}>
                 {isVerifying
-                  ? 'Confirming with Stripe (this only takes a moment.'
+                  ? 'Confirming with Stripe (this only takes a moment).'
                   : isVerified
                     ? 'Verified with Stripe. Your paid features are active now.'
                     : 'Your payment went through. Your plan will update momentarily. Refresh if it takes more than a minute.'}

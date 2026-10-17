@@ -68,7 +68,8 @@ create table toll_events (
   event_type text not null,
   quantity numeric not null default 1,
   unit_rate_cents integer not null,
-  amount_cents integer generated always as ((quantity * unit_rate_cents)::integer) stored,
+  amount_cents integer not null,   -- service-computed (quantity x rate),
+                                   -- or emitter-supplied for percent-of-value
   idempotency_key text not null unique,
   source_type text,            -- e.g. 'call_log', 'sms_log'
   source_id text,              -- emitter's row id

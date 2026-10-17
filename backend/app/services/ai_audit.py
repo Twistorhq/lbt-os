@@ -39,12 +39,16 @@ _clients: dict[str, OpenAI] = {}
 
 # Monthly audit caps per plan.  None = unlimited.
 # Starter: 3  |  Growth: 20  |  Scale: unlimited  |  Enterprise: unlimited
+# TW-550: flat trades tiers get explicit caps — never accidental unlimited.
+# trades_starter ($299) == legacy pro (20); trades_pro ($499) == premium (unlimited).
 FREE_MONTHLY_AUDIT_LIMIT = 3
 PLAN_AUDIT_LIMITS: dict[str, int | None] = {
-    "basic":      3,
-    "pro":        20,
-    "premium":    None,
-    "enterprise": None,
+    "basic":          3,
+    "pro":            20,
+    "premium":        None,
+    "enterprise":     None,
+    "trades_starter": 20,
+    "trades_pro":     None,
 }
 
 OPTIONAL_AUDIT_COLUMNS = {
