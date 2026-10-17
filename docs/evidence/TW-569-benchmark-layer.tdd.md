@@ -35,7 +35,7 @@ Post-fix: **26/26 new tests green, full suite 252 passed**, ruff clean, migratio
 
 ## Test results (updated)
 
-- New: `backend/tests/test_data_layer_benchmarks.py` — **20/20 pass**
+- New: `backend/tests/test_data_layer_benchmarks.py` — **26/26 pass**
 - Full suite: **246 passed, 8 subtests passed** (was 226 + 8 before this ticket)
 - Ruff check + format: clean (CI's ruff 0.16.8)
 - Migration SQL: all 36 statements parse under pglast (real Postgres grammar)

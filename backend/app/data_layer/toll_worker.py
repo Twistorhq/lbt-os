@@ -11,8 +11,8 @@ applied tier on the toll_events row. Tiers are declared in-plan: no
 surprise repricing, and every charge is auditable to its tier.
 
 "Never double-toll" as mechanism:
-  1. toll_emit_queue has UNIQUE (idempotency_key) — the queue itself
-     cannot double-enqueue.
+  1. toll_emit_queue has UNIQUE (key_id, idempotency_key) — the queue itself
+     cannot double-enqueue within a client's namespace.
   2. The worker checks data_toll_dedupe before emitting.
   3. record_toll_event's own idempotency_key UNIQUE is the final backstop.
 """
