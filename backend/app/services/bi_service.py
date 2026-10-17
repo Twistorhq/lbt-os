@@ -150,7 +150,7 @@ def create_dashboard(db: Client, org_id: str, name: str, slug: str,
     row = (
         db.table("bi_dashboards")
         .insert({
-            "id": uuid.uuid4().hex,
+            "id": str(uuid.uuid4()),
             "org_id": org_id,
             "name": name,
             "slug": slug,
@@ -215,7 +215,7 @@ def issue_embed_token(db: Client, org_id: str,
     row = (
         db.table("bi_embeds")
         .insert({
-            "id": uuid.uuid4().hex,
+            "id": str(uuid.uuid4()),
             "org_id": org_id,
             "dashboard_id": dashboard_id,
             "token_hash": _hash_token(raw_token),

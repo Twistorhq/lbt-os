@@ -159,6 +159,7 @@ it as CSS variables (NKC dashboard pattern).
 | GET/PATCH/DELETE | /bi/dashboards/{id} | JWT | cross-org → 404 |
 | POST | /bi/dashboards/{id}/embeds | JWT | issues token; raw token returned once, only `token_hash` stored |
 | DELETE | /bi/embeds/{embed_id} | JWT | revoke (cross-org → 404) |
+| GET | /bi/dashboards/{id}/preview | JWT | authenticated preview for the dashboard builder (no token, no toll) |
 | GET | /bi/embed/{token} | none | 401/403/404 per above; JSON aggregates |
 | GET | /bi/embed/{token}/view | none | 401/403/404 per above; server-rendered HTML shell for iframes |
 | GET | /bi/connectors | JWT | connector + metric definitions |

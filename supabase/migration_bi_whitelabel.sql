@@ -69,10 +69,15 @@ CREATE TRIGGER trg_bi_dashboards_updated
 
 -- ---------------------------------------------------------------------------
 -- RLS: org isolation on every new table (TW-547 section 6 contract).
+-- Policies are INERT unless RLS is enabled — enable explicitly (Rosa TW-556).
 -- NOTE: the public embed endpoint carries no JWT, so it uses a service-role
 -- client; tenant isolation there is enforced in application code
 -- (token -> embed -> dashboard -> org_id chain, never from the request).
 -- ---------------------------------------------------------------------------
+ALTER TABLE bi_dashboards ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bi_embeds ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bi_metric_snapshots ENABLE ROW LEVEL SECURITY;
+
 CREATE POLICY "bi_dashboards_org_isolation" ON bi_dashboards
     FOR ALL USING (org_id = auth_org_id()) WITH CHECK (org_id = auth_org_id());
 CREATE POLICY "bi_embeds_org_isolation" ON bi_embeds

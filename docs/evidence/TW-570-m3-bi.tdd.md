@@ -60,11 +60,11 @@ frontend + preview endpoint + review fixes).
 |---|---|---|---|---|---|
 | 1 | No code existed before tests | `pytest tests/test_bi_whitelabel.py -x -q` (commit 9d92780) | RED | collection ImportError | §2 |
 | 2 | Embed token auth contract (401/403/404) | `test_bi_whitelabel.py::EmbedTokenTests` (10 tests) | unit | 10/10 pass | §2 |
-| 3 | Aggregate-only enforced (allowlist + shape) | `AggregateOnlyTests` (5 tests) | unit | 5/5 pass | §2 |
+| 3 | Aggregate-only enforced (allowlist + shape) | `AggregateOnlyTests` (4 tests) | unit | 4/4 pass | §2 |
 | 4 | Theme validation incl. CSS-injection block | `ThemeValidationTests` (5 tests) | unit | 5/5 pass | §2 |
 | 5 | Toll metering + failure isolation | `TollTests` (4 tests) | unit | 4/4 pass | §2 |
 | 6 | Connector framework (registry, shapes, compute) | `ConnectorFrameworkTests` (4 tests) | unit | 4/4 pass | §2 |
-| 7 | HTTP cross-org 404s + preview | `HttpEndpointTests` (7 tests) | integration | 7/7 pass | §2 |
+| 7 | HTTP cross-org 404s + preview | `HttpEndpointTests` (8 tests) | integration | 8/8 pass | §2 |
 | 8 | RLS policies present in migration | `MigrationPolicyTests` (1 test) | unit | 1/1 pass | §2 |
 | 9 | No regressions in existing suite | `pytest tests/` | CI | 273 passed + 8 subtests | §2 |
 | 10 | Lint clean | `ruff check app tests` | CI | All checks passed | §2 |
