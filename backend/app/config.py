@@ -176,6 +176,11 @@ TOLL_RATES: dict[str, int] = {
     "call.ai_handled":       50,  # $0.50 per AI-handled call
     "bi.embed_view":          5,  # $0.05 per public embed view (TW-570)
     "bi.connector_sync":     25,  # $0.25 per connector sync (TW-570)
+    # TW-593 science data layer (V1 defaults; dynamic volume tiers stamped per doctrine)
+    "data.science.query":     5,  # $0.05 per gold query call
+    "data.science.bulk":     25,  # $0.25 per 1k rows on bulk export
+    "data.science.ingest":   10,  # $0.10 per ingested batch (lab-side, nominal)
+    "data.science.benchmark": 50,  # $0.50 per benchmark submission
 }
 
 # NOTE (TW-550): PLAN_FEATURES removed — it had no consumers and listed only
