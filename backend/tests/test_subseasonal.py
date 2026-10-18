@@ -334,10 +334,10 @@ def test_gold_query_filters_and_bulk_toll(monkeypatch):
     assert len(env.data) == 3
     assert env.data[0]["bias_correction"] == "pbc_v1"
     types = [c["event_type"] for c in spy.calls]
+    # TW-606: flat query + bulk tolls replaced by the neutral data toll.
+    # No version row in FakeDB -> falls back to the legacy flat query toll.
     assert "data.science.query" in types
-    assert "data.science.bulk" in types  # limit > 1000 -> bulk toll per 1k rows
-    bulk = next(c for c in spy.calls if c["event_type"] == "data.science.bulk")
-    assert bulk["idempotency_key"] == "sci:req-2:bulk"
+    assert "data.science.bulk" not in types
 
 
 def test_query_rejects_out_of_range_lead_weeks():

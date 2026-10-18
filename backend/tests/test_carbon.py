@@ -411,13 +411,48 @@ def test_query_rejects_bad_record_class(monkeypatch):
         router.query_gold(db, "org-1", "req-1", record_class="nonsense")
 
 
-def test_gold_query_bulk_toll(monkeypatch):
+def test_gold_query_neutral_toll(monkeypatch):
+    # TW-606: bulk pull is tolled at the neutral per-row rate, not flat bulk.
+    # No version row in FakeDB -> falls back to legacy flat query toll.
     db = FakeDB({"sci_carbon_gold": _gold_rows()})
     spy = TollSpy()
     monkeypatch.setattr(paywall, "metered_toll", spy)
     router.query_gold(db, "org-1", "req-1", limit=2000)
     kinds = {c["event_type"] for c in spy.calls}
-    assert "data.science.bulk" in kinds
+    assert "data.science.bulk" not in kinds  # flat bulk toll is gone
+    assert "data.science.query" in kinds  # fallback flat toll fires
+
+
+def test_gold_query_neutral_toll_with_version(monkeypatch):
+    # With a version row, the neutral api_rows toll fires instead.
+    import app.services.toll_service as toll_service
+
+    calls = []
+
+    def fake_record(db, org_id=None, event_type=None, quantity=1.0,
+                    amount_cents=None, idempotency_key=None, **kw):
+        calls.append({"event_type": event_type, "amount_cents": amount_cents,
+                      "quantity": quantity})
+        return {"ok": True}
+
+    monkeypatch.setattr(toll_service, "record_toll_event", fake_record)
+    db = FakeDB({
+        "sci_carbon_gold": _gold_rows(),
+        "sci_dataset_versions": [
+            {"id": "ver-1", "lane": "carbon", "price_floor_cents": 1,
+             "row_count": 10,
+             "released_at": "2026-10-18T00:00:00+00:00"},
+        ],
+        "toll_events": [],
+    })
+    rows = _gold_rows()
+    router.query_gold(db, "org-1", "req-1", limit=2000)
+    kinds = {c["event_type"] for c in calls}
+    assert "data.science.api_rows" in kinds
+    # full pull of 10/10 rows at $0.01 download price -> 1c, neutral
+    api_call = next(c for c in calls if c["event_type"] == "data.science.api_rows")
+    assert api_call["quantity"] == float(len(rows))
+    assert api_call["amount_cents"] == 1
 
 
 def test_toll_valueerror_is_logged_not_raised(monkeypatch):
@@ -457,9 +492,11 @@ def test_http_query_unscoped_org_fails_closed():
 
 
 def test_http_download_excel_small_tier(monkeypatch):
+    # TW-606: the download fee is the org's tiered entry fee, not a flat tier fee
     tier = paywall.dataset_tier(36)
     assert tier == "small"
-    assert paywall.excel_fee_cents(tier) == 600
+    db = FakeDB({"organizations": [{"id": "org-1", "customer_tier": "student"}]})
+    assert paywall.download_fee_cents(db, "org-1", "ver-1") == 599
     assert paywall.delivery_for_tier(tier)["excel"] is True
 
 
