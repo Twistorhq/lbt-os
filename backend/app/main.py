@@ -13,6 +13,15 @@ from slowapi.errors import RateLimitExceeded
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .config import settings
+
+# TW-593 science data layer V1 — six lanes. Each router carries its own
+# /data/v1/science/{lane} prefix except turbulence (mounted with prefix below).
+from .data_layer.science.crop_climate import router as sci_crop_router
+from .data_layer.science.electrocatalysis import router as sci_electro_router
+from .data_layer.science.high_tc import router as sci_hightc_router
+from .data_layer.science.pfas import router as sci_pfas_router
+from .data_layer.science.subseasonal import router as sci_subseasonal_router
+from .data_layer.science.turbulence import router as sci_turbulence_router
 from .limiter import limiter
 from .logging_config import configure_logging, request_id_var
 from .routers import (
@@ -127,6 +136,15 @@ app.include_router(revenue_intelligence.router,    prefix="/api/v1")
 app.include_router(leak_engine.router,              prefix="/api/v1")
 app.include_router(tradeview.router,                prefix="/api/v1")
 app.include_router(visitor_events.router,          prefix="/api/v1")
+
+# TW-593 science data layer V1 — six lanes, each router carries its own
+# /data/v1/science/{lane} prefix except turbulence (mounted with prefix here).
+app.include_router(sci_electro_router.router)
+app.include_router(sci_subseasonal_router.router)
+app.include_router(sci_turbulence_router.router,   prefix="/data/v1/science/turbulence")
+app.include_router(sci_pfas_router.router)
+app.include_router(sci_crop_router.router)
+app.include_router(sci_hightc_router.router)
 
 
 @app.get("/health", include_in_schema=False)

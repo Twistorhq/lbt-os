@@ -57,6 +57,9 @@ def _emit_toll(org_id: str, event_type: str, request_id: str,
     except ValueError as exc:  # unknown event type / missing key: log, continue
         log.warning("turbulence toll emit failed",
                     extra={"event": event_type, "error": str(exc)})
+    except Exception as exc:  # TW-208: metering failure never breaks serving
+        log.warning("turbulence toll emit failed",
+                    extra={"event": event_type, "error": str(exc)})
 
 
 def _request_id() -> str:

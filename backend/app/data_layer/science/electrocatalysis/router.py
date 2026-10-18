@@ -96,6 +96,8 @@ def emit_toll(
         )
     except ValueError as exc:
         logger.warning("science toll skipped (rates not wired yet): %s", exc)
+    except Exception as exc:  # TW-208: metering failure never breaks serving
+        logger.warning("science toll emit failed: %s", exc)
 
 
 # ---------------------------------------------------------------------------

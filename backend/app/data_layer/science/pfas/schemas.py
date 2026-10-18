@@ -10,8 +10,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, PositiveFloat, field_validator
 
-from .models import ANALYTICAL_METHODS, COMPOUNDS, DESTRUCTION_METHODS
-
 Compound = Literal[
     "PFOA", "PFOS", "GenX", "PFHxS", "PFNA", "PFDA", "PFBS",
     "PFHpA", "PFOSA", "6:2 FTS", "PFBA", "PFPeA",

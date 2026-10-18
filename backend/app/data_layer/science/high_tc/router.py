@@ -62,6 +62,8 @@ def _emit_toll(
     except ValueError as exc:
         # Unknown event type (TOLL_RATES not wired yet) — log and continue.
         log.warning("toll_skipped", extra={"event_type": event_type, "err": str(exc)})
+    except Exception as exc:  # TW-208: metering failure never breaks serving
+        log.warning("toll_emit_failed", extra={"event_type": event_type, "err": str(exc)})
 
 
 def _request_id(x_request_id: str | None) -> str:

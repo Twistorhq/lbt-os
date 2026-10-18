@@ -110,6 +110,11 @@ def _toll_best_effort(
             "crop-climate toll emit failed; continuing without toll",
             extra={"event": event_type, "error": str(exc)},
         )
+    except Exception as exc:  # TW-208: metering failure never breaks serving
+        log.warning(
+            "crop-climate toll emit failed; continuing without toll",
+            extra={"event": event_type, "error": str(exc)},
+        )
 
 
 def _toll(request: Request | None, event_type: str, org_id: str = "public",
