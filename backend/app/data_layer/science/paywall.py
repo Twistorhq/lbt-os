@@ -642,11 +642,18 @@ def build_usage_block(
 
 
 def _count_records(result: Any) -> int:
-    """Rows/records served by a lane response, across response shapes."""
+    """Rows/records served by a lane response, across response shapes.
+
+    Checks the common payload keys (data / versions / rows / records);
+    falls back to len() for top-level lists. Returns 0 when uncountable.
+    """
     try:
         data = getattr(result, "data", None)
         if data is None and isinstance(result, dict):
-            data = result.get("data")
+            for key in ("data", "versions", "rows", "records"):
+                data = result.get(key)
+                if data is not None:
+                    break
         if data is None and isinstance(result, (list, tuple)):
             return len(result)
         if isinstance(data, (list, tuple)):

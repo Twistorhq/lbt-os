@@ -19,11 +19,12 @@ import uuid
 from datetime import datetime, timezone
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 from supabase import Client
 
 from ....database import get_db
 from ....services.toll_service import record_toll_event
+from .. import paywall
 from ..auth import enforce_lab_binding, require_science_key
 from . import schemas
 
@@ -121,7 +122,7 @@ def _provenance(db: Client, version: dict | None, rows: list[dict]) -> schemas.P
 # Datasets
 # ---------------------------------------------------------------------------
 @router.get("/datasets", response_model=schemas.DatasetsResponse)
-def list_datasets(db: Annotated[Client, Depends(get_db)]):
+def list_datasets(db: Annotated[Client, Depends(get_db)], response: Response = None):
     """List immutable dataset versions for the high-Tc lane (metadata read)."""
     res = (
         db.table("sci_dataset_versions")
@@ -132,15 +133,16 @@ def list_datasets(db: Annotated[Client, Depends(get_db)]):
     )
     versions = [schemas.DatasetVersionRead(**_json_safe(v)) for v in (res.data or [])]
     latest = versions[0].semver if versions else None
-    return schemas.DatasetsResponse(
+    result = schemas.DatasetsResponse(
         as_of=latest,
         synthetic=any(v.doi is None for v in versions) if versions else False,
         versions=versions,
     )
+    return paywall.finalize(result, db, ORG_SCIENCE, _request_id(None), response)
 
 
 @router.get("/datasets/{semver}", response_model=schemas.DatasetDetailResponse)
-def dataset_detail(semver: str, db: Annotated[Client, Depends(get_db)]):
+def dataset_detail(semver: str, db: Annotated[Client, Depends(get_db)], response: Response = None):
     """Snapshot metadata + merkle root for one pinned version."""
     res = (
         db.table("sci_dataset_versions")
@@ -161,9 +163,10 @@ def dataset_detail(semver: str, db: Annotated[Client, Depends(get_db)]):
         .execute()
     )
     corrections = [schemas.CorrectionRead(**_json_safe(c)) for c in (corr.data or [])]
-    return schemas.DatasetDetailResponse(
+    result = schemas.DatasetDetailResponse(
         as_of=version.semver, version=version, corrections_since=corrections
     )
+    return paywall.finalize(result, db, ORG_SCIENCE, _request_id(None), response)
 
 
 # ---------------------------------------------------------------------------
@@ -172,6 +175,7 @@ def dataset_detail(semver: str, db: Annotated[Client, Depends(get_db)]):
 @router.get("/query", response_model=schemas.QueryResponse)
 def query_gold(
     db: Annotated[Client, Depends(get_db)],
+    response: Response = None,
     x_request_id: Annotated[str | None, Header()] = None,
     structure: Annotated[str | None, Query()] = None,
     min_tc_k: Annotated[float | None, Query(ge=0)] = None,
@@ -228,7 +232,7 @@ def query_gold(
         )
 
     rows = [schemas.GoldRowRead(**_json_safe(r)) for r in raw_rows]
-    return schemas.QueryResponse(
+    result = schemas.QueryResponse(
         as_of=version["semver"] if version else None,
         provenance=_provenance(db, version, raw_rows),
         synthetic=any(r.synthetic for r in rows),
@@ -236,13 +240,14 @@ def query_gold(
         row_count=len(rows),
         bulk=bulk,
     )
+    return paywall.finalize(result, db, ORG_SCIENCE, request_id, response)
 
 
 # ---------------------------------------------------------------------------
 # Benchmarks
 # ---------------------------------------------------------------------------
 @router.get("/benchmarks", response_model=schemas.BenchmarksResponse)
-def list_benchmarks(db: Annotated[Client, Depends(get_db)]):
+def list_benchmarks(db: Annotated[Client, Depends(get_db)], response: Response = None):
     """Open benchmarks + leaderboards for the lane (metadata read)."""
     res = db.table("sci_benchmarks").select("*").eq("lane", LANE).execute()
     out: list[schemas.BenchmarkRead] = []
@@ -259,13 +264,15 @@ def list_benchmarks(db: Annotated[Client, Depends(get_db)]):
                 **_json_safe({**b, "leaderboard": runs.data or []})
             )
         )
-    return schemas.BenchmarksResponse(benchmarks=out)
+    result = schemas.BenchmarksResponse(benchmarks=out)
+    return paywall.finalize(result, db, ORG_SCIENCE, _request_id(None), response)
 
 
 @router.post("/benchmarks/runs", response_model=schemas.BenchmarkRunRead, status_code=201)
 def submit_benchmark_run(
     payload: schemas.BenchmarkRunSubmit,
     db: Annotated[Client, Depends(get_db)],
+    response: Response = None,
     x_request_id: Annotated[str | None, Header()] = None,
     x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
 ):
@@ -318,6 +325,7 @@ def submit_benchmark_run(
 @router.get("/corrections", response_model=schemas.CorrectionsResponse)
 def correction_feed(
     db: Annotated[Client, Depends(get_db)],
+    response: Response = None,
     dataset_version: Annotated[str | None, Query()] = None,
 ):
     """Correction feed per dataset — errata propagate forward, history intact."""
@@ -335,7 +343,8 @@ def correction_feed(
             q = q.eq("new_dataset_version_id", version.data["id"])
     res = q.order("corrected_at", desc=True).execute()
     corrections = [schemas.CorrectionRead(**_json_safe(c)) for c in (res.data or [])]
-    return schemas.CorrectionsResponse(as_of=dataset_version, corrections=corrections)
+    result = schemas.CorrectionsResponse(as_of=dataset_version, corrections=corrections)
+    return paywall.finalize(result, db, ORG_SCIENCE, _request_id(None), response)
 
 
 # ---------------------------------------------------------------------------
@@ -345,6 +354,7 @@ def correction_feed(
 def ingest_batch(
     payload: schemas.IngestRequest,
     db: Annotated[Client, Depends(get_db)],
+    response: Response = None,
     x_request_id: Annotated[str | None, Header()] = None,
     x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
 ):
@@ -372,10 +382,11 @@ def ingest_batch(
         db, event_type=TOLL_INGEST, request_id=request_id, quantity=float(len(payload.records))
     )
     version = _latest_version(db)
-    return schemas.IngestResponse(
+    result = schemas.IngestResponse(
         as_of=version["semver"] if version else None,
         synthetic=all(r.synthetic for r in payload.records),
         accepted=accepted,
         rejected=len(dead_letters),
         dead_letters=dead_letters,
     )
+    return paywall.finalize(result, db, ORG_SCIENCE, request_id, response)

@@ -456,7 +456,7 @@ def _db() -> Any:
 @router.get("/datasets")
 def http_list_datasets(
     request: Request,
-    response: Response,
+    response: Response = None,
     x_request_id: str | None = Header(default=None),
     x_org_id: str | None = Header(default=None),
 ):
@@ -471,7 +471,7 @@ def http_list_datasets(
 def http_get_dataset_version(
     version: str,
     request: Request,
-    response: Response,
+    response: Response = None,
     x_request_id: str | None = Header(default=None),
     x_org_id: str | None = Header(default=None),
 ):
@@ -485,7 +485,7 @@ def http_get_dataset_version(
 @router.get("/query")
 def http_query_gold(
     request: Request,
-    response: Response,
+    response: Response = None,
     record_class: str | None = Query(default=None),
     carbon_pool: str | None = Query(default=None),
     analytical_method: str | None = Query(default=None),
@@ -510,7 +510,7 @@ def http_query_gold(
 @router.get("/benchmarks")
 def http_list_benchmarks(
     request: Request,
-    response: Response,
+    response: Response = None,
     x_request_id: str | None = Header(default=None),
     x_org_id: str | None = Header(default=None),
 ):
@@ -524,7 +524,7 @@ def http_list_benchmarks(
 @router.get("/benchmarks/mrv-blind/plots")
 def http_blind_plots(
     request: Request,
-    response: Response,
+    response: Response = None,
     x_request_id: str | None = Header(default=None),
     x_org_id: str | None = Header(default=None),
 ):
@@ -539,7 +539,7 @@ def http_blind_plots(
 def http_blind_submit(
     sub: schemas.BlindSubmissionIn,
     request: Request,
-    response: Response,
+    response: Response = None,
     x_request_id: str | None = Header(default=None),
     x_org_id: str | None = Header(default=None),
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
@@ -598,13 +598,22 @@ def http_download_dataset(
     paywall.emit_download_toll(db, org_id, request_id, row["id"])
     # The download itself is also a served read: meter it as a query.
     _emit_toll(db, org_id, TOLL_QUERY, f"{request_id}:download")
-    return paywall.excel_response(content, DATASET_NAME, version)
+    # TW-607: EOM usage block -- rows delivered + price charged (ledger-read)
+    # -- in X-Twistor-* headers, since the body is the workbook itself.
+    # The README sheet also records rows + the charged fee.
+    usage = paywall.build_usage_block(
+        db, org_id, request_id=request_id, records=len(rows)
+    )
+    dl = paywall.excel_response(content, DATASET_NAME, version)
+    paywall.set_usage_headers(dl, usage)
+    return dl
 
 
 @router.post("/ingest")
 def http_ingest_batch(
     batch: schemas.IngestBatch,
     request: Request,
+    response: Response = None,
     x_request_id: str | None = Header(default=None),
     x_org_id: str | None = Header(default=None),
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
@@ -612,4 +621,7 @@ def http_ingest_batch(
     db = _db()
     key = require_science_key(x_api_key, db, "carbon")
     enforce_lab_binding(key, [str(m.lab_id) for m in batch.measurements])
-    return ingest_batch(db, batch, _org_id(x_org_id), _request_id(request, x_request_id))
+    request_id = _request_id(request, x_request_id)
+    org_id = _org_id(x_org_id)
+    result = ingest_batch(db, batch, org_id, request_id)
+    return paywall.finalize(result, db, org_id, request_id, response)

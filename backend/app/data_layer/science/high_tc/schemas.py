@@ -23,6 +23,11 @@ class ResponseEnvelope(BaseModel):
     as_of: str | None = None  # dataset semver, e.g. "1.0.0"
     provenance: ProvenanceSummary = ProvenanceSummary()
     synthetic: bool = False
+    usage: dict[str, Any] | None = Field(
+        default=None,
+        description="TW-607 EOM usage block: records served, toll charged this "
+        "call (ledger-read), running period total, rate-limit tier.",
+    )
 
 
 class MeasurementIngest(BaseModel):
