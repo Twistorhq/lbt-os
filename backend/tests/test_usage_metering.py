@@ -223,6 +223,38 @@ def test_finalize_without_response_skips_headers():
     assert out["usage"]["rate_limit_tier"] == paywall.DEFAULT_RATE_LIMIT_TIER
 
 
+# ------------------------------------------------------------------ id consistency
+def test_crop_climate_toll_uses_single_request_id():
+    """Regression (Rosa blocker 2): the toll emission and the usage lookup
+    must share ONE request_id, or the readout lies ($0.00 on a charged call).
+
+    Verifies _toll's signature takes request_id explicitly (not request).
+    """
+    import inspect
+
+    from app.data_layer.science.crop_climate import router as cc_router
+
+    sig = inspect.signature(cc_router._toll)
+    first_param = list(sig.parameters)[0]
+    assert first_param == "request_id", (
+        f"_toll must take request_id explicitly, got {first_param}"
+    )
+
+
+def test_high_tc_benchmark_submit_routes_through_finalize():
+    """Regression (Rosa blocker 1): submit_benchmark_run must call finalize
+    so the usage headers are stamped on the charged call.
+    """
+    import inspect
+
+    from app.data_layer.science.high_tc import router as ht_router
+
+    src = inspect.getsource(ht_router.submit_benchmark_run)
+    assert "paywall.finalize" in src, (
+        "submit_benchmark_run must route through paywall.finalize"
+    )
+
+
 # ------------------------------------------------------------------ counting
 @pytest.mark.parametrize("result,expected", [
     ({"data": [1, 2, 3]}, 3),

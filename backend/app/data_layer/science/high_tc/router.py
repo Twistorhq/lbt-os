@@ -316,7 +316,9 @@ def submit_benchmark_run(
     # insert response came back bare.
     data.setdefault("id", str(uuid.uuid4()))
     data.setdefault("submitted_at", datetime.now(timezone.utc).isoformat())
-    return schemas.BenchmarkRunRead(**_json_safe(data))
+    result = schemas.BenchmarkRunRead(**_json_safe(data))
+    # BenchmarkRunRead is not a ResponseEnvelope: usage rides the headers.
+    return paywall.finalize(result, db, ORG_SCIENCE, request_id, response)
 
 
 # ---------------------------------------------------------------------------

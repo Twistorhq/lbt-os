@@ -123,12 +123,19 @@ def _toll_best_effort(
         log.warning("metered toll %s failed (%s); continuing", event_type, exc)
 
 
-def _toll(request: Request | None, event_type: str, org_id: str = "public",
+def _toll(request_id: str, event_type: str, org_id: str = "public",
           quantity: float = 1, source_type: str | None = None,
           source_id: str | None = None,
           store: models.CropClimateStore | None = None) -> None:
+    """Emit a toll under an explicit request_id (TW-607).
+
+    The caller computes request_id ONCE via _request_id(request) and threads
+    it through both _toll and paywall.finalize, so the usage block looks up
+    the same idempotency key the toll was charged under. Minting a second
+    ID here would make the readout lie ($0.00 on a charged call).
+    """
     _toll_best_effort(
-        _request_id(request), event_type, quantity=quantity,
+        request_id, event_type, quantity=quantity,
         source_type=source_type, source_id=source_id, org_id=org_id,
         db=_toll_db(store) if store is not None else None)
 
@@ -200,7 +207,8 @@ def list_datasets(request: Request, response: Response = None,
                   x_org_id: Annotated[str | None, Header()] = None,
                   store: models.CropClimateStore = Depends(get_store)):
     org_id = _gate(store, x_org_id)
-    _toll(request, EVENT_QUERY, org_id=org_id,
+    request_id = _request_id(request)
+    _toll(request_id, EVENT_QUERY, org_id=org_id,
           source_type="sci_dataset_versions", store=store)
     versions = [schemas.DatasetVersionRead(
         id=v.id, lane=v.lane, dataset_name=v.dataset_name, semver=v.semver,
@@ -209,7 +217,6 @@ def list_datasets(request: Request, response: Response = None,
         released_at=v.released_at, release_notes=v.release_notes).model_dump()
         for v in store.list_versions()]
     latest = store.list_versions()[-1]
-    request_id = _request_id(request)
     result = _dataset_envelope(store, latest, versions)
     return paywall.finalize(result, _toll_db(store), org_id, request_id, response)
 
@@ -220,14 +227,14 @@ def get_dataset(version: str, request: Request, response: Response = None,
                 store: models.CropClimateStore = Depends(get_store)):
     v = _version_or_404(store, version)
     org_id = _gate(store, x_org_id)
-    _toll(request, EVENT_QUERY, org_id=org_id,
+    request_id = _request_id(request)
+    _toll(request_id, EVENT_QUERY, org_id=org_id,
           source_type="sci_dataset_versions", source_id=v.id, store=store)
     payload = schemas.DatasetVersionRead(
         id=v.id, lane=v.lane, dataset_name=v.dataset_name, semver=v.semver,
         row_count=v.row_count, content_root_hash=v.content_root_hash,
         benchmark_pin=v.benchmark_pin, doi=v.doi, supersedes_id=v.supersedes_id,
         released_at=v.released_at, release_notes=v.release_notes).model_dump()
-    request_id = _request_id(request)
     result = _dataset_envelope(store, v, payload)
     return paywall.finalize(result, _toll_db(store), org_id, request_id, response)
 
@@ -274,9 +281,9 @@ def gold_provenance(gold_id: str, request: Request, response: Response = None,
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     version = store.versions[chain["gold"]["dataset_version_id"]]
     org_id = _gate(store, x_org_id)
-    _toll(request, EVENT_QUERY, org_id=org_id,
-          source_type="sci_crop_gold", source_id=gold_id, store=store)
     request_id = _request_id(request)
+    _toll(request_id, EVENT_QUERY, org_id=org_id,
+          source_type="sci_crop_gold", source_id=gold_id, store=store)
     result = _dataset_envelope(store, version, chain)
     return paywall.finalize(result, _toll_db(store), org_id, request_id, response)
 
@@ -286,11 +293,11 @@ def list_benchmarks(request: Request, response: Response = None,
                      x_org_id: Annotated[str | None, Header()] = None,
                      store: models.CropClimateStore = Depends(get_store)):
     org_id = _gate(store, x_org_id)
-    _toll(request, EVENT_BENCHMARK, org_id=org_id,
+    request_id = _request_id(request)
+    _toll(request_id, EVENT_BENCHMARK, org_id=org_id,
           source_type="sci_benchmarks", store=store)
     benchmarks = store.list_benchmarks()
     latest = store.list_versions()[-1]
-    request_id = _request_id(request)
     result = _dataset_envelope(store, latest, benchmarks)
     return paywall.finalize(result, _toll_db(store), org_id, request_id, response)
 
@@ -357,13 +364,13 @@ def ingest_batch(payload: schemas.IngestRequest, request: Request,
                      "location": raw.get("location")}
             dead_letters.append(entry)
             store.dead_letters.append(entry)
-    _toll(request, EVENT_INGEST, org_id=x_org_id or "public", quantity=accepted,
+    _toll(request_id, EVENT_INGEST, org_id=x_org_id or "public", quantity=accepted,
           source_type="sci_bronze_artifacts", source_id=artifact.id, store=store)
     result = schemas.IngestResponse(accepted=accepted, rejected=rejected,
                                   receipt_ids=receipts,
                                   dead_letters=dead_letters)
     return paywall.finalize(result, _toll_db(store), x_org_id or "public",
-                            _request_id(request), response)
+                            request_id, response)
 
 
 @router.get("/corrections", response_model=schemas.Envelope)
@@ -375,10 +382,10 @@ def correction_feed(
     store: models.CropClimateStore = Depends(get_store),
 ):
     org_id = _gate(store, x_org_id)
-    _toll(request, EVENT_QUERY, org_id=org_id,
+    request_id = _request_id(request)
+    _toll(request_id, EVENT_QUERY, org_id=org_id,
           source_type="sci_corrections", store=store)
     latest = store.list_versions()[-1]
-    request_id = _request_id(request)
     result = _dataset_envelope(store, latest, store.list_corrections(dataset))
     return paywall.finalize(result, _toll_db(store), org_id, request_id, response)
 
@@ -402,9 +409,9 @@ def file_correction(payload: schemas.CorrectionCreate, request: Request,
         )
     except models.StoreError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    _toll(request, EVENT_INGEST, org_id=x_org_id or "public",
-          source_type="sci_corrections", source_id=new_version.id, store=store)
     request_id = _request_id(request)
+    _toll(request_id, EVENT_INGEST, org_id=x_org_id or "public",
+          source_type="sci_corrections", source_id=new_version.id, store=store)
     result = _dataset_envelope(store, new_version, {"new_version": new_version.semver,
                                                   "supersedes": new_version.supersedes_id})
     return paywall.finalize(result, _toll_db(store), x_org_id or "public",
@@ -458,7 +465,7 @@ def download_dataset(version: str, request: Request,
     )
     request_id = _request_id(request)
     paywall.emit_download_toll(_toll_db(store), org_id, request_id, v.id)
-    _toll(request, EVENT_QUERY, org_id=org_id,
+    _toll(request_id, EVENT_QUERY, org_id=org_id,
           source_type="sci_crop_gold", source_id=v.id, store=store)
     # TW-607: EOM usage block in X-Twistor-* headers (body is the workbook).
     usage = paywall.build_usage_block(
