@@ -16,6 +16,7 @@ from .config import settings
 
 # TW-593 science data layer V1 — six lanes. Each router carries its own
 # /data/v1/science/{lane} prefix except turbulence (mounted with prefix below).
+from .data_layer.science.carbon import router as sci_carbon_router
 from .data_layer.science.crop_climate import router as sci_crop_router
 from .data_layer.science.electrocatalysis import router as sci_electro_router
 from .data_layer.science.high_tc import router as sci_hightc_router
@@ -141,6 +142,7 @@ app.include_router(visitor_events.router,          prefix="/api/v1")
 # /data/v1/science/{lane} prefix except turbulence (mounted with prefix here).
 app.include_router(sci_electro_router.router)
 app.include_router(sci_subseasonal_router.router)
+app.include_router(sci_carbon_router.router)
 app.include_router(sci_turbulence_router.router,   prefix="/data/v1/science/turbulence")
 app.include_router(sci_pfas_router.router)
 app.include_router(sci_crop_router.router)
