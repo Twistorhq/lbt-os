@@ -339,6 +339,16 @@ def test_dataset_versions_immutable_trigger_in_migration():
     assert "RAISE EXCEPTION" in CORE_SQL
 
 
+def test_electro_gold_immutable_trigger_in_migration():
+    # Rosa round-1 Major 3: the electrocatalysis gold table must carry its own
+    # immutability trigger (gold rows are append-only; corrections supersede).
+    assert re.search(
+        r"CREATE TRIGGER sci_electro_gold_no_mutation\s+BEFORE UPDATE OR DELETE ON\s+public\.sci_electro_gold",
+        LANE_SQL,
+    ), "electro gold immutability trigger missing"
+    assert "RAISE EXCEPTION" in LANE_SQL
+
+
 # ---------------------------------------------------------------------------
 # 4. Correction supersession creates a new version
 # ---------------------------------------------------------------------------
@@ -484,6 +494,33 @@ def test_ingest_requires_api_key(app_client):
         },
     )
     assert r.status_code == 401
+
+
+def test_api_key_rate_limit_enforced():
+    """Rosa round-1 Major 2: rate_limit_per_min is read and enforced (429)."""
+    from fastapi import HTTPException
+
+    from app.data_layer.science import auth as auth_mod
+
+    auth_mod._key_limiter.reset()
+    db = _FakeDB()
+    db.data["sci_api_keys"] = [{
+        "id": "key-rl",
+        "key_hash": auth_mod.hash_key("rl-key"),
+        "key_prefix": "rl",
+        "label": "rate limit test",
+        "lab_id": None,
+        "scopes": ["science:electrocatalysis:write"],
+        "rate_limit_per_min": 3,
+        "is_active": True,
+    }]
+    for _ in range(3):
+        key = auth_mod.require_science_key("rl-key", db, "electrocatalysis")
+        assert key["id"] == "key-rl"
+    with pytest.raises(HTTPException) as exc_info:
+        auth_mod.require_science_key("rl-key", db, "electrocatalysis")
+    assert exc_info.value.status_code == 429
+    auth_mod._key_limiter.reset()
 
 
 def test_ingest_rejects_unknown_lab(app_client):

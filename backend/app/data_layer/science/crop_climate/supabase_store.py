@@ -433,14 +433,21 @@ class SupabaseCropClimateStore(models.CropClimateStore):
         return new_version
 
     def list_corrections(self, dataset_name: str) -> list[dict]:
+        # Corrections link to datasets via new_dataset_version_id ->
+        # sci_dataset_versions(dataset_name). Filter on the version linkage,
+        # like the in-memory store filters on Correction.dataset_name.
+        versions = {v.id: v.dataset_name for v in self.versions.values()}
         rows = _rows(self._db, "sci_corrections", lane=LANE)
         out = []
         for r in rows:
+            ver_name = versions.get(r.get("new_dataset_version_id") or "")
+            if ver_name != dataset_name:
+                continue
             out.append(
                 {
                     "id": r["id"],
                     "lane": r["lane"],
-                    "dataset_name": dataset_name,
+                    "dataset_name": ver_name,
                     "corrects_silver_id": r["corrects_silver_id"],
                     "reason": r["reason"],
                     "corrected_values": r["corrected_values"],

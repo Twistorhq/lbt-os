@@ -19,7 +19,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Header, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from supabase import Client
 
 from ....database import get_db
@@ -152,8 +152,6 @@ def dataset_detail(semver: str, db: Annotated[Client, Depends(get_db)]):
     )
     version = schemas.DatasetVersionRead(**_json_safe(res.data)) if res.data else None
     if version is None:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=404, detail=f"unknown dataset version {semver}")
     corr = (
         db.table("sci_corrections")
@@ -283,8 +281,6 @@ def submit_benchmark_run(
         .execute()
     )
     if not bench.data:
-        from fastapi import HTTPException
-
         raise HTTPException(
             status_code=404, detail=f"unknown benchmark {payload.benchmark_name}"
         )
@@ -297,8 +293,6 @@ def submit_benchmark_run(
         .execute()
     )
     if not manifest.data:
-        from fastapi import HTTPException
-
         raise HTTPException(
             status_code=404, detail=f"unknown manifest {payload.manifest_id}"
         )

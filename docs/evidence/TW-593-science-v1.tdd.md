@@ -39,15 +39,20 @@ quality attestations, blind benchmarks. Six lane routers mounted under
    double. `sci_corrections` now links `new_dataset_version_id` properly.
 3. **Electrocatalysis gold missing immutability trigger.** Appended the
    gold immutability trigger to `migration_sci_electrocatalysis_v1.sql`;
-   covered by `test_migration_declares_gold_immutable_trigger`.
+   covered by `test_electro_gold_immutable_trigger_in_migration`
+   (asserts `sci_electro_gold_no_mutation` BEFORE UPDATE OR DELETE in the
+   lane migration).
 4. **high_tc benchmark runs don't enforce manifest.** `submit_run` now
    404s on unknown `manifest_id`; covered by
    `test_benchmark_submit_unknown_manifest_404`.
 5. **Unauthenticated mutation endpoints.** New `auth.py`:
    `require_science_key` (X-API-Key → sha256 → `sci_api_keys` → scope check),
-   `enforce_lab_binding`. Wired into all 8 mutating endpoints across 6 lanes.
-   Every lane test file has a `*_requires_api_key` test asserting 401 without
-   the header (valid body, so the 401 proves the auth gate, not validation).
+   `enforce_lab_binding`, plus per-key sliding-window rate limiting
+   (`rate_limit_per_min` on the key row, 429 on excess — the column Rosa
+   flagged as unread is now read on every authenticated call). Wired into
+   all 8 mutating endpoints across 6 lanes. Every lane test file has a
+   `*_requires_api_key` test asserting 401 without the header (valid body,
+   so the 401 proves the auth gate, not validation).
 
 ## 4. Minors closed
 - F841 in `test_pfas.py` (CI-breaking unused variable) — fixed; ruff clean.
@@ -70,9 +75,10 @@ Command (from `backend/`):
 `python3 -m pytest tests/test_electrocatalysis.py tests/test_pfas.py
 tests/test_turbulence.py tests/test_subseasonal.py tests/test_high_tc.py
 app/data_layer/science/crop_climate/tests/`
-Result: **169 passed** (was 162 pre-fix; +7: five 401 gate tests, one bronze
-provenance assertion folded into an existing test, one SQL vocab guardrail).
-Ruff: clean on all science code, config, main, and all six lane test files.
+Result: **172 passed** (was 162 pre-fix; +10: six 401 gate tests, one
+manifest-404 test, one SQL vocab guardrail, one electro trigger test, one
+rate-limit test). Ruff: clean on all science code, config, main, and all
+six lane test files.
 
 ## 6. Known limitations (V1, documented, not blockers)
 - ed25519 signature *verification* is deferred to pre-partner-onboarding;
