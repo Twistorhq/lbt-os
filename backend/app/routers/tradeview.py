@@ -116,20 +116,24 @@ def _pin_for(
 # fresh entries via id(db). Failures are never cached.
 _BRIEF_TTL_S = 60.0
 _BRIEF_CACHE_MAX_ORGS = 64
-_brief_cache: dict[tuple[str, int], tuple[float, dict[str, Any]]] = {}
+# Keyed by (org_id, id(db)). CPython reuses id() values after an object is
+# garbage-collected, so the entry also stores the db object itself and the
+# hit path verifies identity with `is` — otherwise a recycled address can
+# serve a stale brief from a dead db (TW-471: red CI since 10-04).
+_brief_cache: dict[tuple[str, int], tuple[float, dict[str, Any], Any]] = {}
 
 
 def _brief_for(db, org_id: str) -> dict[str, Any]:
     key = (org_id, id(db))
     now = time.monotonic()
     hit = _brief_cache.get(key)
-    if hit is not None and now < hit[0]:
+    if hit is not None and hit[2] is db and now < hit[0]:
         return hit[1]
     brief = run_leak_scan(db, org_id)
     if len(_brief_cache) >= _BRIEF_CACHE_MAX_ORGS:
         oldest = min(_brief_cache, key=lambda k: _brief_cache[k][0])
         del _brief_cache[oldest]
-    _brief_cache[key] = (now + _BRIEF_TTL_S, brief)
+    _brief_cache[key] = (now + _BRIEF_TTL_S, brief, db)
     return brief
 
 
