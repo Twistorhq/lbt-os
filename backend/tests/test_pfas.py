@@ -15,9 +15,25 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from app.data_layer.science.auth import hash_key
 from app.data_layer.science.pfas import models, router, schemas, seed
 
 MIGRATION_SQL = Path(__file__).resolve().parent.parent.parent / "supabase" / "migration_sci_pfas_v1.sql"
+
+_TEST_API_KEY = "test-key-pfas"
+
+
+def _key_row():
+    return {
+        "id": "key-1",
+        "key_hash": hash_key(_TEST_API_KEY),
+        "key_prefix": "test-key",
+        "label": "test key",
+        "lab_id": None,
+        "scopes": ["science:pfas:write"],
+        "rate_limit_per_min": 60,
+        "is_active": True,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -269,6 +285,16 @@ def test_migration_enforces_lane_vocabularies():
     assert "'PFOA'" in sql and "'thermal'" in sql
 
 
+def test_method_vocab_matches_sql_check():
+    """Guardrail (Rosa TW-593 review): SQL CHECK, models, and schemas agree."""
+    sql = MIGRATION_SQL.read_text()
+    for method in models.DESTRUCTION_METHODS:
+        assert f"'{method}'" in sql, f"{method} missing from SQL CHECK"
+    assert set(schemas.DestructionMethod.__args__) == set(
+        models.DESTRUCTION_METHODS
+    )
+
+
 # ---------------------------------------------------------------------------
 # Correction supersession
 # ---------------------------------------------------------------------------
@@ -443,7 +469,7 @@ def test_query_endpoint_404_without_versions(monkeypatch):
 
 
 def test_ingest_accepts_valid_and_dead_letters_db_failures(monkeypatch):
-    db = FakeDB({models.SILVER_TABLE: []})
+    db = FakeDB({models.SILVER_TABLE: [], "sci_api_keys": [_key_row()]})
     table = db.table(models.SILVER_TABLE)
     table._fail_insert = True
     # Patch db.table to return the failing table for silver inserts.
@@ -455,21 +481,33 @@ def test_ingest_accepts_valid_and_dead_letters_db_failures(monkeypatch):
         schemas.PFASMeasurementIn(**_valid_measurement_dict(0)),
         schemas.PFASMeasurementIn(**_valid_measurement_dict(1)),
     ])
-    resp = router.ingest_batch(payload, db=db, x_request_id="ing-1")
+    resp = router.ingest_batch(payload, db=db, x_request_id="ing-1",
+                               x_api_key=_TEST_API_KEY)
     assert resp.accepted == 0
     assert resp.dead_letters == 2
     assert calls and calls[0]["event_type"] == "data.science.ingest"
 
 
 def test_ingest_accepts_valid_records(monkeypatch):
-    db = FakeDB({models.SILVER_TABLE: []})
-    calls = _patch_toll(monkeypatch)
+    db = FakeDB({models.SILVER_TABLE: [], "sci_api_keys": [_key_row()]})
+    _patch_toll(monkeypatch)
     payload = schemas.IngestRequest(
         records=[schemas.PFASMeasurementIn(**_valid_measurement_dict(0))])
-    resp = router.ingest_batch(payload, db=db, x_request_id="ing-2")
+    resp = router.ingest_batch(payload, db=db, x_request_id="ing-2",
+                               x_api_key=_TEST_API_KEY)
     assert resp.accepted == 1
     assert resp.dead_letters == 0
     assert resp.dataset_version_pending is True
+
+
+def test_ingest_requires_api_key(monkeypatch):
+    db = FakeDB({models.SILVER_TABLE: [], "sci_api_keys": [_key_row()]})
+    _patch_toll(monkeypatch)
+    payload = schemas.IngestRequest(
+        records=[schemas.PFASMeasurementIn(**_valid_measurement_dict(0))])
+    with pytest.raises(Exception) as exc_info:
+        router.ingest_batch(payload, db=db, x_request_id="ing-3")
+    assert "401" in str(exc_info.value) or "X-API-Key" in str(exc_info.value)
 
 
 def test_benchmarks_lists_concept_when_table_missing(monkeypatch):

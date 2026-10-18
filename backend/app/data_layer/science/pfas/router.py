@@ -28,6 +28,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
 from ....database import get_db
 from ....services import toll_service
+from ..auth import enforce_lab_binding, require_science_key
 from . import models, schemas, seed
 
 log = logging.getLogger(__name__)
@@ -240,11 +241,14 @@ def ingest_batch(
     payload: schemas.IngestRequest,
     db=Depends(get_db),
     x_request_id: Annotated[str | None, Header()] = None,
+    x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
 ):
     """Signed lab ingestion. Per-record isolation: invalid records land in
     dead letters, valid ones insert. Accepted rows await the next dataset
     version cut before they appear in gold."""
     request_id = _request_id(x_request_id)
+    key = require_science_key(x_api_key, db, "pfas")
+    enforce_lab_binding(key, [str(r.lab_id) for r in payload.records])
     records = [r.model_dump(mode="json") for r in payload.records]
     valid, dead_letters = models.split_valid_records(records)
 

@@ -19,12 +19,26 @@ from app.data_layer.science.crop_climate import models, router, schemas, seed
 @pytest.fixture()
 def store():
     """In-memory store seeded with one lab, one artifact, one calibration."""
+    from app.data_layer.science.auth import hash_key
+
     s = models.CropClimateStore()
     lab = s.register_lab(
         name="Twistor Synthetic Trials",
         kind="independent",
         verification_status="verified",
     )
+    s.api_keys = [
+        {
+            "id": "key-1",
+            "key_hash": hash_key("test-key-crop"),
+            "key_prefix": "test-key",
+            "label": "test key",
+            "lab_id": None,
+            "scopes": ["science:crop_climate:write"],
+            "rate_limit_per_min": 60,
+            "is_active": True,
+        }
+    ]
     artifact = s.register_artifact(
         lab_id=lab.id,
         storage_path="s3://twistor-sci-bronze/crop_climate/seed_v1.csv",
@@ -448,9 +462,20 @@ def test_api_ingest_quarantines_bad_records(seeded_store):
             },
         ],
     }
-    resp = client.post("/data/v1/science/crop_climate/ingest", json=payload)
+    resp = client.post("/data/v1/science/crop_climate/ingest", json=payload,
+                       headers={"X-API-Key": "test-key-crop"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["accepted"] == 1
     assert body["rejected"] == 1
     assert len(body["dead_letters"]) == 1
+
+
+def test_api_ingest_requires_api_key(seeded_store):
+    client = _test_client(seeded_store)
+    fx = seeded_store.fixtures
+    resp = client.post("/data/v1/science/crop_climate/ingest",
+                       json={"lab_id": fx["lab"].id,
+                             "collector_signature": "sig:test",
+                             "records": []})
+    assert resp.status_code == 401

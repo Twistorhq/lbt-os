@@ -13,11 +13,12 @@ import logging
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
 from ....auth import AuthContext, get_auth
 from ....database import get_db
 from ....services.toll_service import record_toll_event
+from ..auth import enforce_lab_binding, require_science_key
 from .schemas import (
     BenchmarkOut,
     DatasetVersionOut,
@@ -152,7 +153,8 @@ def query_measurements(
     rows = rows[:filters.limit]
 
     versions = [r for r in _rows(db, _VERSIONS_TABLE) if r.get("lane") == LANE]
-    latest = max(versions, key=lambda r: r.get("semver", "")) if versions else None
+    # Order by released_at, not semver: lexicographic max() puts 10.0.0 below 2.0.0.
+    latest = max(versions, key=lambda r: r.get("released_at", "")) if versions else None
 
     lab_ids = {r.get("lab_id") for r in rows if r.get("lab_id")}
     _emit_toll(auth.org_id, "data.science.query", request_id)
@@ -208,17 +210,45 @@ def list_benchmarks(auth: Annotated[AuthContext, Depends(get_auth)]):
 
 @router.post("/ingest", response_model=IngestResponse)
 def ingest_batch(batch: IngestBatch,
-                 auth: Annotated[AuthContext, Depends(get_auth)]):
+                 auth: Annotated[AuthContext, Depends(get_auth)],
+                 x_api_key: str | None = Header(default=None, alias="X-API-Key")):
     request_id = _request_id()
     db = get_db()
+    key = require_science_key(x_api_key, db, "turbulence")
+    enforce_lab_binding(key, [rec.lab_id for rec in batch.records])
     accepted = 0
+    quarantined = 0
     dead_letters: list[dict[str, Any]] = []
     for i, rec in enumerate(batch.records):
         try:
+            _verify_lab(db, rec.lab_id)
+            if not rec.collector_signature:
+                # Unsigned lab payloads quarantine — never promoted (TW-208).
+                quarantined += 1
+                continue
+            artifact_id = str(uuid.uuid4())
+            db.table("sci_bronze_artifacts").insert(
+                {
+                    "id": artifact_id,
+                    "lane": LANE,
+                    "lab_id": rec.lab_id,
+                    "storage_path": f"{batch.storage_path_prefix}/{artifact_id}.json",
+                    "content_hash": rec.content_hash,
+                    "collector_signature": rec.collector_signature,
+                    "collected_at": rec.collected_at or rec.measured_at,
+                    "schema_version": batch.schema_version,
+                }
+            ).execute()
             row = rec.model_dump(mode="json")
-            row["id"] = f"sci:{request_id}:{i}"
+            row.pop("content_hash", None)
+            row.pop("collector_signature", None)
+            row.pop("collected_at", None)
+            row["artifact_id"] = artifact_id
+            # id left to the DB default (gen_random_uuid) — never client-set.
             db.table(_MEAS_TABLE).insert(row).execute()
             accepted += 1
+        except HTTPException:
+            raise
         except Exception as exc:  # noqa: BLE001 — per-record isolation (TW-208)
             dead_letters.append({"index": i, "error": str(exc),
                                  "case_name": rec.case_name})
@@ -226,5 +256,16 @@ def ingest_batch(batch: IngestBatch,
                         extra={"index": i, "error": str(exc)})
     _emit_toll(auth.org_id, "data.science.ingest", request_id,
                quantity=float(accepted))
-    return IngestResponse(accepted=accepted, dead_letters=dead_letters,
+    return IngestResponse(accepted=accepted, quarantined=quarantined,
+                          dead_letters=dead_letters,
                           batch_id=f"sci:{request_id}")
+
+
+def _verify_lab(db: Any, lab_id: str) -> dict[str, Any]:
+    res = db.table("sci_labs").select("id,verification_status").eq("id", lab_id).execute()
+    labs = getattr(res, "data", []) or []
+    if not labs:
+        raise HTTPException(status_code=400, detail=f"unknown lab {lab_id}")
+    if labs[0].get("verification_status") != "verified":
+        raise HTTPException(status_code=403, detail=f"lab {lab_id} is not verified")
+    return labs[0]

@@ -201,3 +201,22 @@ CREATE TABLE IF NOT EXISTS sci_benchmark_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_sci_benchmark_runs_benchmark
   ON sci_benchmark_runs (benchmark_id);
+
+-- API keys for the science data layer (TW-593 Major 5). The raw key is shown
+-- once at creation and never stored — only the sha256 hash lives here.
+-- Reads are open on the V1 synthetic prototype; every mutating endpoint
+-- (ingest, corrections, benchmark submissions) requires a key with the
+-- lane's write scope. A key bound to a lab_id may only write for that lab.
+CREATE TABLE IF NOT EXISTS sci_api_keys (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  key_hash text NOT NULL UNIQUE,          -- sha256 of the raw key
+  key_prefix text NOT NULL,               -- first 8 chars, for operator lookup
+  label text NOT NULL,                    -- human label: who holds this key
+  lab_id uuid REFERENCES sci_labs(id) ON DELETE RESTRICT,  -- NULL = unbound
+  scopes text[] NOT NULL DEFAULT '{}',    -- e.g. {'science:electrocatalysis:write'}
+  rate_limit_per_min int NOT NULL DEFAULT 60,
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_sci_api_keys_hash ON sci_api_keys (key_hash);
+ALTER TABLE sci_api_keys ENABLE ROW LEVEL SECURITY;

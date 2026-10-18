@@ -14,6 +14,7 @@ runs against a fake supabase query-builder.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import uuid
@@ -29,6 +30,10 @@ from sqlalchemy.orm import Session
 
 from app.data_layer.science.electrocatalysis import models, schemas, seed
 from app.data_layer.science.electrocatalysis import router as electro_router
+
+_TEST_API_KEY = "test-key-electro"
+_TEST_API_KEY_HASH = hashlib.sha256(_TEST_API_KEY.encode()).hexdigest()
+_TEST_HEADERS = {"X-API-Key": _TEST_API_KEY}
 
 MIGRATION_CORE = os.path.join(
     os.path.dirname(__file__), "..", "..", "supabase", "migration_sci_core_v1.sql"
@@ -192,6 +197,18 @@ def _seeded_fake() -> _FakeDB:
         },
     ]
     db.data["sci_labs"] = [{"id": lab_id, "verification_status": "verified"}]
+    db.data["sci_api_keys"] = [
+        {
+            "id": str(uuid.uuid4()),
+            "key_hash": _TEST_API_KEY_HASH,
+            "key_prefix": "test-key",
+            "label": "test key",
+            "lab_id": None,  # unbound: may write for any lab
+            "scopes": ["science:electrocatalysis:write"],
+            "rate_limit_per_min": 60,
+            "is_active": True,
+        }
+    ]
     db.data["sci_benchmarks"] = []
     db.data["sci_corrections"] = []
     return db
@@ -435,7 +452,9 @@ def test_ingest_accepts_signed_quarantines_unsigned(app_client, monkeypatch):
             },
         ],
     }
-    r = client.post("/data/v1/science/electrocatalysis/ingest", json=payload)
+    r = client.post(
+        "/data/v1/science/electrocatalysis/ingest", json=payload, headers=_TEST_HEADERS
+    )
     assert r.status_code == 202
     body = r.json()
     assert body["accepted"] == 1
@@ -443,6 +462,28 @@ def test_ingest_accepts_signed_quarantines_unsigned(app_client, monkeypatch):
     assert body["dead_letters"] == 0
     assert toll_calls[0]["event_type"] == "data.science.ingest"
     assert toll_calls[0]["idempotency_key"].startswith("sci:")
+
+
+def test_ingest_requires_api_key(app_client):
+    client, fake = app_client
+    lab_id = fake.data["sci_labs"][0]["id"]
+    r = client.post(
+        "/data/v1/science/electrocatalysis/ingest",
+        json={
+            "storage_path_prefix": "x",
+            "schema_version": 1,
+            "records": [
+                {
+                    "lab_id": lab_id,
+                    "content_hash": "h",
+                    "collector_signature": "sig",
+                    "collected_at": "2026-10-18T12:00:00+00:00",
+                    "conditions": CONDITIONS,
+                }
+            ],
+        },
+    )
+    assert r.status_code == 401
 
 
 def test_ingest_rejects_unknown_lab(app_client):
@@ -460,7 +501,9 @@ def test_ingest_rejects_unknown_lab(app_client):
             }
         ],
     }
-    r = client.post("/data/v1/science/electrocatalysis/ingest", json=payload)
+    r = client.post(
+        "/data/v1/science/electrocatalysis/ingest", json=payload, headers=_TEST_HEADERS
+    )
     assert r.status_code == 400
 
 

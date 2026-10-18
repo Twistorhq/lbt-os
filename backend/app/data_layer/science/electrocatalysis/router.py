@@ -1,3 +1,15 @@
+from __future__ import annotations
+
+import hashlib
+import logging
+import uuid
+from typing import Any
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
+
+from ..auth import enforce_lab_binding, require_science_key
+from . import schemas
+
 """TW-593 Track 2 · Electrocatalysis lane — FastAPI router.
 
 Prepared by Twistor Holdings LLC.
@@ -17,22 +29,9 @@ count, attestation summary), and synthetic flags. V1 seeds SYNTHETIC data
 only.
 
 Tolling (TW-549): every served call emits a toll event with
-idempotency_key=f"sci:{request_id}". Dre wires TOLL_RATES in the integration
-pass; until then record_toll_event raises ValueError for the unknown event
-type — we catch it, log, and continue. Never 500 on toll.
+idempotency_key=f"sci:{request_id}". Rates are wired in config.TOLL_RATES;
+metering failure is caught, logged, and never 500s a query.
 """
-
-from __future__ import annotations
-
-import hashlib
-import logging
-import uuid
-from typing import Any
-
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
-
-from . import schemas
-
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/data/v1/science/electrocatalysis", tags=["science-electrocatalysis"])
@@ -77,9 +76,8 @@ def emit_toll(
     amount_cents: int | None = None,
     org_id: str = "public-science",
 ) -> None:
-    """Emit one metered science event. Unknown event types raise ValueError
-    until Dre wires TOLL_RATES in the integration pass — caught here so a
-    missing rate never 500s a query."""
+    """Emit one metered science event. Unknown event types raise ValueError —
+    caught here so a missing rate never 500s a query."""
     try:
         record_toll_event = _default_toll_impl()
     except ImportError as exc:
@@ -94,8 +92,8 @@ def emit_toll(
             idempotency_key=f"sci:{request_id}",
             amount_cents=amount_cents,
         )
-    except ValueError as exc:
-        logger.warning("science toll skipped (rates not wired yet): %s", exc)
+    except ValueError as exc:  # unknown toll event type — rates are wired; stay defensive
+        logger.warning("science toll skipped (unknown event type): %s", exc)
     except Exception as exc:  # TW-208: metering failure never breaks serving
         logger.warning("science toll emit failed: %s", exc)
 
@@ -331,8 +329,11 @@ def ingest_batch(
     batch: schemas.IngestBatchIn,
     db: Any = Depends(get_db),
     x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> dict[str, Any]:
     request_id = x_request_id or str(uuid.uuid4())
+    key = require_science_key(x_api_key, db, "electrocatalysis")
+    enforce_lab_binding(key, [str(r.lab_id) for r in batch.records])
     accepted = 0
     quarantined = 0
     dead_letters = 0

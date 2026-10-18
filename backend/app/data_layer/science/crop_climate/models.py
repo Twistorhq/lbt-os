@@ -213,6 +213,31 @@ class CropClimateStore:
         self.corrections: list[Correction] = []
         self.benchmarks: dict[str, Benchmark] = {}
         self.dead_letters: list[dict] = []
+        self.api_keys: list[dict] = []  # test-double for sci_api_keys
+
+    def table(self, name: str):
+        """Minimal query shim for cross-cutting lookups (sci_api_keys auth).
+
+        Test-double only: supports .select().eq().execute() -> .data.
+        """
+
+        store = self
+
+        class _Q:
+            def __init__(self):
+                self._rows = list(store.api_keys) if name == "sci_api_keys" else []
+
+            def select(self, *_a):
+                return self
+
+            def eq(self, col, val):
+                self._rows = [r for r in self._rows if r.get(col) == val]
+                return self
+
+            def execute(self):
+                return type("R", (), {"data": self._rows})()
+
+        return _Q()
 
     # ---------------------------------------------------------- shared mirrors
     def register_lab(self, name: str, kind: str, verification_status: str) -> Lab:

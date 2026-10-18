@@ -18,6 +18,7 @@ from sqlalchemy import Column, Integer, Table, create_engine, event, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.data_layer.science.auth import hash_key
 from app.data_layer.science.high_tc import models
 from app.data_layer.science.high_tc import router as hightc_router
 from app.data_layer.science.high_tc import schemas as hightc_schemas
@@ -28,6 +29,10 @@ from app.data_layer.science.high_tc.models import (
     supersede_gold,
 )
 from app.database import get_db
+
+_TEST_API_KEY = "test-key-hightc"
+_TEST_HEADERS = {"X-API-Key": _TEST_API_KEY}
+_TEST_MANIFEST_ID = str(uuid.uuid4())
 
 # ---------------------------------------------------------------------------
 # Shared-core stubs (owned by the electrocatalysis lane's core migration;
@@ -595,6 +600,19 @@ def lane_store():
         "sci_benchmarks": [bench],
         "sci_benchmark_runs": [],
         "sci_corrections": [],
+        "sci_manifests": [{"id": _TEST_MANIFEST_ID}],
+        "sci_api_keys": [
+            {
+                "id": str(uuid.uuid4()),
+                "key_hash": hash_key(_TEST_API_KEY),
+                "key_prefix": "test-key",
+                "label": "test key",
+                "lab_id": None,
+                "scopes": ["science:high_tc:write"],
+                "rate_limit_per_min": 60,
+                "is_active": True,
+            }
+        ],
     }
 
 
@@ -677,7 +695,8 @@ class TestRouterTolling:
                 },
             ]
         }
-        r = client.post("/data/v1/science/high_tc/ingest", json=payload)
+        r = client.post("/data/v1/science/high_tc/ingest", json=payload,
+                        headers=_TEST_HEADERS)
         assert r.status_code == 201
         body = r.json()
         assert body["accepted"] == 1
@@ -685,6 +704,22 @@ class TestRouterTolling:
         assert len(body["dead_letters"]) == 1
         assert toll_calls[0]["event_type"] == "data.science.ingest"
         assert toll_calls[0]["quantity"] == 2.0
+
+    def test_ingest_requires_api_key(self, monkeypatch, lane_store):
+        toll_calls = []
+        client = _make_client(monkeypatch, lane_store, toll_calls)
+        r = client.post("/data/v1/science/high_tc/ingest",
+                        json={"records": [{
+                            "artifact_id": str(uuid.uuid4()),
+                            "lab_id": str(uuid.uuid4()),
+                            "conditions": {"temp_c": 22.0},
+                            "composition": "MgB2",
+                            "structure": "mgb2",
+                            "tc_k": 39.0,
+                            "measurement_method": "susceptibility",
+                            "synthetic": True,
+                        }]})
+        assert r.status_code == 401
 
     def test_ingest_rejects_unprovenanced_real_record(self, monkeypatch, lane_store):
         toll_calls = []
@@ -702,7 +737,8 @@ class TestRouterTolling:
                 }
             ]
         }
-        r = client.post("/data/v1/science/high_tc/ingest", json=payload)
+        r = client.post("/data/v1/science/high_tc/ingest", json=payload,
+                        headers=_TEST_HEADERS)
         assert r.status_code == 422
         assert toll_calls == []  # never got far enough to toll
 
@@ -715,11 +751,27 @@ class TestRouterTolling:
                 "benchmark_name": "htsc2025_v1",
                 "submitter": "twistor-baseline-gnn",
                 "score": 12.4,
-                "manifest_id": str(uuid.uuid4()),
+                "manifest_id": _TEST_MANIFEST_ID,
             },
+            headers=_TEST_HEADERS,
         )
         assert r.status_code == 201
         assert toll_calls[0]["event_type"] == "data.science.benchmark"
+
+    def test_benchmark_submit_unknown_manifest_404(self, monkeypatch, lane_store):
+        toll_calls = []
+        client = _make_client(monkeypatch, lane_store, toll_calls)
+        r = client.post(
+            "/data/v1/science/high_tc/benchmarks/runs",
+            json={
+                "benchmark_name": "htsc2025_v1",
+                "submitter": "x",
+                "score": 1.0,
+                "manifest_id": str(uuid.uuid4()),
+            },
+            headers=_TEST_HEADERS,
+        )
+        assert r.status_code == 404
 
     def test_benchmark_submit_unknown_benchmark_404(self, monkeypatch, lane_store):
         toll_calls = []
@@ -732,6 +784,7 @@ class TestRouterTolling:
                 "score": 1.0,
                 "manifest_id": str(uuid.uuid4()),
             },
+            headers=_TEST_HEADERS,
         )
         assert r.status_code == 404
         assert toll_calls == []

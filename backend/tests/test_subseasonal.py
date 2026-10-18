@@ -11,16 +11,12 @@ supabase-py call pattern (table().select().eq().execute()).
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import pytest
 
-SCIENCE_DIR = Path(__file__).resolve().parents[1] / "app" / "data_layer" / "science"
-sys.path.insert(0, str(SCIENCE_DIR))
-
-from subseasonal import models, router, schemas  # noqa: E402
-from subseasonal import seed as seed_mod  # noqa: E402
+from app.data_layer.science.subseasonal import models, router, schemas
+from app.data_layer.science.subseasonal import seed as seed_mod
 
 MIGRATION = (
     Path(__file__).resolve().parents[2]

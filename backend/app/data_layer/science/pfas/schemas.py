@@ -10,6 +10,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, PositiveFloat, field_validator
 
+from .models import DESTRUCTION_METHODS
+
 Compound = Literal[
     "PFOA", "PFOS", "GenX", "PFHxS", "PFNA", "PFDA", "PFBS",
     "PFHpA", "PFOSA", "6:2 FTS", "PFBA", "PFPeA",
@@ -22,6 +24,13 @@ DestructionMethod = Literal[
 AnalyticalMethod = Literal[
     "LC-MS/MS", "LC-HRMS", "QTOF-MS", "IC", "GC-MS", "TOF-SIMS", "19F-NMR",
 ]
+
+# Single-source guardrail (Rosa TW-593 review): the method vocabulary lives in
+# models.DESTRUCTION_METHODS and the SQL CHECK constraint. This Literal must
+# stay in sync — the assertion fails the import if it drifts.
+assert set(DestructionMethod.__args__) == set(DESTRUCTION_METHODS), (
+    "schemas.DestructionMethod drifted from models.DESTRUCTION_METHODS"
+)
 
 
 class Conditions(BaseModel):

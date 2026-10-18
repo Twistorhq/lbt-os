@@ -35,7 +35,8 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 
 from app.services import toll_service
 
-from . import models, schemas, seed
+from ..auth import enforce_lab_binding, require_science_key
+from . import models, schemas
 
 log = logging.getLogger(__name__)
 
@@ -60,11 +61,15 @@ _store: models.CropClimateStore | None = None
 
 
 def get_store() -> models.CropClimateStore:
-    """Demo store factory. Integration swaps this for the Supabase adapter."""
-    global _store
-    if _store is None:
-        _store = seed.bootstrap_demo_store()
-    return _store
+    """Production store factory: Supabase-backed (Rosa Major 2).
+
+    The in-memory CropClimateStore remains the test double — tests override
+    this dependency with a seeded store.
+    """
+    from ....database import get_db
+    from .supabase_store import SupabaseCropClimateStore
+
+    return SupabaseCropClimateStore(get_db())
 
 
 router = APIRouter(
@@ -260,9 +265,12 @@ def list_benchmarks(request: Request,
 @router.post("/ingest", response_model=schemas.IngestResponse)
 def ingest_batch(payload: schemas.IngestRequest, request: Request,
                  x_org_id: Annotated[str | None, Header()] = None,
-                 store: models.CropClimateStore = Depends(get_store)):
+                 store: models.CropClimateStore = Depends(get_store),
+                 x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None):
     """Signed lab ingestion. Per-record: one bad record -> dead_letters,
     never kills the run (TW-208). Unsigned payloads quarantine, never promote."""
+    key = require_science_key(x_api_key, store, "crop_climate")
+    enforce_lab_binding(key, [str(payload.lab_id)])
     if payload.lab_id not in store.labs:
         raise HTTPException(status_code=422,
                             detail=f"unknown lab_id {payload.lab_id}")
@@ -333,9 +341,12 @@ def correction_feed(
 @router.post("/corrections", response_model=schemas.Envelope)
 def file_correction(payload: schemas.CorrectionCreate, request: Request,
                     x_org_id: Annotated[str | None, Header()] = None,
-                    store: models.CropClimateStore = Depends(get_store)):
+                    store: models.CropClimateStore = Depends(get_store),
+                    x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None):
     """Errata propagate forward: a correction mints a new dataset version.
     History is never mutated."""
+    key = require_science_key(x_api_key, store, "crop_climate")
+    enforce_lab_binding(key, [str(payload.corrected_by)])
     try:
         new_version = store.correct_measurement(
             silver_id=payload.corrects_silver_id,

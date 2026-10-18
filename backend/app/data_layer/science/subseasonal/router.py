@@ -29,6 +29,7 @@ from typing import Any
 
 from fastapi import APIRouter, Header, Query, Request
 
+from ..auth import enforce_lab_binding, require_science_key
 from . import schemas
 
 log = logging.getLogger(__name__)
@@ -320,5 +321,9 @@ def http_ingest_batch(
     request: Request,
     x_request_id: str | None = Header(default=None),
     x_org_id: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ):
-    return ingest_batch(_db(), batch, _org_id(x_org_id), _request_id(request, x_request_id))
+    db = _db()
+    key = require_science_key(x_api_key, db, "subseasonal")
+    enforce_lab_binding(key, [str(m.lab_id) for m in batch.measurements])
+    return ingest_batch(db, batch, _org_id(x_org_id), _request_id(request, x_request_id))

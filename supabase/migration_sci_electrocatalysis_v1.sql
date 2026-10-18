@@ -86,3 +86,18 @@ CREATE INDEX IF NOT EXISTS idx_sci_electro_gold_version
   ON sci_electro_gold (dataset_version_id);
 CREATE INDEX IF NOT EXISTS idx_sci_electro_gold_composition
   ON sci_electro_gold (composition);
+
+-- Version immutability: gold rows are append-only. A correction creates a new
+-- dataset version with new gold rows; history is never rewritten.
+CREATE OR REPLACE FUNCTION public.sci_electro_gold_immutable()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'sci_electro_gold is immutable: issue a correction and cut a new dataset version (TW-593)';
+  RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS sci_electro_gold_no_mutation ON public.sci_electro_gold;
+CREATE TRIGGER sci_electro_gold_no_mutation
+  BEFORE UPDATE OR DELETE ON public.sci_electro_gold
+  FOR EACH ROW EXECUTE FUNCTION public.sci_electro_gold_immutable();

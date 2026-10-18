@@ -9,6 +9,7 @@ runs against a Supabase-shaped fake.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import unittest
 from unittest import mock
@@ -103,7 +104,22 @@ def _seed_db() -> FakeDb:
         "sci_dataset_versions": versions,
         "sci_benchmarks": benches,
         "sci_benchmark_runs": runs,
+        "sci_labs": [{"id": "lab-1", "name": "Seed Lab",
+                      "verification_status": "verified"}],
+        "sci_api_keys": [{
+            "id": "key-1",
+            "key_hash": hashlib.sha256(b"test-key-turbulence").hexdigest(),
+            "key_prefix": "test-key",
+            "label": "test key",
+            "lab_id": None,
+            "scopes": ["science:turbulence:write"],
+            "rate_limit_per_min": 60,
+            "is_active": True,
+        }],
     })
+
+
+_TEST_HEADERS = {"X-API-Key": "test-key-turbulence"}
 
 
 def _client(db: FakeDb) -> TestClient:
@@ -187,7 +203,8 @@ class ConstraintTests(unittest.TestCase):
 
     def test_pydantic_accepts_valid_record(self):
         rec = schemas.MeasurementIngest(
-            artifact_id="a", lab_id="l", measured_at="2026-10-18T00:00:00Z",
+            lab_id="l", content_hash="abc123",
+            measured_at="2026-10-18T00:00:00Z",
             case_name="channel_flow", reynolds=2000.0, solver="LES",
             closure_model="smagorinsky",
             conditions={"domain": "2pi x 2 x pi", "bc": "periodic/no-slip"})
@@ -375,7 +392,8 @@ class RouterTests(unittest.TestCase):
 
     def test_ingest_accepts_and_dead_letters(self):
         db = _seed_db()
-        good = {"artifact_id": "a1", "lab_id": "lab-1",
+        good = {"lab_id": "lab-1", "content_hash": "hash-1",
+                "collector_signature": "sig-1",
                 "measured_at": "2026-10-18T00:00:00Z",
                 "case_name": "jet", "reynolds": 5000.0, "solver": "LES",
                 "closure_model": "wale",
@@ -383,17 +401,30 @@ class RouterTests(unittest.TestCase):
         # invalid: DNS with a closure model -> rejected by pydantic (422)
         bad = dict(good, solver="DNS", closure_model="k-epsilon")
         resp = self._call(db, "post", "/data/v1/science/turbulence/ingest",
-                          json={"records": [good, bad]})
+                          json={"records": [good, bad]}, headers=_TEST_HEADERS)
         self.assertEqual(resp.status_code, 422)  # batch-level validation
 
         resp = self._call(db, "post", "/data/v1/science/turbulence/ingest",
-                          json={"records": [good]})
+                          json={"records": [good]}, headers=_TEST_HEADERS)
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
         self.assertEqual(body["accepted"], 1)
         self.assertEqual(body["dead_letters"], [])
         self.assertTrue(body["batch_id"].startswith("sci:"))
         self.assertEqual(len(db.tables["sci_turbulence_measurements"]), 31)
+        # bronze artifact was created first (provenance chain intact)
+        self.assertEqual(len(db.tables["sci_bronze_artifacts"]), 1)
+
+    def test_ingest_requires_api_key(self):
+        db = _seed_db()
+        good = {"lab_id": "lab-1", "content_hash": "hash-1",
+                "collector_signature": "sig-1",
+                "measured_at": "2026-10-18T00:00:00Z",
+                "case_name": "jet",
+                "conditions": {"domain": "d", "bc": "b"}}
+        resp = self._call(db, "post", "/data/v1/science/turbulence/ingest",
+                          json={"records": [good]})
+        self.assertEqual(resp.status_code, 401)
 
     def test_toll_emission_attempted_with_idempotency_key(self):
         db = _seed_db()
@@ -415,11 +446,12 @@ class RouterTests(unittest.TestCase):
             events = {c.kwargs["event_type"] for c in toll.call_args_list}
             self.assertIn("data.science.benchmark", events)
         with mock.patch.object(turb_router, "record_toll_event") as toll:
-            good = {"artifact_id": "a1", "lab_id": "lab-1",
+            good = {"lab_id": "lab-1", "content_hash": "hash-2",
+                    "collector_signature": "sig-2",
                     "measured_at": "2026-10-18T00:00:00Z", "case_name": "jet",
                     "conditions": {"domain": "d", "bc": "b"}}
             self._call(db, "post", "/data/v1/science/turbulence/ingest",
-                       json={"records": [good]})
+                       json={"records": [good]}, headers=_TEST_HEADERS)
             events = {c.kwargs["event_type"] for c in toll.call_args_list}
             self.assertIn("data.science.ingest", events)
 

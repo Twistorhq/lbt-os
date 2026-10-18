@@ -40,9 +40,13 @@ class FidelityMetrics(BaseModel):
 
 
 class MeasurementIngest(BaseModel):
-    artifact_id: str
     lab_id: str
     calibration_id: str | None = None
+    content_hash: str = Field(..., description="sha256 of the raw payload")
+    collector_signature: str | None = Field(
+        None, description="lab's ed25519 signature over content_hash"
+    )
+    collected_at: str | None = None
     conditions: Conditions
     measured_at: str
     case_name: str
@@ -79,6 +83,8 @@ class MeasurementIngest(BaseModel):
 
 class IngestBatch(BaseModel):
     records: list[MeasurementIngest] = Field(..., min_length=1, max_length=1000)
+    storage_path_prefix: str = "turbulence"
+    schema_version: int = 1
 
 
 class QueryFilters(BaseModel):
@@ -128,5 +134,6 @@ class BenchmarkOut(BaseModel):
 
 class IngestResponse(BaseModel):
     accepted: int
+    quarantined: int = 0  # unsigned lab payloads — never promoted
     dead_letters: list[dict[str, Any]]
     batch_id: str

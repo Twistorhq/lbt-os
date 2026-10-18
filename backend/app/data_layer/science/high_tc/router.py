@@ -24,6 +24,7 @@ from supabase import Client
 
 from ....database import get_db
 from ....services.toll_service import record_toll_event
+from ..auth import enforce_lab_binding, require_science_key
 from . import schemas
 
 log = logging.getLogger(__name__)
@@ -59,8 +60,7 @@ def _emit_toll(
             quantity=quantity,
             idempotency_key=f"sci:{request_id}",
         )
-    except ValueError as exc:
-        # Unknown event type (TOLL_RATES not wired yet) — log and continue.
+    except ValueError as exc:  # unknown toll event type — rates are wired; stay defensive
         log.warning("toll_skipped", extra={"event_type": event_type, "err": str(exc)})
     except Exception as exc:  # TW-208: metering failure never breaks serving
         log.warning("toll_emit_failed", extra={"event_type": event_type, "err": str(exc)})
@@ -269,9 +269,11 @@ def submit_benchmark_run(
     payload: schemas.BenchmarkRunSubmit,
     db: Annotated[Client, Depends(get_db)],
     x_request_id: Annotated[str | None, Header()] = None,
+    x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
 ):
     """Submit a benchmark run. Manifest required — no manifest, no leaderboard."""
     request_id = _request_id(x_request_id)
+    require_science_key(x_api_key, db, "high_tc")  # auth gate; key unused after
     bench = (
         db.table("sci_benchmarks")
         .select("*")
@@ -285,6 +287,20 @@ def submit_benchmark_run(
 
         raise HTTPException(
             status_code=404, detail=f"unknown benchmark {payload.benchmark_name}"
+        )
+    # No manifest, no leaderboard: the manifest must exist in sci_manifests.
+    manifest = (
+        db.table("sci_manifests")
+        .select("id")
+        .eq("id", str(payload.manifest_id))
+        .maybe_single()
+        .execute()
+    )
+    if not manifest.data:
+        from fastapi import HTTPException
+
+        raise HTTPException(
+            status_code=404, detail=f"unknown manifest {payload.manifest_id}"
         )
     row = {
         "benchmark_id": bench.data["id"],
@@ -336,9 +352,12 @@ def ingest_batch(
     payload: schemas.IngestRequest,
     db: Annotated[Client, Depends(get_db)],
     x_request_id: Annotated[str | None, Header()] = None,
+    x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
 ):
     """Batch ingestion. One bad record -> dead_letters, never kills the run."""
     request_id = _request_id(x_request_id)
+    key = require_science_key(x_api_key, db, "high_tc")
+    enforce_lab_binding(key, [str(r.lab_id) for r in payload.records])
     accepted = 0
     dead_letters: list[dict] = []
     for rec in payload.records:
