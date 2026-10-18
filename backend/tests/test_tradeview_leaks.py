@@ -296,5 +296,32 @@ class LeadAddressModelTest(unittest.TestCase):
         self.assertIsNone(LeadCreate(name="No Address").address)
 
 
+class BriefCacheIdentityTest(unittest.TestCase):
+    """TW-471: _brief_cache is keyed by id(db), and CPython reuses id()
+    values after garbage collection. A cache hit must verify the db object
+    itself, or a recycled address serves a stale brief from a dead db."""
+
+    def test_recycled_id_does_not_serve_stale_brief(self):
+        import time
+
+        from app.routers import tradeview as tv
+
+        db1 = FakeDb()
+        brief_a = {"marker": "A", "what_should_we_do": []}
+        brief_b = {"marker": "B", "what_should_we_do": []}
+        with mock.patch.object(tv, "run_leak_scan", return_value=brief_a):
+            self.assertIs(tv._brief_for(db1, ORG), brief_a)
+        # Simulate GC + address reuse: a *different* db object lands on an
+        # id() whose cache entry (from the dead db) is still within TTL.
+        db2 = FakeDb()
+        key = (ORG, id(db2))
+        tv._brief_cache[key] = (time.monotonic() + 60.0, brief_a, db1)
+        try:
+            with mock.patch.object(tv, "run_leak_scan", return_value=brief_b):
+                self.assertIs(tv._brief_for(db2, ORG), brief_b)
+        finally:
+            tv._brief_cache.pop(key, None)
+
+
 if __name__ == "__main__":
     unittest.main()
