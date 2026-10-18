@@ -18,6 +18,8 @@ from .logging_config import configure_logging, request_id_var
 from .routers import (
     admin,
     audit,
+    bi,
+    calls,
     customers,
     expenses,
     integrations,
@@ -108,6 +110,8 @@ async def request_lifecycle(request: Request, call_next) -> Response:
 
 # --- Routers ---
 app.include_router(admin.router,                   prefix="/api/v1")
+app.include_router(bi.router,                      prefix="/api/v1")
+app.include_router(calls.router,                   prefix="/api/v1")
 app.include_router(organizations.router,           prefix="/api/v1")
 app.include_router(leads.router,                   prefix="/api/v1")
 app.include_router(customers.router,               prefix="/api/v1")

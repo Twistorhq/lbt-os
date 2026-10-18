@@ -89,3 +89,35 @@
     @apply mt-2 text-2xl font-semibold tracking-tight text-slate-950;
   }
 }
+
+@layer components {
+  /* TW-570 M3 white-label BI */
+  .bi-page h1 { @apply text-2xl font-semibold tracking-tight text-slate-950; }
+  .bi-page h2 { @apply mt-6 text-lg font-semibold text-slate-900; }
+  .bi-muted { @apply text-sm text-slate-500; }
+  .bi-error { @apply text-sm font-medium text-red-700; }
+  .bi-row { @apply mt-2 flex flex-wrap gap-3; }
+  .bi-grid { @apply mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3; }
+  .bi-card { @apply rounded-xl border border-slate-200 bg-white p-4 shadow-sm; }
+  .bi-card.bi-wide { @apply sm:col-span-2 lg:col-span-3; }
+  .bi-card.bi-click { @apply cursor-pointer text-left hover:border-indigo-300; }
+  .bi-title { @apply text-xs font-bold uppercase tracking-widest text-slate-400; }
+  .bi-num { @apply mt-2 text-3xl font-bold tabular-nums text-slate-950; }
+  .bi-table { @apply mt-2 w-full border-collapse text-sm; }
+  .bi-table td { @apply border-t border-slate-100 px-1 py-1.5; }
+  .bi-table td.bi-num { @apply mt-0 text-right text-base; }
+  .bi-form { @apply mt-2 flex max-w-xl flex-wrap items-center gap-2; }
+  .bi-form input { @apply rounded-lg border border-slate-300 px-3 py-2 text-sm; }
+  .bi-form input[type='color'] { @apply h-10 w-14 cursor-pointer p-1; }
+  .bi-page button, .bi-themed button {
+    @apply rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white
+      hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .bi-back { @apply mb-4 text-sm text-indigo-700 hover:underline; background: none !important; }
+  .bi-themed { @apply rounded-2xl border border-slate-200 p-6; }
+  .bi-masthead { @apply mb-4 flex items-center gap-3; }
+  .bi-masthead h2 { @apply mt-0 text-xl font-bold; color: var(--bi-primary); }
+  .bi-logo { @apply h-9; }
+  .bi-actions { @apply mt-4 flex flex-wrap gap-2; }
+  .bi-embed textarea { @apply mt-2 w-full rounded-lg border border-slate-300 p-2 font-mono text-xs; }
+}
