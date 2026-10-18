@@ -390,9 +390,9 @@ def file_correction(payload: schemas.CorrectionCreate, request: Request,
 def download_dataset(version: str, request: Request,
                      x_org_id: Annotated[str | None, Header()] = None,
                      store: models.CropClimateStore = Depends(get_store)):
-    """Excel download: subscription + one-time tier fee (TW-599 paywall).
+    """Excel download: subscription + one-time tiered entry fee (TW-606).
 
-    Small/medium tiers only — large datasets are API-only (403).
+    Small/medium tiers only -- large datasets are API-only (403).
     """
     org_id = _gate(store, x_org_id)
     v = _version_or_404(store, version)

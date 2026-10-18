@@ -380,9 +380,9 @@ def http_download_dataset(
     x_request_id: str | None = Header(default=None),
     x_org_id: str | None = Header(default=None),
 ) -> StreamingResponse:
-    """Excel download: subscription + one-time tier fee (TW-599 paywall).
+    """Excel download: subscription + one-time tiered entry fee (TW-606).
 
-    Small/medium tiers only — large datasets are API-only (403).
+    Small/medium tiers only -- large datasets are API-only (403).
     """
     db = _db()
     org_id = _gate(db, _org_id(x_org_id))

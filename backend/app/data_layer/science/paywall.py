@@ -69,7 +69,6 @@ DELIVERY_MATRIX = {
 # The floor is per-dataset (asset-value tier, set at launch); the curve runs
 # from the dataset's floor up to the cap across 0..scale downloads.
 # Defaults: $0.01 at 0 downloads -> $59.99 at 100,000 downloads.
-DOWNLOAD_CURVE_SPAN_CENTS = 5998  # +$59.98 of growth above the floor
 DOWNLOAD_CURVE_SCALE_DOWNLOADS = 100_000
 DOWNLOAD_CURVE_EXPONENT = 1.5
 DOWNLOAD_CURVE_CAP_CENTS = 5999  # hard cap $59.99 -- never unaffordable
@@ -94,7 +93,6 @@ def download_price_cents(
     download_count: int,
     floor_cents: int = 1,
     *,
-    span_cents: int = DOWNLOAD_CURVE_SPAN_CENTS,
     scale: int = DOWNLOAD_CURVE_SCALE_DOWNLOADS,
     exponent: float = DOWNLOAD_CURVE_EXPONENT,
     cap_cents: int = DOWNLOAD_CURVE_CAP_CENTS,
@@ -102,8 +100,14 @@ def download_price_cents(
     """Dynamic volume price for a dataset download, in cents.
 
     price(d) = floor + (cap - floor) * (d / scale) ** exponent, capped.
-    The exponent and cap are keyword-configurable, not hardcoded magic.
+    The exponent, scale, and cap are keyword-configurable, not hardcoded.
+    Raises ValueError on nonsense config (non-positive scale, negative
+    exponent) -- fail fast on programmer error in a money function.
     """
+    if scale <= 0:
+        raise ValueError(f"download curve scale must be positive, got {scale}")
+    if exponent < 0:
+        raise ValueError(f"download curve exponent must be >= 0, got {exponent}")
     d = max(0, int(download_count))
     floor = max(1, int(floor_cents))
     cap = max(floor, int(cap_cents))
@@ -201,16 +205,21 @@ def cumulative_downloads(db: Any, dataset_version_id: str) -> int:
     """Cumulative Excel downloads for a dataset version, from the toll ledger.
 
     Every download emits a DOWNLOAD_EVENT toll with source_id = version id,
-    so the ledger is the source of truth for the volume curve.
+    so the ledger is the source of truth for the volume curve. Prefers a
+    server-side count (no row fetch -- this runs on the query hot path);
+    falls back to counting fetched rows on shims without count support.
     """
     try:
         resp = (
             db.table("toll_events")
-            .select("id")
+            .select("id", count="exact", head=True)
             .eq("event_type", DOWNLOAD_EVENT)
             .eq("source_id", dataset_version_id)
             .execute()
         )
+        count = getattr(resp, "count", None)
+        if count is not None:
+            return int(count)
         rows = getattr(resp, "data", None) or []
         return len(rows)
     except Exception as exc:  # TW-208: pricing lookup never breaks serving
@@ -232,13 +241,17 @@ def version_price_floor_cents(version_row: dict | None) -> int:
         return ASSET_VALUE_TIERS[DEFAULT_ASSET_VALUE_TIER]
 
 
-def dataset_download_price_cents(db: Any, dataset_version_id: str) -> int:
+def dataset_download_price_cents(
+    db: Any, dataset_version_id: str, version: dict | None = None
+) -> int:
     """Current Excel download price for a dataset version, in cents.
 
     Evaluates the dynamic volume curve at the version's cumulative download
-    count, starting from its per-dataset asset-value floor.
+    count, starting from its per-dataset asset-value floor. Pass a resolved
+    version row to skip the re-lookup on hot paths.
     """
-    version = latest_lane_version_by_id(db, dataset_version_id)
+    if version is None:
+        version = latest_lane_version_by_id(db, dataset_version_id)
     floor = version_price_floor_cents(version)
     return download_price_cents(
         cumulative_downloads(db, dataset_version_id), floor_cents=floor
@@ -397,10 +410,11 @@ def emit_download_toll(
 ) -> dict | None:
     """One-time Excel download fee, ON TOP of the subscription.
 
-    The fee is the org-aware download price: university-tier orgs pay the
-    flat academic fee, everyone else pays the dataset's dynamic curve price
-    at its current cumulative download count. Passed as amount_cents; no
-    TOLL_RATES entry needed because the toll service accepts explicit amounts.
+    The fee is the org's tiered entry fee from the signup question:
+    student $5.99, researcher $10.99, other $10.99 (all tiers then pay the
+    same per-request API tolls at the dataset's live curve price).
+    Passed as amount_cents; no TOLL_RATES entry needed because the toll
+    service accepts explicit amounts.
     """
     fee = download_fee_cents(db, org_id, dataset_version_id)
     try:
@@ -422,24 +436,31 @@ def emit_download_toll(
 
 
 # -------------------------------------- neutral API tolls (TW-606)
-# Economic neutrality: the per-row API toll is set so that pulling an entire
-# dataset via API converges to approximately the dataset's current download
-# price. The researcher's choice between API and download is neutral -- the
-# toll is for access pattern, not a discount or penalty.
+# The per-row API toll is set so that pulling an entire dataset via API
+# converges to approximately the dataset's current CURVE price
+# (download_price_cents at its cumulative download count). The toll is for
+# access pattern, not a discount or penalty.
+# OPEN DESIGN POINT (Rosa review, TW-606): the charged Excel download fee
+# is currently the tiered entry fee ($5.99/$10.99), not the curve price.
+# Full API-vs-download economic neutrality needs Justynn's call on whether
+# downloads should price at the curve (see TW-606).
 API_ROWS_EVENT = "data.science.api_rows"
 
 
 def neutral_per_row_rate_cents(
-    db: Any, dataset_version_id: str, row_count_total: int
+    db: Any,
+    dataset_version_id: str,
+    row_count_total: int,
+    version: dict | None = None,
 ) -> float:
     """Neutral per-row API rate in cents: download_price / total_rows.
 
     A full-dataset pull (row_count_total rows served) converges to the
-    current download price. Uses the standard curve price (not the
-    university flat fee) so the rate reflects the dataset's market value.
+    current download price. Uses the curve price so the rate reflects the
+    dataset's market value. Pass a resolved version row to skip re-lookup.
     """
     total = max(1, int(row_count_total))
-    price = dataset_download_price_cents(db, dataset_version_id)
+    price = dataset_download_price_cents(db, dataset_version_id, version=version)
     return price / total
 
 
@@ -473,7 +494,10 @@ def emit_neutral_data_toll(
         served = max(0, int(rows_served))
         if served == 0:
             return None
-        rate = neutral_per_row_rate_cents(db, version["id"], int(version["row_count"]))
+        # version already resolved above: thread it through (no re-lookup).
+        rate = neutral_per_row_rate_cents(
+            db, version["id"], int(version["row_count"]), version=version
+        )
         mult = volume_rate_multiplier(db, org_id)
         amount = int(round(served * rate * mult))
         from app.services import toll_service
@@ -496,7 +520,13 @@ def emit_neutral_data_toll(
 # --------------------------------------- rate-limit tiers (TW-606)
 # Higher rate limits cost more; tier pricing is tied to the same volume
 # curve -- every tier moves with the dataset's cumulative downloads.
-# Fees are monthly recurring, priced off the curve at the reference count.
+# Fees are monthly recurring, priced off the curve at the reference count
+# (the dataset's cumulative download count at pricing time).
+#
+# STATUS: pricing schedule DEFINED here, but billing + enforcement are NOT
+# wired yet -- no production callers of rate_limit_tier_fee_cents and no
+# rate-limit enforcement reads org_rate_limit_tier. Do not present these
+# as live until the TW-606 follow-up wires them.
 RATE_LIMIT_TIERS: dict[str, dict] = {
     "standard": {"rpm": 60, "price_factor": 1.0, "label": "Standard: 60 req/min"},
     "pro": {"rpm": 600, "price_factor": 5.0, "label": "Pro: 600 req/min"},
@@ -510,9 +540,12 @@ def rate_limit_tier_fee_cents(
 ) -> int:
     """Monthly fee for a rate-limit tier, in cents.
 
-    Evaluates the download volume curve at the reference count, scaled by
-    the tier's price factor. Higher limits cost more; all tiers move with
+    Evaluates the download volume curve at the reference count (the
+    dataset's cumulative download count at pricing time), scaled by the
+    tier's price factor. Higher limits cost more; all tiers move with
     the same curve.
+
+    NOTE: pricing schedule only -- billing/enforcement not wired yet.
     """
     spec = RATE_LIMIT_TIERS.get(tier, RATE_LIMIT_TIERS[DEFAULT_RATE_LIMIT_TIER])
     return int(

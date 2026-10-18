@@ -541,11 +541,11 @@ def http_download_dataset(
     x_request_id: str | None = Header(default=None),
     x_org_id: str | None = Header(default=None),
 ) -> StreamingResponse:
-    """Excel download: subscription + one-time dynamic fee (TW-606 paywall).
+    """Excel download: subscription + one-time tiered entry fee (TW-606).
 
-    Small/medium tiers only — large datasets are API-only (403). The fee is
-    the org-aware download price: university tier pays the flat $5.99
-    academic fee, everyone else pays the dataset's volume-curve price.
+    Small/medium tiers only -- large datasets are API-only (403). The fee
+    is the org's tiered entry fee from the signup question: student $5.99,
+    researcher $10.99, other $10.99.
     """
     db = _db()
     org_id = _gate(db, _org_id(x_org_id))

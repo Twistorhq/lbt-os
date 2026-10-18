@@ -19,7 +19,7 @@ class _Q:
     def __init__(self, rows):
         self._rows = list(rows)
 
-    def select(self, *_a):
+    def select(self, *a, **kw):
         return self
 
     def eq(self, col, val):
