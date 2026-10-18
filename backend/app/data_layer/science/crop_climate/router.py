@@ -331,7 +331,7 @@ def ingest_batch(payload: schemas.IngestRequest, request: Request,
         json.dumps(payload.records, sort_keys=True, default=str).encode()).hexdigest()
     artifact = store.register_artifact(
         lab_id=payload.lab_id,
-        storage_path=f"s3://twistor-sci-bronze/crop_climate/ingest/{_request_id(request)}.json",
+        storage_path=f"s3://twistor-sci-bronze/crop_climate/ingest/{request_id}.json",
         content_hash=content_hash,
         collector_signature=payload.collector_signature,
         schema_version=1,

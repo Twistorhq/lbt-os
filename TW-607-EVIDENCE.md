@@ -4,7 +4,7 @@
 
 **Branch:** `dre/tw-607-usage-metering` (worktree `/tmp/dre-tw607`)
 **Base:** `8a56bec` (TW-606 dynamic pricing) — rebased mid-build after discovering TW-606 landed
-**Tests:** 20 new (`test_usage_metering.py`) + 240 science-lane tests — all green
+**Tests:** 22 new (`test_usage_metering.py`) + 240 science-lane tests — all green
 **E2E:** Verified via TestClient — usage block in JSON body + `X-Twistor-*` headers
 
 ## What was built
