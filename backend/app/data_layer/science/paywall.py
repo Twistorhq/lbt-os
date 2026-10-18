@@ -544,6 +544,187 @@ def org_rate_limit_tier(db: Any, org_id: str | None) -> str:
         return DEFAULT_RATE_LIMIT_TIER
 
 
+# ------------------------------------------- usage metering (TW-607)
+# Claude Code end-of-message style: every science API response carries a
+# usage block so the researcher sees exactly what each transaction consumed
+# and cost. ONE SOURCE OF TRUTH: everything is read from the toll ledger
+# (toll_events) -- the toll for this call is looked up by idempotency key,
+# the running total is the ledger's trailing-30d science spend. Nothing is
+# recomputed from pricing formulas, so the readout can never drift from
+# what was actually charged.
+#
+# Shape (JSON):
+#   usage: {
+#     "records": 100,                  # rows/records returned by this call
+#     "toll_cents": 42,                # toll charged for this call
+#     "toll": "$0.42",                 # human-readable
+#     "period": "trailing_30d",        # the running-total window
+#     "period_total_cents": 1250,      # caller's running total, ledger-read
+#     "period_total": "$12.50",
+#     "rate_limit_tier": "standard",   # the caller's tier + allowance
+#     "rate_limit_rpm": 60,
+#   }
+# Headers (for programmatic clients):
+#   X-Twistor-Toll: $0.42
+#   X-Twistor-Usage: {"records":100,"toll_cents":42,"period_total_cents":1250}
+
+# Idempotency-key patterns every science toll is emitted under. The lookup
+# covers flat query tolls (sci:{rid}), neutral row tolls (sci:api_rows:{rid}),
+# and download tolls (sci:download:{rid} / sci:{rid}:download).
+USAGE_TOLL_KEY_PATTERNS = (
+    "sci:api_rows:{rid}",
+    "sci:{rid}",
+    "sci:download:{rid}",
+    "sci:{rid}:download",
+)
+
+
+def _dollars(cents: int) -> str:
+    """Human-readable dollars, e.g. $0.42."""
+    return f"${cents / 100:,.2f}"
+
+
+def lookup_request_tolls(db: Any, request_id: str) -> list[dict]:
+    """Toll rows for one request, read from the toll ledger by idempotency key.
+
+    This is the one-source-of-truth read: the amounts here are what was
+    actually charged, never a recomputation. Fail-soft (TW-208): a lookup
+    failure returns [] and the usage block still renders with toll_cents 0.
+    """
+    rows: list[dict] = []
+    if not request_id:
+        return rows
+    try:
+        for pattern in USAGE_TOLL_KEY_PATTERNS:
+            key = pattern.format(rid=request_id)
+            resp = (
+                db.table("toll_events")
+                .select("amount_cents,idempotency_key,event_type")
+                .eq("idempotency_key", key)
+                .execute()
+            )
+            rows.extend(getattr(resp, "data", None) or [])
+    except Exception as exc:  # TW-208: metering never breaks serving
+        log.warning("usage toll lookup failed for %s: %s", request_id, exc)
+    return rows
+
+
+def build_usage_block(
+    db: Any,
+    org_id: str | None,
+    *,
+    request_id: str,
+    records: int = 0,
+) -> dict[str, Any]:
+    """Build the EOM usage block for one science API call.
+
+    toll_cents is the sum of this request's toll rows from the ledger;
+    period_total_cents is the org's trailing-30d science spend (also ledger);
+    the rate-limit tier is the org's configured tier. All fail-soft.
+    """
+    toll_rows = lookup_request_tolls(db, request_id)
+    toll_cents = sum(int(r.get("amount_cents") or 0) for r in toll_rows)
+    period_total_cents = (
+        trailing_science_spend_cents(db, org_id) if org_id else 0
+    )
+    tier = org_rate_limit_tier(db, org_id)
+    rpm = int(RATE_LIMIT_TIERS.get(tier, {}).get("rpm") or 60)
+    return {
+        "records": max(0, int(records)),
+        "toll_cents": toll_cents,
+        "toll": _dollars(toll_cents),
+        "period": "trailing_30d",
+        "period_total_cents": period_total_cents,
+        "period_total": _dollars(period_total_cents),
+        "rate_limit_tier": tier,
+        "rate_limit_rpm": rpm,
+    }
+
+
+def _count_records(result: Any) -> int:
+    """Rows/records served by a lane response, across response shapes."""
+    try:
+        data = getattr(result, "data", None)
+        if data is None and isinstance(result, dict):
+            data = result.get("data")
+        if data is None and isinstance(result, (list, tuple)):
+            return len(result)
+        if isinstance(data, (list, tuple)):
+            return len(data)
+        if isinstance(data, dict):
+            return 1
+        return 0
+    except Exception:
+        return 0
+
+
+def set_usage_headers(response: Any, usage: dict[str, Any]) -> None:
+    """Stamp X-Twistor-Toll / X-Twistor-Usage on a FastAPI response.
+
+    X-Twistor-Toll is the human-readable charge for this call; X-Twistor-Usage
+    is a compact JSON summary for programmatic clients. No-op when usage is
+    empty or the response object has no headers mapping.
+    """
+    if not usage:
+        return
+    try:
+        import json as _json
+
+        headers = getattr(response, "headers", None)
+        if headers is None:
+            return
+        headers["X-Twistor-Toll"] = str(usage.get("toll", "$0.00"))
+        headers["X-Twistor-Usage"] = _json.dumps(
+            {
+                "records": usage.get("records", 0),
+                "toll_cents": usage.get("toll_cents", 0),
+                "period_total_cents": usage.get("period_total_cents", 0),
+            },
+            separators=(",", ":"),
+        )
+    except Exception as exc:  # TW-208: header stamping never breaks serving
+        log.warning("usage header stamp failed: %s", exc)
+
+
+def finalize(
+    result: Any,
+    db: Any,
+    org_id: str | None,
+    request_id: str,
+    response: Any = None,
+) -> Any:
+    """Attach the EOM usage block to a science lane response (TW-607).
+
+    Reads the toll ledger (one source of truth), builds the usage block,
+    attaches it to the response body (ScienceEnvelope.usage or result["usage"];
+    JSON arrays get headers only), and stamps X-Twistor-* headers when a
+    response object is provided. Returns the result unchanged otherwise.
+    """
+    try:
+        usage = build_usage_block(
+            db, org_id, request_id=request_id, records=_count_records(result)
+        )
+    except Exception as exc:  # TW-208
+        log.warning("usage block build failed: %s", exc)
+        return result
+    try:
+        if hasattr(result, "usage"):
+            result.usage = usage  # envelope lanes (field exists, serializes)
+        elif isinstance(result, dict):
+            result["usage"] = usage
+        elif hasattr(result, "model_dump"):
+            # Other pydantic lane responses: convert to dict so the usage
+            # block serializes. (Typed response_model endpoints strip it --
+            # those lanes get headers only; see evidence doc.)
+            result = result.model_dump(mode="json")
+            result["usage"] = usage
+        # lists/tuples: body untouched (can't key a JSON array); headers carry it
+    except Exception as exc:
+        log.warning("usage body attach failed: %s", exc)
+    if response is not None:
+        set_usage_headers(response, usage)
+    return result
+
 # ------------------------------------------------------------------ Excel
 def build_excel_bytes(
     rows: list[dict[str, Any]],

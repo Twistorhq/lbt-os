@@ -41,7 +41,7 @@ import logging
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Header, Query, Request
+from fastapi import APIRouter, Header, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
 from .. import paywall
@@ -456,29 +456,36 @@ def _db() -> Any:
 @router.get("/datasets")
 def http_list_datasets(
     request: Request,
+    response: Response,
     x_request_id: str | None = Header(default=None),
     x_org_id: str | None = Header(default=None),
 ):
     db = _db()
     org_id = _gate(db, _org_id(x_org_id))
-    return list_dataset_versions(db, org_id, _request_id(request, x_request_id))
+    request_id = _request_id(request, x_request_id)
+    result = list_dataset_versions(db, org_id, request_id)
+    return paywall.finalize(result, db, org_id, request_id, response)
 
 
 @router.get("/datasets/{version}")
 def http_get_dataset_version(
     version: str,
     request: Request,
+    response: Response,
     x_request_id: str | None = Header(default=None),
     x_org_id: str | None = Header(default=None),
 ):
     db = _db()
     org_id = _gate(db, _org_id(x_org_id))
-    return get_dataset_version(db, version, org_id, _request_id(request, x_request_id))
+    request_id = _request_id(request, x_request_id)
+    result = get_dataset_version(db, version, org_id, request_id)
+    return paywall.finalize(result, db, org_id, request_id, response)
 
 
 @router.get("/query")
 def http_query_gold(
     request: Request,
+    response: Response,
     record_class: str | None = Query(default=None),
     carbon_pool: str | None = Query(default=None),
     analytical_method: str | None = Query(default=None),
@@ -490,40 +497,49 @@ def http_query_gold(
 ):
     db = _db()
     org_id = _gate(db, _org_id(x_org_id))
-    return query_gold(
-        db, org_id, _request_id(request, x_request_id),
+    request_id = _request_id(request, x_request_id)
+    result = query_gold(
+        db, org_id, request_id,
         record_class=record_class, carbon_pool=carbon_pool,
         analytical_method=analytical_method, comparable_group=comparable_group,
         region=region, limit=limit,
     )
+    return paywall.finalize(result, db, org_id, request_id, response)
 
 
 @router.get("/benchmarks")
 def http_list_benchmarks(
     request: Request,
+    response: Response,
     x_request_id: str | None = Header(default=None),
     x_org_id: str | None = Header(default=None),
 ):
     db = _db()
     org_id = _gate(db, _org_id(x_org_id))
-    return list_benchmarks(db, org_id, _request_id(request, x_request_id))
+    request_id = _request_id(request, x_request_id)
+    result = list_benchmarks(db, org_id, request_id)
+    return paywall.finalize(result, db, org_id, request_id, response)
 
 
 @router.get("/benchmarks/mrv-blind/plots")
 def http_blind_plots(
     request: Request,
+    response: Response,
     x_request_id: str | None = Header(default=None),
     x_org_id: str | None = Header(default=None),
 ):
     db = _db()
     org_id = _gate(db, _org_id(x_org_id))
-    return list_blind_plots(db, org_id, _request_id(request, x_request_id))
+    request_id = _request_id(request, x_request_id)
+    result = list_blind_plots(db, org_id, request_id)
+    return paywall.finalize(result, db, org_id, request_id, response)
 
 
 @router.post("/benchmarks/mrv-blind/submit")
 def http_blind_submit(
     sub: schemas.BlindSubmissionIn,
     request: Request,
+    response: Response,
     x_request_id: str | None = Header(default=None),
     x_org_id: str | None = Header(default=None),
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
@@ -531,7 +547,9 @@ def http_blind_submit(
     db = _db()
     key = require_science_key(x_api_key, db, "carbon")
     enforce_lab_binding(key, [])
-    return submit_blind(db, sub, _org_id(x_org_id), _request_id(request, x_request_id))
+    request_id = _request_id(request, x_request_id)
+    result = submit_blind(db, sub, _org_id(x_org_id), request_id)
+    return paywall.finalize(result, db, _org_id(x_org_id), request_id, response)
 
 
 @router.get("/datasets/{version}/download")
