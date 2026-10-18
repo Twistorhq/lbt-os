@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from app.data_layer.science import paywall
 from app.data_layer.science.subseasonal import models, router, schemas
 from app.data_layer.science.subseasonal import seed as seed_mod
 
@@ -50,6 +51,10 @@ class FakeQuery:
 
     def eq(self, col, val):
         self._rows = [r for r in self._rows if str(r.get(col)) == str(val)]
+        return self
+
+    def gte(self, col, val):
+        self._rows = [r for r in self._rows if str(r.get(col) or "") >= str(val)]
         return self
 
     def order(self, *a, **k):
@@ -97,10 +102,19 @@ class TollSpy:
         self.calls: list[dict] = []
         self.fail_with = fail_with
 
-    def __call__(self, db, **kwargs):
+    def __call__(self, db, org_id=None, event_type=None, request_id=None,
+                 quantity=1.0, **kwargs):
         if self.fail_with:
             raise self.fail_with
-        self.calls.append(kwargs)
+        self.calls.append({
+            "org_id": org_id,
+            "event_type": event_type,
+            "request_id": request_id,
+            "quantity": quantity,
+            # metered_toll builds this internally; mirror it for assertions
+            "idempotency_key": f"sci:{request_id}",
+            **kwargs,
+        })
         return {"ok": True}
 
 
@@ -110,7 +124,7 @@ def _versions():
         {
             "id": v1,
             "lane": "subseasonal",
-            "dataset_name": "twistor-s2s-forecasts",
+            "dataset_name": "s2s-trust",
             "semver": "1.0.0",
             "row_count": 30,
             "content_root_hash": "root0",
@@ -123,7 +137,7 @@ def _versions():
         {
             "id": v2,
             "lane": "subseasonal",
-            "dataset_name": "twistor-s2s-forecasts",
+            "dataset_name": "s2s-trust",
             "semver": "1.1.0",
             "row_count": 30,
             "content_root_hash": "root1",
@@ -282,7 +296,7 @@ def test_correction_requires_values():
 # ------------------------------------------------------------------
 def test_query_emits_toll_with_idempotency_key(monkeypatch):
     spy = TollSpy()
-    monkeypatch.setattr(router, "_get_toll_recorder", lambda: spy)
+    monkeypatch.setattr(paywall, "metered_toll", spy)
     db = FakeDB({"sci_dataset_versions": _versions()})
     env = router.list_dataset_versions(db, "org-1", "req-1")
     assert spy.calls, "toll emission was not attempted"
@@ -290,13 +304,13 @@ def test_query_emits_toll_with_idempotency_key(monkeypatch):
     assert call["event_type"] == "data.science.query"
     assert call["idempotency_key"] == "sci:req-1"
     assert call["org_id"] == "org-1"
-    assert env.as_of["dataset"] == "twistor-s2s-forecasts"
+    assert env.as_of["dataset"] == "s2s-trust"
     assert env.synthetic is True
 
 
 def test_gold_query_filters_and_bulk_toll(monkeypatch):
     spy = TollSpy()
-    monkeypatch.setattr(router, "_get_toll_recorder", lambda: spy)
+    monkeypatch.setattr(paywall, "metered_toll", spy)
     rows = [
         {
             "id": _u(f"gold-{i}"),
@@ -333,7 +347,7 @@ def test_query_rejects_out_of_range_lead_weeks():
 
 def test_benchmarks_emit_benchmark_toll(monkeypatch):
     spy = TollSpy()
-    monkeypatch.setattr(router, "_get_toll_recorder", lambda: spy)
+    monkeypatch.setattr(paywall, "metered_toll", spy)
     db = FakeDB(
         {
             "sci_benchmarks": [
@@ -359,7 +373,7 @@ def test_benchmarks_emit_benchmark_toll(monkeypatch):
 
 def test_ingest_self_healing_and_toll(monkeypatch):
     spy = TollSpy()
-    monkeypatch.setattr(router, "_get_toll_recorder", lambda: spy)
+    monkeypatch.setattr(paywall, "metered_toll", spy)
     db = FakeDB({})
     good = {
         **seed_mod.SEED_MEASUREMENTS[0],
@@ -382,7 +396,7 @@ def test_ingest_self_healing_and_toll(monkeypatch):
 def test_toll_valueerror_is_logged_not_raised(monkeypatch):
     """Unknown event type (rates not wired yet) must never break serving."""
     spy = TollSpy(fail_with=ValueError("unknown event type 'data.science.query'"))
-    monkeypatch.setattr(router, "_get_toll_recorder", lambda: spy)
+    monkeypatch.setattr(paywall, "metered_toll", spy)
     env = router.list_dataset_versions(FakeDB({"sci_dataset_versions": _versions()}), "org-1", "req-4")
     assert len(env.data) == 2  # served fine despite toll failure
 
@@ -399,13 +413,116 @@ def test_toll_unavailable_context_continues():
 def test_envelope_contract():
     env = schemas.envelope(
         data=[1, 2],
-        dataset_name="twistor-s2s-forecasts",
+        dataset_name="s2s-trust",
         semver="1.0.0",
         lab_count=3,
         synthetic=True,
         attestation_summary={"reproduced": 2, "failed": 0},
     )
-    assert env.as_of == {"dataset": "twistor-s2s-forecasts", "semver": "1.0.0"}
+    assert env.as_of == {"dataset": "s2s-trust", "semver": "1.0.0"}
     assert env.provenance.lab_count == 3
     assert env.provenance.attestation_summary["reproduced"] == 2
     assert env.synthetic is True
+
+
+# ------------------------------------------------------------------
+# TW-599 paywall: subscription gate + Excel download (HTTP layer)
+# ------------------------------------------------------------------
+def _http_db():
+    return FakeDB({
+        "organizations": [{"id": "org-1", "subscription_status": "active"}],
+        "toll_events": [],
+        "sci_dataset_versions": _versions(),
+        "sci_subseasonal_gold": [],
+    })
+
+
+def _http_client(monkeypatch, db):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(router, "_db", lambda: db)
+    monkeypatch.setattr(paywall, "metered_toll", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(
+        paywall, "emit_download_toll", lambda *a, **k: {"ok": True, "amount_cents": 600}
+    )
+    app = FastAPI()
+    app.include_router(router.router)
+    return TestClient(app)
+
+
+def test_http_query_requires_subscription(monkeypatch):
+    db = _http_db()
+    client = _http_client(monkeypatch, db)
+    # no org header -> 402
+    r = client.get("/data/v1/science/subseasonal/query")
+    assert r.status_code == 402
+    # inactive org -> 402
+    db._tables["organizations"][0]["subscription_status"] = "past_due"
+    r = client.get("/data/v1/science/subseasonal/query",
+                   headers={"X-Org-Id": "org-1"})
+    assert r.status_code == 402
+    # active org -> 200
+    db._tables["organizations"][0]["subscription_status"] = "active"
+    r = client.get("/data/v1/science/subseasonal/query",
+                   headers={"X-Org-Id": "org-1"})
+    assert r.status_code == 200
+
+
+def test_http_download_excel_small_tier(monkeypatch):
+    db = _http_db()
+    db._tables["sci_subseasonal_gold"] = [
+        {
+            "id": "g1", "dataset_version_id": _versions()[0]["id"],
+            "model_source": "ecmwf_ifs", "center": "ecmwf",
+            "model_cycle": "IFS CY48R1", "run_type": "reforecast",
+            "init_date": "2024-01-15", "lead_weeks": 3, "ensemble_size": 51,
+            "variable": "t2m", "region": "CONUS", "crps": 1.2,
+            "skill_vs_climatology": 0.1, "truth_source": "ERA5:0.25deg:v1",
+            "truth_lag_days": 5, "assimilation_window": "+9h/-3h",
+            "reforecast_design": "on-the-fly:20y:11m", "synthetic": True,
+        }
+    ]
+    client = _http_client(monkeypatch, db)
+    r = client.get("/data/v1/science/subseasonal/datasets/1.0.0/download",
+                   headers={"X-Org-Id": "org-1"})
+    assert r.status_code == 200
+    assert "spreadsheetml.sheet" in r.headers["content-type"]
+    assert r.content[:4] == b"PK\x03\x04"
+    assert 'filename="s2s-trust-1.0.0.xlsx"' in r.headers["content-disposition"]
+
+
+def test_http_download_large_tier_api_only(monkeypatch):
+    db = _http_db()
+    big = dict(_versions()[0])
+    big["row_count"] = 2_000_000  # large tier
+    db._tables["sci_dataset_versions"] = [big]
+    client = _http_client(monkeypatch, db)
+    r = client.get("/data/v1/science/subseasonal/datasets/1.0.0/download",
+                   headers={"X-Org-Id": "org-1"})
+    assert r.status_code == 403
+    assert "API-only" in r.json()["detail"]
+
+
+def test_ingest_quarantines_missing_truth_source(monkeypatch):
+    spy = TollSpy()
+    monkeypatch.setattr(paywall, "metered_toll", spy)
+    db = FakeDB({})
+    no_truth = {
+        **seed_mod.SEED_MEASUREMENTS[0],
+        "collector_signature": "sig-ok",
+        "truth_source": None,  # S2S-TRUST: truth lineage mandatory
+    }
+    batch = schemas.IngestBatch(measurements=[no_truth], content_hash="h")
+    result = router.ingest_batch(db, batch, "org-1", "req-t")
+    assert result.accepted == 0
+    assert len(result.quarantined) == 1
+    assert result.quarantined[0]["partition"] == "provenance_incomplete"
+
+
+def test_seed_carries_s2s_trust_lineage():
+    rec = seed_mod.SEED_MEASUREMENTS[0]
+    assert rec["center"] and rec["model_cycle"] and rec["run_type"]
+    assert rec["truth_source"].startswith("ERA5")
+    assert rec["truth_lag_days"] == 5
+    assert rec["assimilation_window"] in ("+9h/-3h", "+3h/-3h")

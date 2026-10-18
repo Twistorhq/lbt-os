@@ -40,6 +40,38 @@ class IngestMeasurement(BaseModel):
     conditions: SubseasonalConditions
     measured_at: datetime = Field(description="forecast init timestamp")
     model_source: str
+    # --- S2S-TRUST v1 (Diego TW-592 spec): forecast identity + truth lineage
+    center: str | None = Field(
+        default=None,
+        description="forecasting center, e.g. 'ecmwf', 'ncep', 'cmcc'",
+    )
+    model_cycle: str | None = Field(
+        default=None,
+        description="model version/cycle, e.g. 'IFS CY49R1', 'GEFSv12'",
+    )
+    run_type: str | None = Field(
+        default=None,
+        description="'realtime' | 'reforecast' (hindcast)",
+    )
+    truth_source: str | None = Field(
+        default=None,
+        description="verification truth, e.g. 'ERA5:0.25deg:v1', 'station:WMO', '20CRv3:mean'. "
+        "Missing -> provenance_incomplete quarantine (never silently mixed in).",
+    )
+    truth_lag_days: int | None = Field(
+        default=None,
+        description="truth latency in days (5 for ERA5T-class near-real-time)",
+    )
+    assimilation_window: str | None = Field(
+        default=None,
+        description="initial-condition assimilation window, e.g. '+9h/-3h' (ERA5) vs '+3h/-3h' (HRES). "
+        "Declared so AI-vs-physics comparisons are fair (Zhang et al. 2026).",
+    )
+    reforecast_design: str | None = Field(
+        default=None,
+        description="'fixed' | 'on-the-fly' + hindcast period, e.g. 'on-the-fly:20y:11m'",
+    )
+    # ---
     lead_weeks: int = Field(ge=2, le=6)
     ensemble_size: int = Field(gt=0)
     variable: str
@@ -94,6 +126,14 @@ class MeasurementOut(BaseModel):
     synthetic: bool
     bias_correction: str
     base_model: str
+    # S2S-TRUST v1 truth lineage (served so every number carries its truth)
+    center: str | None = None
+    model_cycle: str | None = None
+    run_type: str | None = None
+    truth_source: str | None = None
+    truth_lag_days: int | None = None
+    assimilation_window: str | None = None
+    reforecast_design: str | None = None
 
 
 class BenchmarkOut(BaseModel):

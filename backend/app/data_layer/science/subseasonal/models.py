@@ -37,6 +37,14 @@ class SilverMeasurement(BaseModel):
     measured_at: datetime
     init_date: date
     model_source: str
+    # S2S-TRUST v1: forecast identity + truth lineage (Diego TW-592 spec)
+    center: str | None = None
+    model_cycle: str | None = None
+    run_type: str | None = None
+    truth_source: str | None = None
+    truth_lag_days: int | None = None
+    assimilation_window: str | None = None
+    reforecast_design: str | None = None
     lead_weeks: int = Field(ge=2, le=6)
     ensemble_size: int = Field(gt=0)
     variable: str
@@ -61,6 +69,14 @@ class GoldRow(BaseModel):
     synthetic: bool = False
     attestation_summary: dict[str, int] = Field(default_factory=dict)
     row_hash: str
+    # S2S-TRUST v1 truth lineage, denormalized into gold for serving
+    center: str | None = None
+    model_cycle: str | None = None
+    run_type: str | None = None
+    truth_source: str | None = None
+    truth_lag_days: int | None = None
+    assimilation_window: str | None = None
+    reforecast_design: str | None = None
 
 
 class ProvenanceLink(BaseModel):

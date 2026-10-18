@@ -11,10 +11,13 @@ Mounted (at integration, Dre's pass) under /data/v1/science/crop_climate/:
   GET  /corrections         correction feed per dataset
   POST /corrections         file a correction (supersession, new version)
 
-Tolling (TW-549): every served call emits to toll_events via
-app.services.toll_service.record_toll_event, best-effort — a toll failure
-never breaks a read (TW-208). Idempotency key = f"sci:{request_id}".
-Dre wires the data.science.* rates into TOLL_RATES at integration.
+Tolling (TW-549) + paywall (TW-599): every served call is metered via
+paywall.metered_toll (dynamic derivative pricing: volume multiplier on
+trailing-30d science spend); every READ needs an active Twistor subscription
+(402 otherwise). Excel downloads at GET /datasets/{version}/download carry a
+one-time tier fee on top of the subscription (small $6 / medium $8.50 /
+large $22.50; large = API only). Idempotency key = f"sci:{request_id}".
+A toll failure never breaks a read (TW-208).
 
 Split discipline: /query defaults to split='train'. 'test_future' rows
 (the benchmark's withheld 2035-like conditions) are served with yields
@@ -33,8 +36,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 
-from app.services import toll_service
-
+from .. import paywall
 from ..auth import enforce_lab_binding, require_science_key
 from . import models, schemas
 
@@ -80,6 +82,17 @@ router = APIRouter(
 
 
 # ------------------------------------------------------------------ tolling
+def _toll_db(store: models.CropClimateStore):
+    """Toll/metering client: the Supabase client's db, or the in-memory
+    store itself (its table() shim serves toll_events in tests)."""
+    return getattr(store, "_db", store)
+
+
+def _gate(store: models.CropClimateStore, org_id: str | None) -> str:
+    """TW-599 paywall: every read needs an active Twistor subscription."""
+    return paywall.require_active_subscription(_toll_db(store), org_id)
+
+
 def _request_id(request: Request | None) -> str:
     if request is not None:
         header = request.headers.get("x-request-id")
@@ -97,37 +110,28 @@ def _toll_best_effort(
     org_id: str = "public",
     db=None,
 ) -> None:
-    """Emit one toll event. Unknown event types (ValueError) are logged and
-    skipped — Dre wires the data.science.* rates into TOLL_RATES at
-    integration. Tolls never break reads (TW-208)."""
+    """Metered toll with dynamic derivative pricing (TW-599 paywall).
+
+    Delegates to paywall.metered_toll: volume multiplier from the org's
+    trailing-30d science spend. Failures logged and swallowed (TW-208).
+    """
     try:
-        toll_service.record_toll_event(
-            db,
-            org_id=org_id,
-            event_type=event_type,
-            quantity=quantity,
-            idempotency_key=f"sci:{request_id}",
-            source_type=source_type,
-            source_id=source_id,
+        paywall.metered_toll(
+            db, org_id, event_type, request_id, quantity=quantity,
+            source_type=source_type, source_id=source_id,
         )
-    except ValueError as exc:
-        log.warning(
-            "crop-climate toll emit failed; continuing without toll",
-            extra={"event": event_type, "error": str(exc)},
-        )
-    except Exception as exc:  # TW-208: metering failure never breaks serving
-        log.warning(
-            "crop-climate toll emit failed; continuing without toll",
-            extra={"event": event_type, "error": str(exc)},
-        )
+    except Exception as exc:  # TW-208: metering never breaks serving
+        log.warning("metered toll %s failed (%s); continuing", event_type, exc)
 
 
 def _toll(request: Request | None, event_type: str, org_id: str = "public",
           quantity: float = 1, source_type: str | None = None,
-          source_id: str | None = None) -> None:
+          source_id: str | None = None,
+          store: models.CropClimateStore | None = None) -> None:
     _toll_best_effort(
         _request_id(request), event_type, quantity=quantity,
-        source_type=source_type, source_id=source_id, org_id=org_id)
+        source_type=source_type, source_id=source_id, org_id=org_id,
+        db=_toll_db(store) if store is not None else None)
 
 
 # ---------------------------------------------------------------- envelopes
@@ -180,8 +184,9 @@ def _version_or_404(store: models.CropClimateStore, version: str):
 def list_datasets(request: Request,
                   x_org_id: Annotated[str | None, Header()] = None,
                   store: models.CropClimateStore = Depends(get_store)):
-    _toll(request, EVENT_QUERY, org_id=x_org_id or "public",
-          source_type="sci_dataset_versions")
+    org_id = _gate(store, x_org_id)
+    _toll(request, EVENT_QUERY, org_id=org_id,
+          source_type="sci_dataset_versions", store=store)
     versions = [schemas.DatasetVersionRead(
         id=v.id, lane=v.lane, dataset_name=v.dataset_name, semver=v.semver,
         row_count=v.row_count, content_root_hash=v.content_root_hash,
@@ -197,8 +202,9 @@ def get_dataset(version: str, request: Request,
                 x_org_id: Annotated[str | None, Header()] = None,
                 store: models.CropClimateStore = Depends(get_store)):
     v = _version_or_404(store, version)
-    _toll(request, EVENT_QUERY, org_id=x_org_id or "public",
-          source_type="sci_dataset_versions", source_id=v.id)
+    org_id = _gate(store, x_org_id)
+    _toll(request, EVENT_QUERY, org_id=org_id,
+          source_type="sci_dataset_versions", source_id=v.id, store=store)
     payload = schemas.DatasetVersionRead(
         id=v.id, lane=v.lane, dataset_name=v.dataset_name, semver=v.semver,
         row_count=v.row_count, content_root_hash=v.content_root_hash,
@@ -226,14 +232,15 @@ def query_gold(
                                 location=location, year=year, split=split)
     except models.StoreError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    org_id = _gate(store, x_org_id)
     resolved = store.get_version(version) if version else store.list_versions()[-1]
     if bulk:
-        _toll(request, EVENT_BULK, org_id=x_org_id or "public",
+        _toll(request, EVENT_BULK, org_id=org_id,
               quantity=max(1, math.ceil(len(rows) / 1000)),
-              source_type="sci_crop_gold", source_id=resolved.id)
+              source_type="sci_crop_gold", source_id=resolved.id, store=store)
     else:
-        _toll(request, EVENT_QUERY, org_id=x_org_id or "public",
-              source_type="sci_crop_gold", source_id=resolved.id)
+        _toll(request, EVENT_QUERY, org_id=org_id,
+              source_type="sci_crop_gold", source_id=resolved.id, store=store)
     return _dataset_envelope(store, resolved, rows)
 
 
@@ -246,8 +253,9 @@ def gold_provenance(gold_id: str, request: Request,
     except models.StoreError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     version = store.versions[chain["gold"]["dataset_version_id"]]
-    _toll(request, EVENT_QUERY, org_id=x_org_id or "public",
-          source_type="sci_crop_gold", source_id=gold_id)
+    org_id = _gate(store, x_org_id)
+    _toll(request, EVENT_QUERY, org_id=org_id,
+          source_type="sci_crop_gold", source_id=gold_id, store=store)
     return _dataset_envelope(store, version, chain)
 
 
@@ -255,8 +263,9 @@ def gold_provenance(gold_id: str, request: Request,
 def list_benchmarks(request: Request,
                      x_org_id: Annotated[str | None, Header()] = None,
                      store: models.CropClimateStore = Depends(get_store)):
-    _toll(request, EVENT_BENCHMARK, org_id=x_org_id or "public",
-          source_type="sci_benchmarks")
+    org_id = _gate(store, x_org_id)
+    _toll(request, EVENT_BENCHMARK, org_id=org_id,
+          source_type="sci_benchmarks", store=store)
     benchmarks = store.list_benchmarks()
     latest = store.list_versions()[-1]
     return _dataset_envelope(store, latest, benchmarks)
@@ -308,6 +317,7 @@ def ingest_batch(payload: schemas.IngestRequest, request: Request,
                 management=record.management,
                 yield_t_ha=record.yield_t_ha,
                 synthetic=record.synthetic,
+                traits=record.traits,
             )
             accepted += 1
             receipts.append(m.id)
@@ -319,7 +329,7 @@ def ingest_batch(payload: schemas.IngestRequest, request: Request,
             dead_letters.append(entry)
             store.dead_letters.append(entry)
     _toll(request, EVENT_INGEST, org_id=x_org_id or "public", quantity=accepted,
-          source_type="sci_bronze_artifacts", source_id=artifact.id)
+          source_type="sci_bronze_artifacts", source_id=artifact.id, store=store)
     return schemas.IngestResponse(accepted=accepted, rejected=rejected,
                                   receipt_ids=receipts,
                                   dead_letters=dead_letters)
@@ -332,8 +342,9 @@ def correction_feed(
     x_org_id: Annotated[str | None, Header()] = None,
     store: models.CropClimateStore = Depends(get_store),
 ):
-    _toll(request, EVENT_QUERY, org_id=x_org_id or "public",
-          source_type="sci_corrections")
+    org_id = _gate(store, x_org_id)
+    _toll(request, EVENT_QUERY, org_id=org_id,
+          source_type="sci_corrections", store=store)
     latest = store.list_versions()[-1]
     return _dataset_envelope(store, latest, store.list_corrections(dataset))
 
@@ -357,6 +368,58 @@ def file_correction(payload: schemas.CorrectionCreate, request: Request,
     except models.StoreError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     _toll(request, EVENT_INGEST, org_id=x_org_id or "public",
-          source_type="sci_corrections", source_id=new_version.id)
+          source_type="sci_corrections", source_id=new_version.id, store=store)
     return _dataset_envelope(store, new_version, {"new_version": new_version.semver,
                                                   "supersedes": new_version.supersedes_id})
+
+
+@router.get("/datasets/{version}/download")
+def download_dataset(version: str, request: Request,
+                     x_org_id: Annotated[str | None, Header()] = None,
+                     store: models.CropClimateStore = Depends(get_store)):
+    """Excel download: subscription + one-time tier fee (TW-599 paywall).
+
+    Small/medium tiers only — large datasets are API-only (403).
+    """
+    org_id = _gate(store, x_org_id)
+    v = _version_or_404(store, version)
+    tier = paywall.dataset_tier(v.row_count)
+    paywall.check_excel_delivery(tier, v.row_count)
+
+    rows = store.query_gold(version=version, split="all")[:500_000]
+    columns = [
+        "id", "genotype", "location", "year", "split",
+        "yield_t_ha", "yield_withheld",
+        "thc_pct", "cbd_pct", "cbg_pct", "thc_compliant_03",
+        "fiber_quality_grade", "lab_accreditation_id",
+        "synthetic",
+    ]
+    flat = []
+    for r in rows:
+        traits = r.get("traits") or {}
+        flat.append({
+            "id": r["id"],
+            "genotype": r["genotype"],
+            "location": r["location"],
+            "year": r["year"],
+            "split": r["split"],
+            "yield_t_ha": r["yield_t_ha"],
+            "yield_withheld": r["yield_withheld"],
+            "thc_pct": traits.get("thc_pct"),
+            "cbd_pct": traits.get("cbd_pct"),
+            "cbg_pct": traits.get("cbg_pct"),
+            "thc_compliant_03": traits.get("thc_compliant_03"),
+            "fiber_quality_grade": traits.get("fiber_quality_grade"),
+            "lab_accreditation_id": traits.get("lab_accreditation_id"),
+            "synthetic": r["synthetic"],
+        })
+    fee = paywall.excel_fee_cents(tier)
+    content = paywall.build_excel_bytes(
+        flat, columns, v.dataset_name, v.semver, tier, fee,
+        synthetic=all(r["synthetic"] for r in rows) if rows else True,
+    )
+    request_id = _request_id(request)
+    paywall.emit_download_toll(_toll_db(store), org_id, request_id, tier, v.id)
+    _toll(request, EVENT_QUERY, org_id=org_id,
+          source_type="sci_crop_gold", source_id=v.id, store=store)
+    return paywall.excel_response(content, v.dataset_name, v.semver)

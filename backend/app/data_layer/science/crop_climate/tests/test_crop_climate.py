@@ -54,13 +54,16 @@ def store():
         standard_ref="NIST-traceable barometer/thermometer set",
     )
     s.fixtures = {"lab": lab, "artifact": artifact, "calibration": calibration}
+    # TW-599 paywall test-double: one active org for the subscription gate.
+    s.organizations = [{"id": "org-1", "subscription_status": "active"}]
     return s
 
 
 @pytest.fixture()
 def seeded_store(store):
-    """Store loaded with the 40-record synthetic seed + v1.0.0 gold version."""
-    for record in seed.seed_records():
+    """Store loaded with the CLIMATESHIFT-1 v1 seed: 30 hemp trials
+    (hemp-first) + 40 maize/soy/wheat reference rows + v1.0.0 gold version."""
+    for record in seed.seed_hemp_records() + seed.seed_records():
         store.add_measurement(
             artifact_id=store.fixtures["artifact"].id,
             lab_id=store.fixtures["lab"].id,
@@ -69,10 +72,13 @@ def seeded_store(store):
             **record,
         )
     version = store.publish_version(
-        dataset_name="twistor-crop-shift",
+        dataset_name="climateshift-1",
         semver="1.0.0",
-        release_notes="V1 synthetic seed: 40 trials, 2035-like rows withheld",
-        benchmark_pin="crop-shift-bench_v1",
+        release_notes=(
+            "CLIMATESHIFT-1 v1 synthetic seed: 30 hemp trials (hemp-first) + "
+            "40 reference rows, 2035-like rows withheld"
+        ),
+        benchmark_pin="climateshift-1",
     )
     store.fixtures["version"] = version
     return store
@@ -209,7 +215,7 @@ def test_provenance_chain_field_trial_without_calibration(store):
         calibration_id=None,
         **_base_record(),
     )
-    store.publish_version("twistor-crop-shift", "1.0.0", "t")
+    store.publish_version("climateshift-1", "1.0.0", "t")
     gold_row = next(
         r for r in store.query_gold(split="train") if r["silver_id"] == m.id
     )
@@ -233,7 +239,7 @@ def test_gold_delete_fails(seeded_store):
 def test_version_metadata_is_immutable_snapshot(seeded_store):
     version = seeded_store.fixtures["version"]
     assert version.content_root_hash  # merkle root pinned at release
-    assert version.row_count == 40
+    assert version.row_count == 70  # 30 hemp + 40 reference
     assert version.supersedes_id is None
     with pytest.raises(models.ImmutableVersionError):
         seeded_store.update_version(version.id, {"release_notes": "rewritten"})
@@ -267,7 +273,7 @@ def test_correction_supersedes_without_mutating_history(seeded_store):
                       and r["year"] == target["year"])
     assert new_target["yield_t_ha"] == round(old_yield + 0.5, 2)
     # correction is recorded on the feed
-    feed = seeded_store.list_corrections(dataset_name="twistor-crop-shift")
+    feed = seeded_store.list_corrections(dataset_name="climateshift-1")
     assert any(c["reason"].startswith("plot-scale") for c in feed)
 
 
@@ -343,7 +349,7 @@ def test_default_query_split_is_train(seeded_store):
 
 def test_hidden_split_hash_matches_withheld_answers(seeded_store):
     version = seeded_store.fixtures["version"]
-    benchmark = seeded_store.get_benchmark("crop-shift-bench_v1")
+    benchmark = seeded_store.get_benchmark("climateshift-1")
     assert benchmark["hidden_split_hash"]
     # recompute over the true withheld answers: must match the pinned hash
     assert benchmark["hidden_split_hash"] == seeded_store._hidden_split_hash(version.id)
@@ -400,7 +406,8 @@ def _test_client(seeded_store):
 
 def test_api_query_defaults_to_train_no_leak(seeded_store):
     client = _test_client(seeded_store)
-    resp = client.get("/data/v1/science/crop_climate/query")
+    resp = client.get("/data/v1/science/crop_climate/query",
+                       headers={"X-Org-Id": "org-1"})
     assert resp.status_code == 200
     rows = resp.json()["data"]
     assert rows
@@ -411,7 +418,8 @@ def test_api_query_defaults_to_train_no_leak(seeded_store):
 def test_api_test_future_masks_yields(seeded_store):
     client = _test_client(seeded_store)
     resp = client.get(
-        "/data/v1/science/crop_climate/query", params={"split": "test_future"}
+        "/data/v1/science/crop_climate/query", params={"split": "test_future"},
+        headers={"X-Org-Id": "org-1"},
     )
     assert resp.status_code == 200
     rows = resp.json()["data"]
@@ -421,10 +429,11 @@ def test_api_test_future_masks_yields(seeded_store):
 
 def test_api_benchmarks_carry_hidden_split_hash(seeded_store):
     client = _test_client(seeded_store)
-    resp = client.get("/data/v1/science/crop_climate/benchmarks")
+    resp = client.get("/data/v1/science/crop_climate/benchmarks",
+                       headers={"X-Org-Id": "org-1"})
     assert resp.status_code == 200
     benchmarks = resp.json()["data"]
-    bench = next(b for b in benchmarks if b["name"] == "crop-shift-bench_v1")
+    bench = next(b for b in benchmarks if b["name"] == "climateshift-1")
     assert bench["hidden_split_hash"]
     assert bench["status"] == "open"
     assert bench["metric"] == "yield_mae_t_ha"
@@ -479,3 +488,121 @@ def test_api_ingest_requires_api_key(seeded_store):
                              "collector_signature": "sig:test",
                              "records": []})
     assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------- TW-599
+# Hemp-first (CLIMATESHIFT-1 v1): trait panels, GxE, withheld splits
+# ------------------------------------------------------------------
+def test_hemp_seed_is_thirty_records_with_trait_panels():
+    records = seed.seed_hemp_records()
+    assert len(records) == 30
+    assert all(r["synthetic"] is True for r in records)
+    assert all(r["conditions"]["crop"] == "hemp" for r in records)
+    for r in records:
+        traits = r["traits"]
+        assert traits["lab_accreditation_id"].startswith("ISO-17025:")
+        assert traits["coa_hash"].startswith("sha256:")
+        assert 0.05 <= traits["thc_pct"] <= 0.8
+        assert traits["cbd_pct"] > 0
+    # 8 of 30 rows are the withheld 2035-like split
+    future = [r for r in records if r["conditions"].get("simulated_future_climate")]
+    assert len(future) == 8
+    # GxE instability shows up: some hot site-years cross the 0.3% THC line
+    assert any(not r["traits"]["thc_compliant_03"] for r in records)
+    assert any(r["traits"]["thc_compliant_03"] for r in records)
+
+
+def test_hemp_traits_served_on_train_masked_on_test_future(seeded_store):
+    train = seeded_store.query_gold(split="train")
+    hemp_train = [r for r in train if r["traits"]]
+    assert hemp_train, "hemp trait panels must be served on train"
+    sample = hemp_train[0]
+    assert sample["traits"]["thc_pct"] > 0
+    assert sample["traits_withheld"] is False
+
+    future = seeded_store.query_gold(split="test_future")
+    assert future, "withheld split must be non-vacuous"
+    assert all(r["traits"] == {} for r in future)
+    assert all(r["traits_withheld"] is True for r in future)
+    # 10 reference + 8 hemp future-like rows
+    assert len(future) == 18
+
+
+def test_hemp_ingest_carries_traits(seeded_store):
+    client = _test_client(seeded_store)
+    fx = seeded_store.fixtures
+    payload = {
+        "lab_id": fx["lab"].id,
+        "collector_signature": "sig:test",
+        "records": [{
+            "artifact_id": fx["artifact"].id,
+            "lab_id": fx["lab"].id,
+            "conditions": {"trial_design": "rcbd", "replicates": 4,
+                           "crop": "hemp", "use_type": "fiber"},
+            "genotype": "Futura 75",
+            "location": "Burlington, VT",
+            "year": 2026,
+            "weather": {},
+            "management": {},
+            "yield_t_ha": 9.1,
+            "traits": {
+                "thc_pct": 0.21, "cbd_pct": 1.4, "cbg_pct": 0.05,
+                "thc_compliant_03": True,
+                "fiber_quality_grade": "A",
+                "lab_accreditation_id": "ISO-17025:VT-041",
+                "coa_hash": "sha256:test-coa",
+            },
+        }],
+    }
+    resp = client.post("/data/v1/science/crop_climate/ingest", json=payload,
+                       headers={"X-API-Key": "test-key-crop"})
+    assert resp.status_code == 200
+    assert resp.json()["accepted"] == 1
+    # silver carries the trait panel immediately; gold materializes at the
+    # next version cut (never served unversioned)
+    silvers = [m for m in seeded_store.measurements.values()
+               if m.genotype == "Futura 75" and m.year == 2026
+               and m.traits.get("coa_hash") == "sha256:test-coa"]
+    assert silvers and silvers[0].traits["thc_pct"] == 0.21
+    assert silvers[0].traits["lab_accreditation_id"] == "ISO-17025:VT-041"
+
+
+# ---------------------------------------------------------------- TW-599
+# Paywall: subscription gate + Excel download (HTTP layer)
+# ------------------------------------------------------------------
+def test_reads_require_subscription(seeded_store):
+    client = _test_client(seeded_store)
+    # no org header -> 402
+    assert client.get("/data/v1/science/crop_climate/query").status_code == 402
+    assert client.get("/data/v1/science/crop_climate/datasets").status_code == 402
+    assert client.get("/data/v1/science/crop_climate/benchmarks").status_code == 402
+    # unknown org -> 402
+    r = client.get("/data/v1/science/crop_climate/query",
+                   headers={"X-Org-Id": "org-nope"})
+    assert r.status_code == 402
+    # inactive subscription -> 402
+    seeded_store.organizations[0]["subscription_status"] = "past_due"
+    r = client.get("/data/v1/science/crop_climate/query",
+                   headers={"X-Org-Id": "org-1"})
+    assert r.status_code == 402
+    seeded_store.organizations[0]["subscription_status"] = "active"
+
+
+def test_download_excel_small_tier(seeded_store):
+    client = _test_client(seeded_store)
+    r = client.get("/data/v1/science/crop_climate/datasets/1.0.0/download",
+                   headers={"X-Org-Id": "org-1"})
+    assert r.status_code == 200
+    assert "spreadsheetml.sheet" in r.headers["content-type"]
+    assert r.content[:4] == b"PK\x03\x04"
+    assert 'filename="climateshift-1-1.0.0.xlsx"' in r.headers["content-disposition"]
+    # one-time fee tolled on top of the subscription
+    fees = [t for t in seeded_store.toll_events
+            if t.get("event_type") == "data.science.download"]
+    assert fees and fees[0]["amount_cents"] == 600
+
+
+def test_download_requires_subscription(seeded_store):
+    client = _test_client(seeded_store)
+    r = client.get("/data/v1/science/crop_climate/datasets/1.0.0/download")
+    assert r.status_code == 402

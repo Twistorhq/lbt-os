@@ -30,8 +30,8 @@ from datetime import datetime, timezone
 log = logging.getLogger(__name__)
 
 LANE = "crop_climate"
-DATASET_NAME = "twistor-crop-shift"
-BENCHMARK_NAME = "crop-shift-bench_v1"
+DATASET_NAME = "climateshift-1"
+BENCHMARK_NAME = "climateshift-1"
 BENCHMARK_METRIC = "yield_mae_t_ha"
 
 VALID_SPLITS = ("train", "test_future")
@@ -97,6 +97,10 @@ class Measurement:
     management: dict
     yield_t_ha: float
     synthetic: bool
+    # TW-599 hemp-first: crop-specific trait panel (hemp: cannabinoid panel
+    # THC/CBD/CBG + fiber quality + lab accreditation ID). Empty for crops
+    # without a trait panel.
+    traits: dict = field(default_factory=dict)
     created_at: str = field(default_factory=lambda: _now())
 
 
@@ -112,6 +116,8 @@ class GoldRow:
     yield_t_ha: float
     synthetic: bool
     attestation_summary: dict = field(default_factory=dict)
+    # TW-599 hemp-first: trait panel denormalized into gold for serving
+    traits: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -214,24 +220,49 @@ class CropClimateStore:
         self.benchmarks: dict[str, Benchmark] = {}
         self.dead_letters: list[dict] = []
         self.api_keys: list[dict] = []  # test-double for sci_api_keys
+        self.organizations: list[dict] = []  # test-double: subscription gate
+        self.toll_events: list[dict] = []  # test-double: volume pricing
 
     def table(self, name: str):
-        """Minimal query shim for cross-cutting lookups (sci_api_keys auth).
+        """Minimal query shim for cross-cutting lookups (sci_api_keys auth,
+        organizations subscription gate, toll_events volume pricing).
 
-        Test-double only: supports .select().eq().execute() -> .data.
+        Test-double only: supports .select().eq().gte().execute() -> .data.
         """
 
         store = self
 
         class _Q:
             def __init__(self):
-                self._rows = list(store.api_keys) if name == "sci_api_keys" else []
+                self._table = name
+                if name == "sci_api_keys":
+                    self._rows = list(store.api_keys)
+                elif name == "organizations":
+                    self._rows = list(store.organizations)
+                elif name == "toll_events":
+                    self._rows = list(store.toll_events)
+                else:
+                    self._rows = []
 
             def select(self, *_a):
                 return self
 
             def eq(self, col, val):
                 self._rows = [r for r in self._rows if r.get(col) == val]
+                return self
+
+            def gte(self, col, val):
+                self._rows = [r for r in self._rows
+                              if (r.get(col) or "") >= val]
+                return self
+
+            def insert(self, row):
+                # test-double: append straight to the store's live list
+                target = {"sci_api_keys": store.api_keys,
+                          "organizations": store.organizations,
+                          "toll_events": store.toll_events}.get(self._table)
+                if target is not None:
+                    target.append(dict(row))
                 return self
 
             def execute(self):
@@ -277,7 +308,8 @@ class CropClimateStore:
                         genotype: str, location: str, year: int,
                         weather: dict, management: dict, yield_t_ha: float,
                         synthetic: bool = False,
-                        season: str = "summer") -> Measurement:
+                        season: str = "summer",
+                        traits: dict | None = None) -> Measurement:
         # FKs — no dangling provenance, ever
         if artifact_id not in self.artifacts:
             raise StoreError(f"unknown artifact_id {artifact_id}")
@@ -306,7 +338,8 @@ class CropClimateStore:
             calibration_id=calibration_id, conditions=conditions,
             genotype=genotype, location=location, year=year, season=season,
             weather=weather or {}, management=management or {},
-            yield_t_ha=y, synthetic=bool(synthetic))
+            yield_t_ha=y, synthetic=bool(synthetic),
+            traits=traits or {})
         self.measurements[m.id] = m
         return m
 
@@ -314,7 +347,8 @@ class CropClimateStore:
     def _insert_gold_row(self, dataset_version_id: str, silver_id: str,
                          split: str, genotype: str, location: str, year: int,
                          yield_t_ha: float, synthetic: bool,
-                         attestation_summary: dict | None = None) -> GoldRow:
+                         attestation_summary: dict | None = None,
+                         traits: dict | None = None) -> GoldRow:
         if dataset_version_id not in self.versions:
             raise StoreError(f"unknown dataset_version_id {dataset_version_id}")
         if silver_id not in self.measurements and silver_id != "dummy":
@@ -327,7 +361,8 @@ class CropClimateStore:
             silver_id=silver_id, split=split, genotype=genotype,
             location=location, year=year, yield_t_ha=float(yield_t_ha),
             synthetic=bool(synthetic),
-            attestation_summary=attestation_summary or {})
+            attestation_summary=attestation_summary or {},
+            traits=traits or {})
         self.gold[row.id] = row
         return row
 
@@ -358,11 +393,12 @@ class CropClimateStore:
             split_map[sid] = split
             self._insert_gold_row(
                 version.id, sid, split, m.genotype, m.location, m.year,
-                m.yield_t_ha, m.synthetic)
+                m.yield_t_ha, m.synthetic, traits=m.traits)
             row_hashes.append(_sha256(_canonical({
                 "silver_id": sid, "split": split, "genotype": m.genotype,
                 "location": m.location, "year": m.year,
-                "yield_t_ha": m.yield_t_ha, "synthetic": m.synthetic})))
+                "yield_t_ha": m.yield_t_ha, "synthetic": m.synthetic,
+                "traits": m.traits})))
         row_hashes.sort()
         version.row_count = len(row_hashes)
         version.content_root_hash = _sha256("".join(row_hashes))
@@ -434,6 +470,10 @@ class CropClimateStore:
                 "year": r.year,
                 "yield_t_ha": None if masked else r.yield_t_ha,
                 "yield_withheld": masked,
+                # TW-599: trait panels (hemp cannabinoids) are also answers:
+                # masked on the withheld split, served on train.
+                "traits": {} if masked else r.traits,
+                "traits_withheld": masked,
                 "synthetic": r.synthetic,
                 "attestation_summary": r.attestation_summary,
             })

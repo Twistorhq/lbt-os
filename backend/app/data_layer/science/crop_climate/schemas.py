@@ -33,6 +33,12 @@ class MeasurementCreate(BaseModel):
     management: dict[str, Any] = Field(default_factory=dict)
     yield_t_ha: float = Field(ge=0, le=60)
     synthetic: bool = False
+    traits: dict[str, Any] = Field(
+        default_factory=dict,
+        description="TW-599 hemp-first: crop-specific trait panel "
+        "(hemp: cannabinoid panel THC/CBD/CBG + fiber quality + lab "
+        "accreditation ID). Empty for crops without a trait panel.",
+    )
 
     @field_validator("conditions")
     @classmethod

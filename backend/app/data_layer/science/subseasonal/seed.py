@@ -29,10 +29,21 @@ _VARIABLES = {
 }
 _REGIONS = ["CONUS", "EU", "TROP", "NA"]
 _MODEL_SOURCES = [
-    ("ecmwf_ifs", "ecmwf_ifs_cy48r1", 51, "pbc_v1"),   # corrected: the breach
-    ("ecmwf_ifs", "ecmwf_ifs_cy48r1", 51, "none"),     # raw: the desert
-    ("graphcast", "graphcast_oper", 25, "none"),
-    ("pangu", "pangu_weather_oper", 25, "none"),
+    # (model_source, base_model, ensemble_size, bias_correction,
+    #  center, model_cycle, run_type, truth_source, truth_lag_days,
+    #  assimilation_window, reforecast_design)
+    ("ecmwf_ifs", "ecmwf_ifs_cy48r1", 51, "pbc_v1",
+     "ecmwf", "IFS CY48R1", "reforecast",
+     "ERA5:0.25deg:v1", 5, "+9h/-3h", "on-the-fly:20y:11m"),   # corrected: the breach
+    ("ecmwf_ifs", "ecmwf_ifs_cy48r1", 51, "none",
+     "ecmwf", "IFS CY48R1", "reforecast",
+     "ERA5:0.25deg:v1", 5, "+9h/-3h", "on-the-fly:20y:11m"),   # raw: the desert
+    ("graphcast", "graphcast_oper", 25, "none",
+     "deepmind", "graphcast_oper", "realtime",
+     "ERA5:0.25deg:v1", 5, "+9h/-3h", None),
+    ("pangu", "pangu_weather_oper", 25, "none",
+     "huawei", "pangu_weather_oper", "realtime",
+     "ERA5:0.25deg:v1", 5, "+9h/-3h", None),
 ]
 
 
@@ -54,7 +65,9 @@ def build_seed_records() -> list[dict]:
     for i, init_date in enumerate(_init_dates()):
         variable = variables[i % len(variables)]
         region = _REGIONS[i % len(_REGIONS)]
-        model, base_model, ens, bias_corr = _MODEL_SOURCES[i % len(_MODEL_SOURCES)]
+        (model, base_model, ens, bias_corr, center, model_cycle, run_type,
+         truth_source, truth_lag_days, assim_window,
+         reforecast_design) = _MODEL_SOURCES[i % len(_MODEL_SOURCES)]
         spec = _VARIABLES[variable]
         crps = round(rng.uniform(spec["crps_lo"], spec["crps_hi"]), 3)
         if bias_corr == "pbc_v1":
@@ -76,6 +89,13 @@ def build_seed_records() -> list[dict]:
                 .astimezone(timezone.utc)
                 .isoformat(),
                 "model_source": model,
+                "center": center,
+                "model_cycle": model_cycle,
+                "run_type": run_type,
+                "truth_source": truth_source,
+                "truth_lag_days": truth_lag_days,
+                "assimilation_window": assim_window,
+                "reforecast_design": reforecast_design,
                 "lead_weeks": lead_weeks,
                 "ensemble_size": ens,
                 "variable": variable,

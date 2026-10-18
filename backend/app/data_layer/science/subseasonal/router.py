@@ -17,8 +17,15 @@ idempotency_key=f"sci:{request_id}". Unknown event types raise ValueError
 in the toll service; we log and continue (tolling never breaks serving).
 Dre wires TOLL_RATES in the integration pass.
 
-Auth: V1 placeholder — org_id rides the X-Org-Id header until the
-data_api_keys pattern lands in Dre's integration pass.
+Auth: X-API-Key (sci_api_keys, scoped) on mutations; every read needs an
+active Twistor subscription (402 otherwise) — TW-599 paywall, day one.
+
+Paywall (TW-599): subscription gate via paywall.require_active_subscription;
+API tolls metered with dynamic derivative pricing
+(paywall.metered_toll: volume multiplier on trailing-30d science spend);
+Excel downloads at GET /datasets/{version}/download carry a one-time tier
+fee on top of the subscription (small $6 / medium $8.50 / large $22.50;
+large = API only).
 """
 
 from __future__ import annotations
@@ -28,7 +35,9 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Header, Query, Request
+from fastapi.responses import StreamingResponse
 
+from .. import paywall
 from ..auth import enforce_lab_binding, require_science_key
 from . import schemas
 
@@ -37,7 +46,7 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/data/v1/science/subseasonal", tags=["science-subseasonal"])
 
 LANE = "subseasonal"
-DATASET_NAME = "twistor-s2s-forecasts"
+DATASET_NAME = "s2s-trust"
 
 # Toll event types (TW-549). Rates land in TOLL_RATES during integration.
 TOLL_QUERY = "data.science.query"
@@ -63,24 +72,24 @@ def _emit_toll(
     request_id: str,
     quantity: float = 1.0,
 ) -> None:
-    """Attempt one toll emission. ValueError (unknown event type, before
-    rates are wired) is logged and swallowed — serving continues."""
+    """Metered toll with dynamic derivative pricing (TW-599 paywall).
+
+    Delegates to paywall.metered_toll: volume multiplier from the org's
+    trailing-30d science spend. Failures are logged and swallowed (TW-208):
+    metering never breaks serving.
+    """
     try:
-        record = _get_toll_recorder()
-    except Exception as exc:  # toll stack unavailable in this context
-        log.warning("toll recorder unavailable (%s); continuing untolled", exc)
-        return
-    try:
-        record(
-            db,
-            org_id=org_id,
-            event_type=event_type,
-            quantity=quantity,
-            idempotency_key=f"sci:{request_id}",
+        paywall.metered_toll(
+            db, org_id, event_type, request_id, quantity=quantity,
             source_type="sci_subseasonal",
         )
-    except ValueError as exc:
+    except Exception as exc:  # TW-208: metering never breaks serving
         log.warning("toll emission %s failed (%s); continuing", event_type, exc)
+
+
+def _gate(db: Any, org_id: str) -> str:
+    """Paywall: every read needs an active Twistor subscription (402 otherwise)."""
+    return paywall.require_active_subscription(db, org_id)
 
 
 def _rows(resp: Any) -> list[dict[str, Any]]:
@@ -172,6 +181,13 @@ def query_gold(
                 synthetic=bool(r.get("synthetic", False)),
                 bias_correction=str(cond.get("bias_correction", "unknown")),
                 base_model=str(cond.get("base_model", "unknown")),
+                center=r.get("center"),
+                model_cycle=r.get("model_cycle"),
+                run_type=r.get("run_type"),
+                truth_source=r.get("truth_source"),
+                truth_lag_days=r.get("truth_lag_days"),
+                assimilation_window=r.get("assimilation_window"),
+                reforecast_design=r.get("reforecast_design"),
             ).model_dump()
         )
     return schemas.envelope(
@@ -219,7 +235,9 @@ def ingest_batch(
     db: Any, batch: schemas.IngestBatch, org_id: str, request_id: str
 ) -> schemas.IngestResult:
     """Batch ingest with per-record self-healing (TW-208): one bad record
-    -> dead_letters, never kills the run. Unsigned payloads quarantine."""
+    -> dead_letters, never kills the run. Unsigned payloads quarantine.
+    S2S-TRUST v1: records missing truth_source quarantine to
+    provenance_incomplete (never silently mixed in)."""
     accepted = 0
     dead_letters: list[dict[str, Any]] = []
     quarantined: list[dict[str, Any]] = []
@@ -235,6 +253,17 @@ def ingest_batch(
                     {
                         "index": i,
                         "reason": "artifact_id required: bronze artifact must exist before silver insert (no floating silver)",
+                    }
+                )
+                continue
+            if not m.truth_source:
+                # S2S-TRUST v1: truth lineage is mandatory. No truth_source
+                # means the score can't be audited -> quarantine partition.
+                quarantined.append(
+                    {
+                        "index": i,
+                        "partition": "provenance_incomplete",
+                        "reason": "missing truth_source: verification truth not declared",
                     }
                 )
                 continue
@@ -277,7 +306,9 @@ def http_list_datasets(
     x_request_id: str | None = Header(default=None),
     x_org_id: str | None = Header(default=None),
 ):
-    return list_dataset_versions(_db(), _org_id(x_org_id), _request_id(request, x_request_id))
+    db = _db()
+    org_id = _gate(db, _org_id(x_org_id))
+    return list_dataset_versions(db, org_id, _request_id(request, x_request_id))
 
 
 @router.get("/datasets/{version}")
@@ -287,7 +318,9 @@ def http_get_dataset_version(
     x_request_id: str | None = Header(default=None),
     x_org_id: str | None = Header(default=None),
 ):
-    return get_dataset_version(_db(), version, _org_id(x_org_id), _request_id(request, x_request_id))
+    db = _db()
+    org_id = _gate(db, _org_id(x_org_id))
+    return get_dataset_version(db, version, org_id, _request_id(request, x_request_id))
 
 
 @router.get("/query")
@@ -300,8 +333,10 @@ def http_query_gold(
     x_request_id: str | None = Header(default=None),
     x_org_id: str | None = Header(default=None),
 ):
+    db = _db()
+    org_id = _gate(db, _org_id(x_org_id))
     return query_gold(
-        _db(), _org_id(x_org_id), _request_id(request, x_request_id),
+        db, org_id, _request_id(request, x_request_id),
         variable=variable, region=region, lead_weeks=lead_weeks, limit=limit,
     )
 
@@ -312,7 +347,53 @@ def http_list_benchmarks(
     x_request_id: str | None = Header(default=None),
     x_org_id: str | None = Header(default=None),
 ):
-    return list_benchmarks(_db(), _org_id(x_org_id), _request_id(request, x_request_id))
+    db = _db()
+    org_id = _gate(db, _org_id(x_org_id))
+    return list_benchmarks(db, org_id, _request_id(request, x_request_id))
+
+
+@router.get("/datasets/{version}/download")
+def http_download_dataset(
+    version: str,
+    request: Request,
+    x_request_id: str | None = Header(default=None),
+    x_org_id: str | None = Header(default=None),
+) -> StreamingResponse:
+    """Excel download: subscription + one-time tier fee (TW-599 paywall).
+
+    Small/medium tiers only — large datasets are API-only (403).
+    """
+    db = _db()
+    org_id = _gate(db, _org_id(x_org_id))
+    request_id = _request_id(request, x_request_id)
+    row = get_dataset_version(db, version, org_id, request_id).data
+    row_count = row["row_count"]
+    tier = paywall.dataset_tier(row_count)
+    paywall.check_excel_delivery(tier, row_count)
+
+    resp = (
+        db.table("sci_subseasonal_gold")
+        .select("*")
+        .eq("dataset_version_id", row["id"])
+        .limit(500_000)
+        .execute()
+    )
+    rows = _rows(resp)
+    columns = [
+        "id", "model_source", "center", "model_cycle", "run_type",
+        "init_date", "lead_weeks", "ensemble_size", "variable", "region",
+        "crps", "skill_vs_climatology", "truth_source", "truth_lag_days",
+        "assimilation_window", "reforecast_design", "synthetic",
+    ]
+    fee = paywall.excel_fee_cents(tier)
+    content = paywall.build_excel_bytes(
+        rows, columns, DATASET_NAME, version, tier, fee,
+        synthetic=all(r.get("synthetic", False) for r in rows) if rows else True,
+    )
+    paywall.emit_download_toll(db, org_id, request_id, tier, row["id"])
+    # The download itself is also a served read: meter it as a query.
+    _emit_toll(db, org_id, TOLL_QUERY, f"{request_id}:download")
+    return paywall.excel_response(content, DATASET_NAME, version)
 
 
 @router.post("/ingest")

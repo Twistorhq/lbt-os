@@ -174,6 +174,7 @@ class SupabaseCropClimateStore(models.CropClimateStore):
         yield_t_ha: float,
         synthetic: bool = False,
         season: str = "summer",
+        traits: dict | None = None,
     ) -> Measurement:
         # Same validation as the in-memory store (mirrors the migration CHECKs).
         if not _rows(self._db, "sci_bronze_artifacts", id=artifact_id):
@@ -214,6 +215,7 @@ class SupabaseCropClimateStore(models.CropClimateStore):
                     "management": management or {},
                     "yield_t_ha": y,
                     "synthetic": bool(synthetic),
+                    "traits": traits or {},
                 }
             )
             .execute()
@@ -279,6 +281,7 @@ class SupabaseCropClimateStore(models.CropClimateStore):
                     "yield_t_ha": float(m.yield_t_ha),
                     "synthetic": bool(m.synthetic),
                     "attestation_summary": {},
+                    "traits": m.traits or {},
                     "row_hash": _sha256(
                         _canonical(
                             {
@@ -289,6 +292,7 @@ class SupabaseCropClimateStore(models.CropClimateStore):
                                 "year": m.year,
                                 "yield_t_ha": m.yield_t_ha,
                                 "synthetic": m.synthetic,
+                                "traits": m.traits or {},
                             }
                         )
                     ),
@@ -490,6 +494,8 @@ class SupabaseCropClimateStore(models.CropClimateStore):
                     "year": r["year"],
                     "yield_t_ha": None if masked else r["yield_t_ha"],
                     "yield_withheld": masked,
+                    "traits": {} if masked else (r.get("traits") or {}),
+                    "traits_withheld": masked,
                     "synthetic": r["synthetic"],
                     "attestation_summary": r.get("attestation_summary") or {},
                 }
