@@ -501,13 +501,15 @@ def test_ingest_accepts_valid_records(monkeypatch):
 
 
 def test_ingest_requires_api_key(monkeypatch):
+    from fastapi import HTTPException
+
     db = FakeDB({models.SILVER_TABLE: [], "sci_api_keys": [_key_row()]})
     _patch_toll(monkeypatch)
     payload = schemas.IngestRequest(
         records=[schemas.PFASMeasurementIn(**_valid_measurement_dict(0))])
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(HTTPException) as exc_info:
         router.ingest_batch(payload, db=db, x_request_id="ing-3")
-    assert "401" in str(exc_info.value) or "X-API-Key" in str(exc_info.value)
+    assert exc_info.value.status_code == 401
 
 
 def test_benchmarks_lists_concept_when_table_missing(monkeypatch):

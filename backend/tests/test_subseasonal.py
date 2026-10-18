@@ -526,3 +526,46 @@ def test_seed_carries_s2s_trust_lineage():
     assert rec["truth_source"].startswith("ERA5")
     assert rec["truth_lag_days"] == 5
     assert rec["assimilation_window"] in ("+9h/-3h", "+3h/-3h")
+# Auth gate (Rosa round-1 Major 5): ingest requires X-API-Key
+# ------------------------------------------------------------------
+def test_http_ingest_requires_api_key(monkeypatch):
+    """POST /ingest without X-API-Key -> 401 (valid body, so the 401 proves
+    the auth gate, not body validation)."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.data_layer.science.auth import hash_key
+
+    db = FakeDB({
+        "sci_api_keys": [{
+            "id": "key-1",
+            "key_hash": hash_key("test-key-subseasonal"),
+            "key_prefix": "test-key",
+            "label": "test key",
+            "lab_id": None,
+            "scopes": ["science:subseasonal:write"],
+            "rate_limit_per_min": 60,
+            "is_active": True,
+        }],
+    })
+    monkeypatch.setattr(router, "_db", lambda: db)
+    app = FastAPI()
+    app.include_router(router.router)
+    client = TestClient(app)
+
+    rec = {
+        **seed_mod.SEED_MEASUREMENTS[0],
+        "collector_signature": "sig-ok",
+    }
+    # strip non-schema keys the seed carries
+    rec = {k: v for k, v in rec.items()
+           if k in schemas.IngestMeasurement.model_fields}
+    payload = {"measurements": [rec], "content_hash": "h"}
+
+    r = client.post("/data/v1/science/subseasonal/ingest", json=payload)
+    assert r.status_code == 401
+
+    r = client.post("/data/v1/science/subseasonal/ingest", json=payload,
+                    headers={"X-API-Key": "test-key-subseasonal"})
+    assert r.status_code == 200
+    assert r.json()["accepted"] == 1
