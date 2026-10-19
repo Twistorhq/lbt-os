@@ -54,8 +54,9 @@ block/header fields.
 Full science suite: 240 passed (test_science_paywall 25,
 test_science_rate_limit 20, carbon 44, subseasonal, turbulence 33,
 electrocatalysis, high_tc, pfas). Ruff check clean. Ruff format --check
-fails on pre-existing repo drift (base paywall.py fails it too; CI does
-not gate format); the new TW-608 section extracted alone is format-clean.
+fails on pre-existing repo drift in the lane routers and test file
+(CI gates only `ruff check`); the new TW-608 section extracted alone
+is format-clean.
 
 ## Known limitations (V1)
 - Warning-email dedupe is process-local; a second worker may rarely
