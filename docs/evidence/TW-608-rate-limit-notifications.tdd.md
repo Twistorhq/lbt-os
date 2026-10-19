@@ -32,12 +32,18 @@ Warn at 80% of the rate limit; at 100% SHUT OFF (429), charge nothing.
   resolution. turbulence uses `auth.org_id`; the 3 public lanes use their
   existing toll org as a shared public bucket
   ("public-science", "twistor_science", "twistor-science").
+- Conscious scope call: Wave-1 `/ingest` endpoints are NOT rate-limited.
+  They authenticate by lab API key + lab binding (`require_science_key`,
+  `enforce_lab_binding`) -- a separate trust domain from customer-billed
+  reads, so customer rate-limit tiers do not apply. Older lanes' ingest
+  endpoints carry the shared-bucket enforcement as abuse protection.
 - Usage block (TW-607) gains `rate_limit_used` and `rate_limit_warning`;
   headers gain `X-Twistor-RateLimit-Limit`, `X-Twistor-RateLimit-Used`,
   and `X-Twistor-RateLimit-Warning: 1` when the warning is active.
 
 ## Tests
-`backend/tests/test_science_rate_limit.py`: 18 tests, all green.
+`backend/tests/test_science_rate_limit.py`: 20 tests, all green (18 unit +
+2 router-wiring regression tests added in Rosa round 1).
 Covers: window counting (science events only, org-scoped, window-scoped),
 warn/over flags at 80%/100%, tier rpm respected, unscoped fail-open,
 DB-down fail-open, 429 shape + headers + ledger untouched on reject,
@@ -45,9 +51,11 @@ subscription gate fires before 429, email sent once per cooldown,
 no email without billing_email, no warning below threshold, usage
 block/header fields.
 
-Full science suite: 238 passed (test_science_paywall 25,
-test_science_rate_limit 18, carbon 44, subseasonal, turbulence 33,
-electrocatalysis, high_tc, pfas). Ruff check clean; ruff format clean.
+Full science suite: 240 passed (test_science_paywall 25,
+test_science_rate_limit 20, carbon 44, subseasonal, turbulence 33,
+electrocatalysis, high_tc, pfas). Ruff check clean. Ruff format --check
+fails on pre-existing repo drift (base paywall.py fails it too; CI does
+not gate format); the new TW-608 section extracted alone is format-clean.
 
 ## Known limitations (V1)
 - Warning-email dedupe is process-local; a second worker may rarely
@@ -59,6 +67,20 @@ electrocatalysis, high_tc, pfas). Ruff check clean; ruff format clean.
 - `organizations.billing_email` column does not exist yet; the email
   channel activates once it is added and populated. Until then the
   in-band warning is the guaranteed channel.
+
+## Rosa round 1 (REQUEST_CHANGES) -- fixed
+1. high_tc `dataset_detail`: enforce was in the 404 branch only; moved to
+   the top of the endpoint so the 200 path is rate-limited.
+2. high_tc `list_benchmarks`: enforce was inside the per-benchmark loop
+   (bypassed on empty table, N scans otherwise); moved to the top.
+3. high_tc `list_datasets`: enforce call was missing entirely; added.
+4. Evidence doc corrected (format claim, endpoint-coverage claim).
+5. Added 2 router-wiring regression tests so placement misses cannot
+   recur: every @router endpoint in the 4 older lanes must call
+   enforce_rate_limit at function top level (indent 4); Wave-1 _gate
+   helpers must route through paywall.gate.
+6. Conscious call documented: Wave-1 /ingest endpoints stay on lab
+   API-key auth (separate trust domain, not customer-billed).
 
 ## Branch
 `dre/tw-608-ratelimit-notifications` (off `dre/tw-607-usage-metering`).

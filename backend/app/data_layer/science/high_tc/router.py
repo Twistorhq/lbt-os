@@ -124,6 +124,7 @@ def _provenance(db: Client, version: dict | None, rows: list[dict]) -> schemas.P
 @router.get("/datasets", response_model=schemas.DatasetsResponse)
 def list_datasets(db: Annotated[Client, Depends(get_db)], response: Response = None):
     """List immutable dataset versions for the high-Tc lane (metadata read)."""
+    paywall.enforce_rate_limit(db, ORG_SCIENCE)  # TW-608: 429 shutoff
     res = (
         db.table("sci_dataset_versions")
         .select("*")
@@ -144,6 +145,7 @@ def list_datasets(db: Annotated[Client, Depends(get_db)], response: Response = N
 @router.get("/datasets/{semver}", response_model=schemas.DatasetDetailResponse)
 def dataset_detail(semver: str, db: Annotated[Client, Depends(get_db)], response: Response = None):
     """Snapshot metadata + merkle root for one pinned version."""
+    paywall.enforce_rate_limit(db, ORG_SCIENCE)  # TW-608: 429 shutoff
     res = (
         db.table("sci_dataset_versions")
         .select("*")
@@ -154,7 +156,6 @@ def dataset_detail(semver: str, db: Annotated[Client, Depends(get_db)], response
     )
     version = schemas.DatasetVersionRead(**_json_safe(res.data)) if res.data else None
     if version is None:
-        paywall.enforce_rate_limit(db, ORG_SCIENCE)  # TW-608: 429 shutoff
         raise HTTPException(status_code=404, detail=f"unknown dataset version {semver}")
     corr = (
         db.table("sci_corrections")
@@ -251,10 +252,10 @@ def query_gold(
 @router.get("/benchmarks", response_model=schemas.BenchmarksResponse)
 def list_benchmarks(db: Annotated[Client, Depends(get_db)], response: Response = None):
     """Open benchmarks + leaderboards for the lane (metadata read)."""
+    paywall.enforce_rate_limit(db, ORG_SCIENCE)  # TW-608: 429 shutoff
     res = db.table("sci_benchmarks").select("*").eq("lane", LANE).execute()
     out: list[schemas.BenchmarkRead] = []
     for b in res.data or []:
-        paywall.enforce_rate_limit(db, ORG_SCIENCE)  # TW-608: 429 shutoff
         runs = (
             db.table("sci_benchmark_runs")
             .select("*")
@@ -279,8 +280,8 @@ def submit_benchmark_run(
     x_request_id: Annotated[str | None, Header()] = None,
     x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
 ):
-    paywall.enforce_rate_limit(db, ORG_SCIENCE)  # TW-608: 429 shutoff
     """Submit a benchmark run. Manifest required — no manifest, no leaderboard."""
+    paywall.enforce_rate_limit(db, ORG_SCIENCE)  # TW-608: 429 shutoff
     request_id = _request_id(x_request_id)
     require_science_key(x_api_key, db, "high_tc")  # auth gate; key unused after
     bench = (

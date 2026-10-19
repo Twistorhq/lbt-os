@@ -8,6 +8,8 @@ charged. Unit-level with fakes: no live database, no network.
 """
 from __future__ import annotations
 
+import pathlib as _pl
+import re as _re
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -249,3 +251,53 @@ def test_usage_headers_quiet_below_threshold():
              "rate_limit_used": 3, "rate_limit_warning": False}
     paywall.set_usage_headers(Resp(), usage)
     assert "X-Twistor-RateLimit-Warning" not in Resp.headers
+
+
+# ------------------------------------------------------------------ router wiring (Rosa round 1)
+def _router_src(lane):
+    p = _pl.Path(__file__).parent.parent / "app" / "data_layer" / "science" / lane / "router.py"
+    return p.read_text().split("\n")
+
+
+def test_older_lane_endpoints_all_enforce_before_serving():
+    """Every @router endpoint in the 4 older lanes calls enforce_rate_limit
+    at top level of the function body (indent == 4), before any DB work.
+    Catches the high_tc round-1 misses (loop/branch placement, skipped
+    endpoints)."""
+    for lane in ("electrocatalysis", "high_tc", "pfas", "turbulence"):
+        lines = _router_src(lane)
+        # collect endpoint def line numbers (def following an @router decorator)
+        endpoints = []
+        for i, line in enumerate(lines):
+            if line.strip().startswith("@router."):
+                j = i + 1
+                while j < len(lines) and not _re.match(r"^(async )?def \w+\(", lines[j].strip()):
+                    j += 1
+                assert j < len(lines), f"{lane}: decorator without def"
+                endpoints.append(j)
+        assert endpoints, f"{lane}: no endpoints found"
+        for d in endpoints:
+            # find the end of this def: next def/decorator at col 0 or EOF
+            e = d + 1
+            while e < len(lines) and not (
+                lines[e].strip().startswith("@router.")
+                or _re.match(r"^(async )?def \w+\(", lines[e].strip())
+                or _re.match(r"^[a-zA-Z_]", lines[e])
+            ):
+                e += 1
+            body = lines[d:e]
+            hits = [ln for ln in body if "paywall.enforce_rate_limit(" in ln]
+            assert hits, f"{lane}:{d + 1}: endpoint has no enforce_rate_limit call"
+            for h in hits:
+                indent = len(h) - len(h.lstrip())
+                assert indent == 4, (
+                    f"{lane}:{d + 1}: enforce_rate_limit not at function top "
+                    f"level (indent {indent}) -- must run before any serving"
+                )
+
+
+def test_wave1_gates_cover_subscription_and_rate_limit():
+    """Wave-1 _gate helpers route through paywall.gate (402 + 429)."""
+    for lane in ("carbon", "subseasonal", "crop_climate"):
+        src = "\n".join(_router_src(lane))
+        assert "paywall.gate(" in src, f"{lane}: _gate does not call paywall.gate"
