@@ -29,6 +29,7 @@ from .identity import router as identity_router
 from .identity import saml as identity_saml
 from .limiter import limiter
 from .logging_config import configure_logging, request_id_var
+from .notify import router as notify_router
 from .routers import (
     admin,
     audit,
@@ -126,6 +127,7 @@ async def request_lifecycle(request: Request, call_next) -> Response:
 app.include_router(identity_router.router, prefix="/api/v1")
 app.include_router(identity_oauth.oauth_router, prefix="/api/v1")
 app.include_router(identity_saml.saml_router, prefix="/api/v1")
+app.include_router(notify_router.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
 app.include_router(bi.router, prefix="/api/v1")
 app.include_router(calls.router, prefix="/api/v1")
