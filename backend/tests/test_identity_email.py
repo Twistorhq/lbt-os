@@ -2,8 +2,6 @@
 import sys
 import types
 
-import pytest
-
 from app import config
 from app.services import email
 

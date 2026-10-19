@@ -7,6 +7,7 @@ from supabase import Client
 
 from ..auth import _verify_clerk_jwt  # migration bridge reuses Clerk verifier
 from ..database import get_db
+from ..services import email as email_service
 from . import keys, service, tokens
 
 router = APIRouter(prefix="/identity", tags=["identity"])
@@ -30,6 +31,7 @@ class RefreshIn(BaseModel):
 
 class MagicLinkIn(BaseModel):
     email: EmailStr
+    purpose: str = "login"  # "login" | "verify"
 
 
 class MagicConsumeIn(BaseModel):
@@ -96,10 +98,13 @@ def logout(body: RefreshIn, db: Client = Depends(get_db)):
 @router.post("/magic-link", status_code=202)
 def magic_link(body: MagicLinkIn, db: Client = Depends(get_db)):
     # Always 202 — never reveal whether the email exists.
-    raw = service.issue_magic_link(db, body.email)
-    # Zeke wires actual email delivery; raw token returned here ONLY until
-    # the mailer lands (dev convenience, flagged for removal before prod).
-    return {"sent": True, "_dev_token": raw}
+    purpose = body.purpose if body.purpose in ("login", "verify") else "login"
+    raw = service.issue_magic_link(db, body.email, purpose=purpose)
+    # Fire-and-forget: Resend skips silently when unconfigured. The raw
+    # token is emailed and never stored, logged, or returned.
+    email_service.send_identity_magic_link(
+        to=body.email.strip().lower(), token=raw, purpose=purpose)
+    return {"sent": True}
 
 
 @router.post("/magic-link/consume")

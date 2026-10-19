@@ -30,3 +30,15 @@ not copied.
   content following the pattern.
 - License text: https://www.apache.org/licenses/LICENSE-2.0
 - License re-verified live from the raw LICENSE file: 2026-09-23.
+
+## python3-saml (TW-619)
+
+- Source: https://github.com/SAML-Toolkits/python3-saml
+- License: MIT — Copyright (c) 2010-2022 OneLogin, Inc.; Copyright (c) 2023
+  IAM Digital Services, SL.
+- Used as: `python3-saml` pip package for the Twistor Identity SAML 2.0
+  service provider (`backend/app/identity/saml.py`); SP-initiated login,
+  ACS response validation, and settings parsing only.
+- License text: https://github.com/SAML-Toolkits/python3-saml/blob/master/LICENSE
+- License re-verified live from the raw LICENSE file in the 1.16.0 sdist:
+  2026-10-18.

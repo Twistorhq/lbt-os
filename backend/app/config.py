@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     resend_api_key: str | None = None
     from_email: str = "LBT OS <noreply@lbt-os.com>"
 
+    # Twistor Identity (TW-619) — corporate-voice identity emails (Resend)
+    identity_from_email: str = "Twistor <noreply@twistor.co>"
+    identity_magic_link_path: str = "/auth/magic-link"
+    identity_public_api_url: str = "http://localhost:8000"
+
     # SMS (Twilio) — optional; SMS is silently skipped if not set
     twilio_account_sid: str | None = None
     twilio_auth_token: str | None = None

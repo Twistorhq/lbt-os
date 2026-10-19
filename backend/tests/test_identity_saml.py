@@ -3,11 +3,11 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from test_identity_oauth import FakeDB  # shared fake supabase
 
 from app.database import get_db
 from app.identity import saml
 from app.identity import service as identity_service
-from test_identity_oauth import FakeDB  # shared fake supabase
 
 
 @pytest.fixture(autouse=True)
@@ -24,8 +24,8 @@ def fakedb():
 @pytest.fixture
 def client(fakedb, monkeypatch):
     # Admin override for POST /sso/config: user-1 is org-1 owner.
-    def _admin(org_id: str):
-        return {"sub": "user-1", "org": org_id, "role": "owner"}
+    def _admin():
+        return {"sub": "user-1", "org": "org-1", "role": "owner"}
 
     app = FastAPI()
     app.include_router(saml.saml_router, prefix="/api/v1")

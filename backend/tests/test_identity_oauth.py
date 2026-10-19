@@ -1,4 +1,6 @@
 """TW-619 (Zeke) — Google OAuth flow tests (TDD)."""
+from urllib.parse import parse_qs, urlparse
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -6,7 +8,6 @@ from fastapi.testclient import TestClient
 from app.database import get_db
 from app.identity import oauth
 from app.identity import service as identity_service
-
 
 # --------------------------------------------------------------------------
 # Test doubles
@@ -179,7 +180,6 @@ def test_start_returns_authorization_url(client):
     assert body["authorization_url"].startswith("https://provider.test/auth?")
     assert "state=" in body["authorization_url"]
     # The signed state must decode to a verifier the provider saw at /start.
-    from urllib.parse import urlparse, parse_qs
     state = parse_qs(urlparse(body["authorization_url"]).query)["state"][0]
     FakeOAuthProvider.seen["verifier"] = oauth._verify_state(state)["v"]
     assert FakeOAuthProvider.seen["challenge"]
@@ -200,7 +200,6 @@ def _mint_session_capture(monkeypatch, fakedb):
 
 def _do_callback(tc, monkeypatch):
     r = tc.get("/api/v1/identity/oauth/fake/start")
-    from urllib.parse import urlparse, parse_qs
     state = parse_qs(urlparse(r.json()["authorization_url"]).query)["state"][0]
     FakeOAuthProvider.seen["verifier"] = oauth._verify_state(state)["v"]
     return tc.get("/api/v1/identity/oauth/fake/callback",
@@ -243,8 +242,8 @@ def test_callback_existing_oauth_account_wins_over_email(client, monkeypatch):
     tc, fakedb = client
     user_a = fakedb.table("idn_users").insert(
         {"email": "a@test.edu"}).execute().data[0]
-    user_b = fakedb.table("idn_users").insert(
-        {"email": "prof@test.edu"}).execute().data[0]
+    fakedb.table("idn_users").insert(
+        {"email": "prof@test.edu"}).execute()
     fakedb.table("idn_oauth_accounts").insert(
         {"provider": "fake", "provider_user_id": "gp-1",
          "user_id": user_a["id"]}).execute()

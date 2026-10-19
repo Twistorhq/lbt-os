@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from urllib.parse import quote as _urlquote
 
 from ..config import settings
 
@@ -27,7 +28,8 @@ def _enabled() -> bool:
     return bool(settings.resend_api_key)
 
 
-def _send(*, to: str, subject: str, html: str) -> None:
+def _send(*, to: str, subject: str, html: str,
+          from_addr: str | None = None) -> None:
     """Low-level send via Resend SDK. Silently skips if not configured."""
     if not _enabled():
         log.debug("Email skipped (RESEND_API_KEY not set): %s → %s", subject, to)
@@ -36,7 +38,7 @@ def _send(*, to: str, subject: str, html: str) -> None:
         import resend
         resend.api_key = settings.resend_api_key
         resend.Emails.send({
-            "from": settings.from_email,
+            "from": from_addr or settings.from_email,
             "to": [to],
             "subject": subject,
             "html": html,
@@ -369,3 +371,161 @@ def send_weekly_brief(
             cta_label="Open dashboard →",
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# TW-619 Twistor Identity emails
+# ---------------------------------------------------------------------------
+# Corporate voice: white, clean, minimal. Zero em-dashes.
+# Contract: callers pass the RAW token; it is embedded in the link and never
+# stored, logged, or persisted anywhere by this module.
+
+
+def identity_link_url(token: str, purpose: str = "login") -> str:
+    """Portal URL the recipient opens to consume a magic link.
+
+    The portal page POSTs the token to POST /identity/magic-link/consume.
+    """
+    base = settings.frontend_url.rstrip("/")
+    return (f"{base}{settings.identity_magic_link_path}"
+            f"?token={_urlquote(token)}&purpose={_urlquote(purpose)}")
+
+
+def _twistor_base(*, title: str, preheader: str, body_html: str,
+                  cta_url: str, cta_label: str) -> str:
+    """Twistor corporate shell: white, clean, minimal, inline styles only."""
+    app_url = settings.frontend_url
+    safe_url = cta_url.replace("&", "&amp;")
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{title}</title>
+</head>
+<body style="margin:0;padding:0;background:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;">
+  <span style="display:none;max-height:0;overflow:hidden;mso-hide:all;">{preheader}</span>
+
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#ffffff;padding:48px 16px;">
+    <tr><td align="center">
+      <table width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;">
+
+        <tr>
+          <td style="padding:0 0 32px;">
+            <span style="color:#0f172a;font-size:20px;font-weight:700;letter-spacing:-0.3px;">Twistor</span>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding:0 0 8px;">
+            {body_html}
+            <div style="margin-top:32px;">
+              <a href="{safe_url}"
+                 style="display:inline-block;background:#0f172a;color:#ffffff;font-weight:600;
+                        font-size:14px;padding:13px 32px;border-radius:8px;text-decoration:none;">
+                {cta_label}
+              </a>
+            </div>
+            <p style="margin:24px 0 0;font-size:12px;color:#94a3b8;line-height:1.6;word-break:break-all;">
+              Or paste this link into your browser:<br/>
+              <a href="{safe_url}" style="color:#64748b;">{safe_url}</a>
+            </p>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding:40px 0 0;border-top:1px solid #f1f5f9;">
+            <p style="margin:0;font-size:12px;color:#94a3b8;line-height:1.6;">
+              Twistor Holdings LLC · Denver, CO<br/>
+              <a href="{app_url}" style="color:#64748b;text-decoration:none;">twistor.co</a>
+            </p>
+          </td>
+        </tr>
+
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>"""
+
+
+def _identity_heading(text: str) -> str:
+    return (f'<h1 style="margin:0 0 12px;font-size:24px;font-weight:700;'
+            f'color:#0f172a;letter-spacing:-0.4px;">{text}</h1>')
+
+
+def _identity_copy(text: str) -> str:
+    return (f'<p style="margin:0 0 12px;font-size:14px;color:#475569;'
+            f'line-height:1.7;">{text}</p>')
+
+
+def identity_magic_link_html(*, link_url: str, purpose: str = "login") -> str:
+    """Magic-link email body. purpose is 'login' or 'verify'."""
+    if purpose == "verify":
+        title, pre = "Verify your email", "Confirm your email to activate your Twistor account."
+        heading = "Verify your email"
+        copy = ("Welcome to Twistor. Confirm your email address to activate "
+                "your account. This link expires in 15 minutes and can be "
+                "used once.")
+        cta = "Verify email"
+    else:
+        title, pre = "Sign in to Twistor", "Your secure sign in link for Twistor."
+        heading = "Sign in to Twistor"
+        copy = ("Click the button below to sign in. This link expires in "
+                "15 minutes and can be used once.")
+        cta = "Sign in"
+    body = (_identity_heading(heading) + _identity_copy(copy)
+            + _identity_copy("If you did not request this, you can safely "
+                             "ignore this email."))
+    return _twistor_base(title=title, preheader=pre, body_html=body,
+                         cta_url=link_url, cta_label=cta)
+
+
+def identity_verify_email_html(*, link_url: str) -> str:
+    """Dedicated verify-email body (alias of the verify-purpose magic link)."""
+    return identity_magic_link_html(link_url=link_url, purpose="verify")
+
+
+def identity_sso_invite_html(*, org_name: str, link_url: str) -> str:
+    """SSO invite: org admin invited a user to join via their IdP."""
+    body = (_identity_heading(f"{org_name} invited you to Twistor")
+            + _identity_copy(f"Your team at {org_name} set up single sign on. "
+                             "Click below to join using your organization account.")
+            + _identity_copy("If this was not meant for you, you can safely "
+                             "ignore this email."))
+    return _twistor_base(
+        title=f"Join {org_name} on Twistor",
+        preheader=f"You were invited to join {org_name} on Twistor.",
+        body_html=body, cta_url=link_url, cta_label="Join with SSO")
+
+
+def _send_identity(*, to: str, subject: str, html: str) -> None:
+    _send(to=to, subject=subject, html=html,
+          from_addr=settings.identity_from_email)
+
+
+def send_identity_magic_link(*, to: str, token: str,
+                             purpose: str = "login",
+                             link_url: str | None = None) -> None:
+    """Email a raw magic-link token. The token is never stored or logged."""
+    url = link_url or identity_link_url(token, purpose=purpose)
+    subject = ("Verify your Twistor email" if purpose == "verify"
+               else "Your Twistor sign in link")
+    _send_identity(to=to, subject=subject,
+                   html=identity_magic_link_html(link_url=url, purpose=purpose))
+
+
+def send_identity_verify_email(*, to: str, token: str,
+                               link_url: str | None = None) -> None:
+    """Verify-email variant of the magic-link email."""
+    url = link_url or identity_link_url(token, purpose="verify")
+    _send_identity(to=to, subject="Verify your Twistor email",
+                   html=identity_verify_email_html(link_url=url))
+
+
+def send_identity_sso_invite(*, to: str, org_name: str,
+                             link_url: str) -> None:
+    """Invite a user to join an org via SSO."""
+    _send_identity(to=to, subject=f"Join {org_name} on Twistor",
+                   html=identity_sso_invite_html(org_name=org_name,
+                                                 link_url=link_url))
