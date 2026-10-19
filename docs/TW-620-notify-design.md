@@ -45,7 +45,7 @@ channel-provider abstraction:
   priority, is_enabled, last_health_at. One row per org/channel/provider.
 - `ntf_templates` — org_id, name (unique per org), channel, subject_template,
   body_template, variables JSONB, is_active.
-- `ntf_messages` — org_id, template_id, channel, workflow (free-text tag,
+- `ntf_messages` — org_id, template_name, channel, workflow (free-text tag,
   e.g. `rate_limit_warning`, `outreach_touch_1`), recipient (see PII note),
   recipient_hash, status (`queued|sent|delivered|failed`), provider_used,
   cost_preview_cents, cost_actual_cents, toll_event_id, timestamps.
@@ -61,8 +61,10 @@ migration. Idempotent migration (`IF NOT EXISTS` throughout).
 and provider retries are functionally impossible without it — the same
 justification as `idn_users.email` in the TW-619 migration. RLS deny-all;
 never logged (logs carry `sha256:…` prefix hashes only, same as
-`services/email.py::_recipient_tag`); never returned by any API except to
-the owning org's admins; excluded from analytics aggregates.
+`services/email.py::_recipient_tag`); no API endpoint returns the raw
+recipient — the debugger and analytics expose only the hash
+(stricter than first drafted; the ledger row itself is service-role
+only).
 
 ## 4. Cost and tolls
 

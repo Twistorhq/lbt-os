@@ -1,4 +1,5 @@
 """TW-620 Rosa fix round: prove-it tests for the two majors (RED first)."""
+
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -21,6 +22,7 @@ def _fake_db():
     tbl.insert.side_effect = _fake_insert
     sel = MagicMock()
     sel.execute.return_value = MagicMock(data=[])
+    sel.eq.return_value = sel
     tbl.select.return_value = sel
     return db
 
@@ -42,16 +44,24 @@ class FromAddrTests(unittest.TestCase):
                 return providers.ProviderResult(ok=True, cost_cents=0)
 
         cfg = routing.ProviderConfig(
-            name="spy", channel="email", provider=SpyProvider(),
-            cost_cents=0, enabled=True,
+            name="spy",
+            channel="email",
+            provider=SpyProvider(),
+            cost_cents=0,
+            enabled=True,
         )
-        with patch.object(
-            legacy, "_pinned_config", return_value=cfg
-        ), patch.object(
-            service.toll_service, "record_toll_event", return_value={"id": "t-1"}
+        with (
+            patch.object(legacy, "_pinned_config", return_value=cfg),
+            patch.object(
+                service.toll_service, "record_toll_event", return_value={"id": "t-1"}
+            ),
         ):
             legacy.send_email(
-                _fake_db(), "org-1", to="a@b.c", subject="s", html="b",
+                _fake_db(),
+                "org-1",
+                to="a@b.c",
+                subject="s",
+                html="b",
                 from_addr="Shop <shop@example.com>",
             )
         self.assertEqual(captured.get("from_addr"), "Shop <shop@example.com>")
@@ -76,8 +86,11 @@ class ErrorScrubTests(unittest.TestCase):
                 )
 
         cfg = routing.ProviderConfig(
-            name="loud", channel="sms", provider=LoudProvider(),
-            cost_cents=0, enabled=True,
+            name="loud",
+            channel="sms",
+            provider=LoudProvider(),
+            cost_cents=0,
+            enabled=True,
         )
         _result, attempts = routing.route_send(
             [cfg], "sms", to="+15551234567", subject=None, body="b", metadata={}

@@ -43,7 +43,11 @@ def send_email(
     from_addr: str | None = None,
     workflow: str | None = None,
 ) -> dict:
-    """Same shape as services/email.py::_send call sites. Pinned to resend."""
+    """Same shape as services/email.py::_send call sites. Pinned to resend.
+    from_addr threads through to the provider — day-one sender identity is
+    unchanged (from_addr or settings.from_email, the old default)."""
+    from ..config import settings
+
     return service.send(
         db,
         org_id,
@@ -53,6 +57,7 @@ def send_email(
         body=html,
         workflow=workflow or "legacy_email",
         provider_configs=[_pinned_config("resend", "email")],
+        metadata={"from_addr": from_addr or settings.from_email},
     )
 
 

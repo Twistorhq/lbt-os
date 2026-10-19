@@ -71,8 +71,10 @@ def load_provider_configs(db: Client, org_id: str) -> list[routing.ProviderConfi
             adapter = build_provider(
                 row["provider_name"], row["channel"], row.get("config") or {}
             )
-        except ValueError:
-            log.warning("notify: unknown provider %r skipped", row.get("provider_name"))
+        except (ValueError, KeyError):
+            log.warning(
+                "notify: bad provider row skipped: %r", row.get("provider_name")
+            )
             continue
         configs.append(
             routing.ProviderConfig(
@@ -97,6 +99,48 @@ def load_provider_configs(db: Client, org_id: str) -> list[routing.ProviderConfi
             )
         )
     return configs
+
+
+def ensure_system_templates(db: Client, org_id: str) -> None:
+    """Seed the design-promised system templates. Idempotent: inserts only
+    when the template is absent. Called on the system-priority send path
+    (the 80/100 contract), so TW-608's warning emails always have a
+    template to render."""
+    existing = (
+        db.table("ntf_templates")
+        .select("id")
+        .eq("org_id", org_id)
+        .eq("name", "rate_limit_warning")
+        .execute()
+    )
+    if existing.data:
+        return
+    _insert(
+        db,
+        "ntf_templates",
+        {
+            "org_id": org_id,
+            "name": "rate_limit_warning",
+            "channel": "email",
+            "subject_template": "Twistor usage warning: {{percent}}% of your limit",
+            "body_template": (
+                "Hi {{org_name}},\n\n"
+                "You have used {{percent}}% of your {{limit_name}} limit "
+                "for this period ({{used}} of {{limit}}). "
+                "At 100% the limit shuts off with no overage charges — "
+                "reply to this email if you need headroom.\n\n"
+                "— Twistor"
+            ),
+            "variables": {
+                "org_name": "",
+                "percent": "",
+                "limit_name": "",
+                "used": "",
+                "limit": "",
+            },
+            "is_active": True,
+        },
+    )
 
 
 def preview_cost(configs: list[routing.ProviderConfig], channel: str) -> dict:
@@ -124,9 +168,13 @@ def send(
     workflow: str | None = None,
     priority: str = PRIORITY_NORMAL,
     provider_configs: list[routing.ProviderConfig] | None = None,
+    metadata: dict | None = None,
 ) -> dict:
     """Orchestrate one notification. Returns the ledger message record."""
     variables = variables or {}
+    if priority == PRIORITY_SYSTEM:
+        # The 80/100 contract: system templates always exist.
+        ensure_system_templates(db, org_id)
     if subject:
         subject = templates.render_template(subject, variables)
     if body:
@@ -139,13 +187,16 @@ def send(
     )
     preview = preview_cost(configs, channel)
 
+    send_metadata = {"org_id": org_id, "workflow": workflow, "priority": priority}
+    if metadata:
+        send_metadata.update(metadata)
     result, attempts = routing.route_send(
         configs,
         channel,
         to=to,
         subject=subject,
         body=body,
-        metadata={"org_id": org_id, "workflow": workflow, "priority": priority},
+        metadata=send_metadata,
     )
 
     message = {

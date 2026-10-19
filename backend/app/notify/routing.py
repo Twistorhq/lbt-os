@@ -7,6 +7,7 @@ can hold an org hostage — that is the TW-630 wedge made structural.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from .providers import Provider, ProviderResult
@@ -14,6 +15,19 @@ from .providers import Provider, ProviderResult
 
 class NoProviderAvailable(Exception):
     """No enabled provider exists for the requested channel."""
+
+
+def _sanitize_error(text: str | None) -> str | None:
+    """Provider exception text can echo the destination (Twilio errors
+    21211/21608 echo the number; SMTP errors echo the address). Scrub
+    before storing, logging, or returning — PII doctrine TW-552 bans
+    phone numbers and emails in app logs and API responses.
+    Precedent: services/call_service.py::_sanitize_error."""
+    if not text:
+        return text
+    text = re.sub(r"\d{7,}", "[redacted]", text)
+    text = re.sub(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", "[redacted]", text)
+    return text
 
 
 @dataclass
@@ -93,7 +107,7 @@ def route_send(
             AttemptRecord(
                 provider=cfg.name,
                 ok=result.ok,
-                error=result.error,
+                error=_sanitize_error(result.error),
                 cost_cents=result.cost_cents,
                 latency_ms=result.latency_ms,
             )
@@ -103,9 +117,10 @@ def route_send(
             break
     assert last is not None  # order_providers guarantees non-empty
     if not last.ok:
+        # attempts[-1].error is already sanitized; reuse it.
         last = ProviderResult(
             ok=False,
-            error=f"all {len(attempts)} providers failed; last error: {last.error}",
+            error=f"all {len(attempts)} providers failed; last error: {attempts[-1].error}",
             cost_cents=0,
             latency_ms=sum(a.latency_ms for a in attempts),
         )

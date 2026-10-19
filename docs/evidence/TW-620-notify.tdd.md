@@ -60,7 +60,26 @@ by hand. Final: `ruff check` clean, `ruff format --check` clean (12 files).
 - The 11 ignored test modules fail identically on main (missing `argon2`
   and other env modules) — pre-existing, unrelated, not touched.
 
-## 5. Plan-safety notes
+## 6. Fix round (Rosa REQUEST_CHANGES 2026-10-19)
+
+**RED** — `tests/test_notify_fixround.py`: 4 prove-it tests failing
+(from_addr dropped, error PII leak, missing seed).
+
+**GREEN** — 30/30 (26 + 4). Fixes:
+
+| # | Rosa finding | Fix | Test |
+|---|---|---|---|
+| M1 | `legacy.send_email` dropped `from_addr`, default sender changed | `from_addr or settings.from_email` threaded via new `service.send(metadata=...)` passthrough; Resend adapter already reads `metadata.get("from_addr")` | `test_legacy_send_email_threads_from_addr` |
+| M2 | Raw provider errors (Twilio echoes numbers) stored + returned unscrubbed | `routing._sanitize_error` scrubs `\d{7,}` and email addresses; applied to every AttemptRecord and the all-failed summary | `test_attempt_trail_scrubs_phone_numbers`, `test_attempt_trail_scrubs_email_addresses` |
+| N1 | Promised `rate_limit_warning` seed missing | `service.ensure_system_templates()` (idempotent), called on the system-priority send path | `test_rate_limit_warning_template_seeded_idempotently` |
+| N2 | Doc said `template_id`, migration has `template_name` | Design doc corrected | — |
+| N3 | Doc claimed recipient returned to admins; no endpoint does | Design doc corrected to the stricter reality | — |
+| N4 | `load_provider_configs` didn't catch `KeyError` | Catches `(ValueError, KeyError)` | — |
+
+V1.1 candidate (Rosa, no action): caller-supplied idempotency key on
+`/send` — client retry on timeout currently creates a second message.
+
+## 7. Plan-safety notes
 
 - No untrusted plan content encountered. The brief, the TW-617 pitch, and
   the TW-630 dossier were parsed as data; all code is fresh clean-room
