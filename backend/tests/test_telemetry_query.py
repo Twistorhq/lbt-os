@@ -123,3 +123,47 @@ def test_breakdown_stringifies_values():
     end = datetime(2026, 10, 2, tzinfo=UTC)
     rows = query.breakdown(events, "x", "n", start, end, limit=10)
     assert rows[0]["value"] == "42"
+
+
+def test_retention_right_censoring():
+    # u1: full history. u2: cohort day too recent to have had day 1 yet —
+    # u2 must not drag day 1 down.
+    events = [
+        _ev("u1", "signup", 0),
+        _ev("u1", "active", 1),
+        _ev("u2", "signup", 4),
+    ]
+    start = datetime(2026, 10, 1, tzinfo=UTC)
+    end = datetime(2026, 10, 6, tzinfo=UTC)
+    res = query.retention(events, "signup", "active", 2, start, end)
+    assert res["cohort_size"] == 2
+    # latest observed date is Oct 5 (u2's signup). Day 1: only u1 eligible
+    # (Oct 2 <= Oct 5); u2's Oct 6 > Oct 5, censored. Day 2: u1 eligible.
+    assert res["retention"] == [1.0, 1.0, 0.0]
+
+
+def test_breakdown_excludes_none_values():
+    events = [
+        _ev("u1", "x", 0, props={"channel": "email"}),
+        _ev("u2", "x", 0, props={"channel": None}),
+    ]
+    start = datetime(2026, 10, 1, tzinfo=UTC)
+    end = datetime(2026, 10, 2, tzinfo=UTC)
+    rows = query.breakdown(events, "x", "channel", start, end, limit=10)
+    assert [(r["value"], r["count"]) for r in rows] == [("email", 1)]
+
+
+def test_naive_datetimes_treated_as_utc():
+    events = [
+        {
+            "event": "x",
+            "distinct_id_hash": "h-u1",
+            "occurred_at": datetime(2026, 10, 1, 12),  # naive
+            "properties": {},
+        }
+    ]
+    start = datetime(2026, 10, 1)  # naive
+    end = datetime(2026, 10, 2)  # naive
+    rows = query.trend(events, "x", start, end, "day")
+    assert rows[0]["count"] == 1
+    assert rows[0]["bucket_start"] == "2026-10-01T00:00:00+00:00"

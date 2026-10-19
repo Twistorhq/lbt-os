@@ -24,11 +24,20 @@ BUCKET_DELTAS = {
 
 
 def _in_range(ts: datetime, start: datetime, end: datetime) -> bool:
+    ts, start, end = _as_utc(ts), _as_utc(start), _as_utc(end)
     return start <= ts < end
 
 
+def _as_utc(ts: datetime) -> datetime:
+    """Coerce to tz-aware UTC. Naive datetimes are assumed UTC (documented) —
+    never system-local, so results don't shift with the server's timezone."""
+    if ts.tzinfo is None:
+        return ts.replace(tzinfo=timezone.utc)
+    return ts.astimezone(timezone.utc)
+
+
 def _floor(ts: datetime, bucket: str) -> datetime:
-    ts = ts.astimezone(timezone.utc)
+    ts = _as_utc(ts)
     if bucket == "hour":
         return ts.replace(minute=0, second=0, microsecond=0)
     if bucket == "day":
@@ -46,6 +55,7 @@ def trend(
     bucket: str = "day",
 ) -> list[dict[str, Any]]:
     """Bucketed counts for one event, zero-filled across [start, end)."""
+    start, end = _as_utc(start), _as_utc(end)
     delta = BUCKET_DELTAS[bucket]
     buckets: list[datetime] = []
     cur = _floor(start, bucket)
@@ -80,6 +90,7 @@ def funnel(
     A user counts for step k only if they completed step k-1 first and
     step k occurred after that completion and within `window` of it.
     """
+    start, end = _as_utc(start), _as_utc(end)
     by_user: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for e in events:
         ts = e.get("occurred_at")
@@ -87,7 +98,7 @@ def funnel(
             continue
         by_user[e.get("distinct_id_hash", "")].append(e)
     for evs in by_user.values():
-        evs.sort(key=lambda e: e["occurred_at"])
+        evs.sort(key=lambda e: _as_utc(e["occurred_at"]))
 
     step_counts = [0] * len(steps)
     for evs in by_user.values():
@@ -98,18 +109,17 @@ def funnel(
                 break
             if e.get("event") != steps[step_idx]:
                 continue
-            ts = e["occurred_at"]
+            ts = _as_utc(e["occurred_at"])
             if step_idx == 0:
                 anchor = ts
                 step_counts[0] += 1
                 step_idx = 1
             elif anchor is not None and ts - anchor <= window:
-                # step completed after the previous step, inside the window
+                # Step completed after the previous step, inside the window.
+                # Out-of-window occurrences are skipped; scanning continues.
                 anchor = ts
                 step_counts[step_idx] += 1
                 step_idx += 1
-            # else: event for this step fell outside the window — keep
-            # scanning; a later in-window occurrence still counts.
     base = step_counts[0] if step_counts else 0
     conversion = [c / base if base else 0.0 for c in step_counts]
     return {
@@ -132,33 +142,46 @@ def retention(
 
     retention[0] is 1.0 by definition (cohort membership). Days 1..N are
     measured: user did `return_event` on (their cohort day + d).
+
+    Right-censoring: the day-d denominator only includes users whose
+    cohort_day + d falls on or before the latest observed date in the
+    data. Users too recent to have had day d yet are excluded from that
+    day's denominator instead of dragging it down.
     """
     cohort_day: dict[str, Any] = {}
     returned: dict[str, set[Any]] = defaultdict(set)
+    latest: Any = None
     for e in events:
         ts = e.get("occurred_at")
         if ts is None:
             continue
+        day = _as_utc(ts).date()
+        if latest is None or day > latest:
+            latest = day
         uid = e.get("distinct_id_hash", "")
         if e.get("event") == cohort_event and _in_range(ts, start, end):
-            day = ts.astimezone(timezone.utc).date()
             if uid not in cohort_day or day < cohort_day[uid]:
                 cohort_day[uid] = day
         if e.get("event") == return_event:
-            returned[uid].add(ts.astimezone(timezone.utc).date())
+            returned[uid].add(day)
     cohort = list(cohort_day)
     size = len(cohort)
+    start = _as_utc(start)
+    as_of = latest if latest is not None else start.date()
     curve = [1.0]
     for d in range(1, days + 1):
-        if not size:
+        eligible = [
+            uid for uid in cohort if cohort_day[uid] + timedelta(days=d) <= as_of
+        ]
+        if not eligible:
             curve.append(0.0)
             continue
         hit = sum(
             1
-            for uid in cohort
+            for uid in eligible
             if (cohort_day[uid] + timedelta(days=d)) in returned[uid]
         )
-        curve.append(hit / size)
+        curve.append(hit / len(eligible))
     return {"cohort_size": size, "retention": curve}
 
 
@@ -170,7 +193,8 @@ def breakdown(
     end: datetime,
     limit: int = 20,
 ) -> list[dict[str, Any]]:
-    """Top values of one property for one event. Missing property excluded."""
+    """Top values of one property for one event. Missing (or None) excluded."""
+    start, end = _as_utc(start), _as_utc(end)
     counts: dict[str, int] = defaultdict(int)
     for e in events:
         if e.get("event") != event_name:
@@ -179,7 +203,7 @@ def breakdown(
         if ts is None or not _in_range(ts, start, end):
             continue
         props = e.get("properties") or {}
-        if prop not in props:
+        if prop not in props or props[prop] is None:
             continue
         counts[str(props[prop])] += 1
     ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))

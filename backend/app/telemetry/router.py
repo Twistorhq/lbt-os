@@ -151,10 +151,13 @@ def funnels(
     db: Client = Depends(get_db),
 ):
     step_events = [s.event for s in body.funnel.steps]
-    events = service.fetch_events(db, org_id, step_events, body.start, body.end)
-    return query.funnel(
-        events, step_events, migration.funnel_window(body.funnel), body.start, body.end
+    window = migration.funnel_window(body.funnel)
+    # Pad the fetch by the funnel window: a step-1 near `end` still gets
+    # its full window of follow-up steps (no truncated windows at the edge).
+    events = service.fetch_events(
+        db, org_id, step_events, body.start, body.end + window
     )
+    return query.funnel(events, step_events, window, body.start, body.end)
 
 
 @router.post("/retention")
