@@ -1,21 +1,35 @@
 # Prepared by Twistor Holdings LLC
-"""TW-599 Wave 1 paywall: subscription gate + dynamic derivative pricing + Excel delivery.
+"""TW-606 science paywall: subscription gate + dynamic volume pricing curve.
 
 Delivery doctrine (Justynn 2026-10-18, LAW for scientific datasets):
   - large datasets  -> API only
   - medium datasets -> API + downloadable Excel
   - small datasets  -> downloadable Excel, API if needed
   - EVERYTHING behind the paywall: an active Twistor subscription is required
-    for every read; API calls are toll-metered with dynamic derivative pricing
-    (rates scale with platform volume); Excel downloads carry a one-time fee
-    ON TOP of the subscription (subscription + per-download fee).
+    for every read; Excel downloads carry a one-time fee ON TOP of the
+    subscription (subscription + per-download fee).
 
-Excel pricing (his words): small ~$5-7 (30k-row benchmark), medium ~$7-10,
-large ~$20-25. Implemented: $6.00 / $8.50 / $22.50.
+Dynamic volume pricing (TW-606, REVISION 3 2026-10-18: pennies):
+  - Excel download AND API-call price scales with the dataset's CUMULATIVE
+    download count:
+      price(d) = floor + (cap - floor) * (d / scale) ** exponent, hard-capped.
+    The floor is per-dataset, set by its asset-value tier at launch
+    (standard $0.01, premium $0.05, flagship $0.09). Defaults: $0.01 at
+    0 downloads -> $0.10 HARD CAP at 100,000 downloads. Everything costs
+    pennies -- no more than $0.10 per download or per API call, ever.
+  - API micro-tolls are ECONOMICALLY NEUTRAL with the download price: the
+    per-row toll is set so that pulling an entire dataset via API converges
+    to approximately the current download price. The researcher's choice
+    between API and download is neutral -- the toll is for access pattern,
+    not a discount or penalty.
+  - Rate-limit tiers are priced off the same curve: higher limits cost more.
+  - Signup question ("researcher, student, or other") is kept for AUDIENCE
+    TRACKING only -- per-transaction pricing is pennies for everyone.
+    The subscription is still required.
 
-Dynamic derivative pricing: the per-unit toll rate is multiplied by a volume
-factor derived from the org's trailing-30-day science toll spend. Rates fall
-as volume rises (the volume discount derivative):
+Dynamic derivative pricing (org-level volume discount, unchanged):
+  the per-unit toll rate is multiplied by a volume factor derived from the
+  org's trailing-30-day science toll spend. Rates fall as volume rises:
   spend < $50        -> 1.00x
   $50  - $200        -> 0.90x
   $200 - $1000       -> 0.80x
@@ -42,13 +56,6 @@ TIER_LARGE = "large"
 SMALL_MAX_ROWS = 100_000
 MEDIUM_MAX_ROWS = 1_000_000
 
-# One-time Excel download fees, cents. Inside Justynn's bands.
-EXCEL_FEE_CENTS = {
-    TIER_SMALL: 600,    # $6.00  (band $5-7)
-    TIER_MEDIUM: 850,   # $8.50  (band $7-10)
-    TIER_LARGE: 2250,   # $22.50 (band $20-25)
-}
-
 # Delivery matrix: which surfaces each tier may use.
 DELIVERY_MATRIX = {
     TIER_SMALL: {"api": True, "excel": True},
@@ -56,11 +63,110 @@ DELIVERY_MATRIX = {
     TIER_LARGE: {"api": True, "excel": False},  # large: API only
 }
 
+# ------------------------------------------- dynamic volume pricing (TW-606)
+# Excel download price scales with the dataset's CUMULATIVE download count:
+#   price(d) = floor + (cap - floor) * (d / scale) ** exponent, hard-capped.
+# The floor is per-dataset (asset-value tier, set at launch); the curve runs
+# from the dataset's floor up to the cap across 0..scale downloads.
+# Defaults: $0.01 at 0 downloads -> $0.10 HARD CAP at 100,000 downloads.
+# Everything costs pennies: no more than $0.10 per download or API call, ever.
+DOWNLOAD_CURVE_SCALE_DOWNLOADS = 100_000
+DOWNLOAD_CURVE_EXPONENT = 1.5
+DOWNLOAD_CURVE_CAP_CENTS = 10  # hard cap $0.10 -- pennies, no exceptions
+
+# Asset-value tiers: the launch-time value assessment that sets a dataset's
+# price floor. All floors are pennies under the $0.10 cap. Configurable,
+# not hardcoded.
+ASSET_VALUE_TIERS = {
+    "standard": 1,  # $0.01 -- default
+    "premium": 5,  # $0.05
+    "flagship": 9,  # $0.09
+}
+DEFAULT_ASSET_VALUE_TIER = "standard"
+
+
+def floor_for_value_tier(tier: str) -> int:
+    """Price floor in cents for a named asset-value tier."""
+    return ASSET_VALUE_TIERS.get(tier, ASSET_VALUE_TIERS[DEFAULT_ASSET_VALUE_TIER])
+
+
+def download_price_cents(
+    download_count: int,
+    floor_cents: int = 1,
+    *,
+    scale: int = DOWNLOAD_CURVE_SCALE_DOWNLOADS,
+    exponent: float = DOWNLOAD_CURVE_EXPONENT,
+    cap_cents: int = DOWNLOAD_CURVE_CAP_CENTS,
+) -> int:
+    """Dynamic volume price for a dataset download, in cents.
+
+    price(d) = floor + (cap - floor) * (d / scale) ** exponent, capped.
+    The exponent, scale, and cap are keyword-configurable, not hardcoded.
+    The floor is CLAMPED to the cap: a misconfigured/stale floor above the
+    cap can never resurrect a higher price (Justynn's rule: hard $0.10 cap,
+    no exceptions). Raises ValueError on nonsense config (non-positive
+    scale, negative exponent) -- fail fast on programmer error in a money
+    function.
+    """
+    if scale <= 0:
+        raise ValueError(f"download curve scale must be positive, got {scale}")
+    if exponent < 0:
+        raise ValueError(f"download curve exponent must be >= 0, got {exponent}")
+    d = max(0, int(download_count))
+    cap = max(1, int(cap_cents))
+    floor = min(max(1, int(floor_cents)), cap)
+    growth = (cap - floor) * (d / scale) ** float(exponent)
+    return min(int(round(floor + growth)), cap)
+
+
+# --------------------------------------------- audience tracking (TW-606)
+# The signup/purchase question ("Are you a researcher, student, or other?")
+# is kept for AUDIENCE TRACKING ONLY. Per-transaction pricing is pennies
+# for everyone -- the old tiered entry fees ($5.99/$10.99) were scratched
+# (TW-606 Revision 3: too inflated for a single data pull).
+AUDIENCE_CATEGORIES = ("student", "researcher", "other")
+DEFAULT_AUDIENCE_CATEGORY = "other"
+
+
+def org_customer_tier(db: Any, org_id: str | None) -> str:
+    """The org's audience category; defaults to 'other'.
+
+    Set by the signup/purchase question ("researcher, student, or other").
+    Audience tracking only -- it no longer affects pricing. Reads
+    organizations.customer_tier when the column exists; graceful default
+    otherwise.
+    """
+    if not org_id or org_id in _UNSCOPED_ORGS:
+        return DEFAULT_AUDIENCE_CATEGORY
+    try:
+        resp = (
+            db.table("organizations").select("customer_tier").eq("id", org_id).execute()
+        )
+        rows = getattr(resp, "data", None) or []
+        if not rows:
+            return DEFAULT_AUDIENCE_CATEGORY
+        tier = rows[0].get("customer_tier") or DEFAULT_AUDIENCE_CATEGORY
+        return tier if tier in AUDIENCE_CATEGORIES else DEFAULT_AUDIENCE_CATEGORY
+    except Exception:  # TW-208: column missing or lookup down -> default
+        return DEFAULT_AUDIENCE_CATEGORY
+
+
+def download_fee_cents(db: Any, org_id: str | None, dataset_version_id: str) -> int:
+    """One-time Excel download fee for this dataset, in cents.
+
+    TW-606 Revision 3: the fee IS the dataset's live curve price -- pennies,
+    hard-capped at $0.10. The tiered entry fees are gone; per-transaction
+    pricing is the same for every audience category. org_id is kept for
+    signature compatibility (audience tracking) but does not affect price.
+    """
+    return dataset_download_price_cents(db, dataset_version_id)
+
+
 # Volume-discount derivative tiers: (spend_cents_floor, multiplier).
 VOLUME_TIERS = (
     (100_000, 0.70),  # > $1,000 / 30d
-    (20_000, 0.80),   # > $200
-    (5_000, 0.90),    # > $50
+    (20_000, 0.80),  # > $200
+    (5_000, 0.90),  # > $50
     (0, 1.00),
 )
 
@@ -85,9 +191,97 @@ def delivery_for_tier(tier: str) -> dict[str, bool]:
     return dict(DELIVERY_MATRIX[tier])
 
 
-def excel_fee_cents(tier: str) -> int:
-    """One-time download fee for a tier, in cents."""
-    return EXCEL_FEE_CENTS[tier]
+# -------------------------------------------- download ledger (TW-606)
+def cumulative_downloads(db: Any, dataset_version_id: str) -> int:
+    """Cumulative Excel downloads for a dataset version, from the toll ledger.
+
+    Every download emits a DOWNLOAD_EVENT toll with source_id = version id,
+    so the ledger is the source of truth for the volume curve. Prefers a
+    server-side count (no row fetch -- this runs on the query hot path);
+    falls back to counting fetched rows on shims without count support.
+    """
+    try:
+        resp = (
+            db.table("toll_events")
+            .select("id", count="exact", head=True)
+            .eq("event_type", DOWNLOAD_EVENT)
+            .eq("source_id", dataset_version_id)
+            .execute()
+        )
+        count = getattr(resp, "count", None)
+        if count is not None:
+            return int(count)
+        rows = getattr(resp, "data", None) or []
+        return len(rows)
+    except Exception as exc:  # TW-208: pricing lookup never breaks serving
+        log.warning("download count lookup failed for %s: %s", dataset_version_id, exc)
+        return 0
+
+
+def version_price_floor_cents(version_row: dict | None) -> int:
+    """Per-dataset price floor from the version row's asset-value tier."""
+    if not version_row:
+        return ASSET_VALUE_TIERS[DEFAULT_ASSET_VALUE_TIER]
+    try:
+        return max(
+            1,
+            int(version_row.get("price_floor_cents") or 0)
+            or ASSET_VALUE_TIERS[DEFAULT_ASSET_VALUE_TIER],
+        )
+    except Exception:
+        return ASSET_VALUE_TIERS[DEFAULT_ASSET_VALUE_TIER]
+
+
+def dataset_download_price_cents(
+    db: Any, dataset_version_id: str, version: dict | None = None
+) -> int:
+    """Current Excel download price for a dataset version, in cents.
+
+    Evaluates the dynamic volume curve at the version's cumulative download
+    count, starting from its per-dataset asset-value floor. Pass a resolved
+    version row to skip the re-lookup on hot paths.
+    """
+    if version is None:
+        version = latest_lane_version_by_id(db, dataset_version_id)
+    floor = version_price_floor_cents(version)
+    return download_price_cents(
+        cumulative_downloads(db, dataset_version_id), floor_cents=floor
+    )
+
+
+def latest_lane_version(db: Any, lane: str) -> dict | None:
+    """Latest released dataset version row for a lane, or None."""
+    try:
+        resp = (
+            db.table("sci_dataset_versions")
+            .select("*")
+            .eq("lane", lane)
+            .order("released_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        rows = getattr(resp, "data", None) or []
+        return dict(rows[0]) if rows else None
+    except Exception as exc:  # TW-208
+        log.warning("lane version lookup failed for %s: %s", lane, exc)
+        return None
+
+
+def latest_lane_version_by_id(db: Any, dataset_version_id: str) -> dict | None:
+    """Dataset version row by id, or None."""
+    try:
+        resp = (
+            db.table("sci_dataset_versions")
+            .select("*")
+            .eq("id", dataset_version_id)
+            .limit(1)
+            .execute()
+        )
+        rows = getattr(resp, "data", None) or []
+        return dict(rows[0]) if rows else None
+    except Exception as exc:  # TW-208
+        log.warning("version lookup failed for %s: %s", dataset_version_id, exc)
+        return None
 
 
 # ------------------------------------------------------- subscription gate
@@ -203,18 +397,19 @@ def emit_download_toll(
     db: Any,
     org_id: str,
     request_id: str,
-    tier: str,
     dataset_version_id: str,
 ) -> dict | None:
     """One-time Excel download fee, ON TOP of the subscription.
 
-    The fee is passed as amount_cents (tier-priced); no TOLL_RATES entry is
-    needed because the toll service accepts explicit amounts.
+    TW-606 Revision 3: the fee is the dataset's live curve price -- pennies,
+    hard-capped at $0.10 per download. No tiered entry fees. Passed as
+    amount_cents; no TOLL_RATES entry needed because the toll service
+    accepts explicit amounts.
     """
-    from app.services import toll_service
-
-    fee = excel_fee_cents(tier)
+    fee = download_fee_cents(db, org_id, dataset_version_id)
     try:
+        from app.services import toll_service
+
         return toll_service.record_toll_event(
             db,
             org_id=org_id,
@@ -228,6 +423,151 @@ def emit_download_toll(
     except Exception as exc:  # TW-208
         log.warning("download toll emit failed (%s); continuing", exc)
         return None
+
+
+# -------------------------------------- neutral API tolls (TW-606)
+# The per-row API toll is set so that pulling an entire dataset via API
+# converges to approximately the dataset's current CURVE price
+# (download_price_cents at its cumulative download count). The toll is for
+# access pattern, not a discount or penalty.
+# RESOLVED (TW-606 Revision 3, Justynn's call): the charged Excel download
+# fee IS the curve price -- full API-vs-download economic neutrality holds.
+# Both surfaces cost pennies, hard-capped at $0.10 per download or call.
+API_ROWS_EVENT = "data.science.api_rows"
+
+
+def neutral_per_row_rate_cents(
+    db: Any,
+    dataset_version_id: str,
+    row_count_total: int,
+    version: dict | None = None,
+) -> float:
+    """Neutral per-row API rate in cents: download_price / total_rows.
+
+    A full-dataset pull (row_count_total rows served) converges to the
+    current download price. Uses the curve price so the rate reflects the
+    dataset's market value. Pass a resolved version row to skip re-lookup.
+    """
+    total = max(1, int(row_count_total))
+    price = dataset_download_price_cents(db, dataset_version_id, version=version)
+    return price / total
+
+
+def emit_neutral_data_toll(
+    db: Any,
+    org_id: str,
+    request_id: str,
+    lane: str,
+    rows_served: int,
+    source_type: str | None = None,
+    dataset_version_id: str | None = None,
+) -> dict | None:
+    """Neutral data-query toll for a lane: rows_served x per-row rate.
+
+    Resolves the lane's latest dataset version for the current curve price
+    and total row count (or uses dataset_version_id when the caller already
+    resolved it). Falls back to the legacy flat query toll when no version
+    row is resolvable (tests, unmigrated DB). TW-208: never breaks serving;
+    failures are logged and swallowed.
+    """
+    try:
+        version = None
+        if dataset_version_id:
+            version = latest_lane_version_by_id(db, dataset_version_id)
+        if version is None:
+            version = latest_lane_version(db, lane)
+        if version is None or int(version.get("row_count") or 0) <= 0:
+            return metered_toll(
+                db, org_id, "data.science.query", request_id, source_type=source_type
+            )
+        served = max(0, int(rows_served))
+        if served == 0:
+            return None
+        # version already resolved above: thread it through (no re-lookup).
+        rate = neutral_per_row_rate_cents(
+            db, version["id"], int(version["row_count"]), version=version
+        )
+        mult = volume_rate_multiplier(db, org_id)
+        # Rosa (TW-606 round 2): per-call cap. rate = curve_price / row_count
+        # only bounds the charge when served <= row_count (data-dependent, not
+        # structural) -- stale row_count metadata must never resurrect a
+        # >$0.10 charge. An honest full pull = exactly the cap: no-op there.
+        amount = min(int(round(served * rate * mult)), DOWNLOAD_CURVE_CAP_CENTS)
+        from app.services import toll_service
+
+        return toll_service.record_toll_event(
+            db,
+            org_id=org_id,
+            event_type=API_ROWS_EVENT,
+            quantity=float(served),
+            amount_cents=amount,
+            idempotency_key=f"sci:api_rows:{request_id}",
+            source_type=source_type or "sci_dataset_versions",
+            source_id=version["id"],
+        )
+    except Exception as exc:  # TW-208
+        log.warning("neutral api toll emit failed (%s); continuing", exc)
+        return None
+
+
+# --------------------------------------- rate-limit tiers (TW-606)
+# Higher rate limits cost more; tier pricing is tied to the same volume
+# curve -- every tier moves with the dataset's cumulative downloads.
+# Fees are monthly recurring, priced off the curve at the reference count
+# (the dataset's cumulative download count at pricing time).
+#
+# STATUS: pricing schedule DEFINED here, but billing + enforcement are NOT
+# wired yet -- no production callers of rate_limit_tier_fee_cents and no
+# rate-limit enforcement reads org_rate_limit_tier. Do not present these
+# as live until the TW-606 follow-up wires them.
+RATE_LIMIT_TIERS: dict[str, dict] = {
+    "standard": {"rpm": 60, "price_factor": 1.0, "label": "Standard: 60 req/min"},
+    "pro": {"rpm": 600, "price_factor": 5.0, "label": "Pro: 600 req/min"},
+    "scale": {"rpm": 6000, "price_factor": 20.0, "label": "Scale: 6,000 req/min"},
+}
+DEFAULT_RATE_LIMIT_TIER = "standard"
+
+
+def rate_limit_tier_fee_cents(
+    download_count: int, tier: str = DEFAULT_RATE_LIMIT_TIER
+) -> int:
+    """Monthly fee for a rate-limit tier, in cents.
+
+    Evaluates the download volume curve at the reference count (the
+    dataset's cumulative download count at pricing time), scaled by the
+    tier's price factor. Higher limits cost more; all tiers move with
+    the same curve.
+
+    NOTE: pricing schedule only -- billing/enforcement not wired yet.
+    """
+    spec = RATE_LIMIT_TIERS.get(tier, RATE_LIMIT_TIERS[DEFAULT_RATE_LIMIT_TIER])
+    return int(
+        round(download_price_cents(download_count) * float(spec["price_factor"]))
+    )
+
+
+def org_rate_limit_tier(db: Any, org_id: str | None) -> str:
+    """The org's rate-limit tier name; defaults to standard.
+
+    Reads organizations.rate_limit_tier when the column exists; graceful
+    default otherwise. Enforcement wiring is a follow-up (TW-606).
+    """
+    if not org_id or org_id in _UNSCOPED_ORGS:
+        return DEFAULT_RATE_LIMIT_TIER
+    try:
+        resp = (
+            db.table("organizations")
+            .select("rate_limit_tier")
+            .eq("id", org_id)
+            .execute()
+        )
+        rows = getattr(resp, "data", None) or []
+        if not rows:
+            return DEFAULT_RATE_LIMIT_TIER
+        tier = rows[0].get("rate_limit_tier") or DEFAULT_RATE_LIMIT_TIER
+        return tier if tier in RATE_LIMIT_TIERS else DEFAULT_RATE_LIMIT_TIER
+    except Exception:  # TW-208: column missing or lookup down
+        return DEFAULT_RATE_LIMIT_TIER
 
 
 # ------------------------------------------------------------------ Excel
@@ -268,8 +608,14 @@ def build_excel_bytes(
         ("Downloaded (UTC)", datetime.now(timezone.utc).isoformat()),
         ("One-time download fee", f"${fee_cents / 100:.2f}"),
         ("Synthetic seed", "YES - all rows synthetic" if synthetic else "NO"),
-        ("Provenance", "Every row traces to bronze artifact -> lab -> calibration. See API /query/{id}/provenance."),
-        ("License", "Twistor subscription + per-download fee. Redistribution prohibited."),
+        (
+            "Provenance",
+            "Every row traces to bronze artifact -> lab -> calibration. See API /query/{id}/provenance.",
+        ),
+        (
+            "License",
+            "Twistor subscription + per-download fee. Redistribution prohibited.",
+        ),
     ]
     for r, (k, v) in enumerate(lines, start=1):
         readme.cell(row=r, column=1, value=k).font = header_font

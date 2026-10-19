@@ -23,9 +23,9 @@ active Twistor subscription (402 otherwise) — TW-599 paywall, day one.
 Paywall (TW-599): subscription gate via paywall.require_active_subscription;
 API tolls metered with dynamic derivative pricing
 (paywall.metered_toll: volume multiplier on trailing-30d science spend);
-Excel downloads at GET /datasets/{version}/download carry a one-time tier
-fee on top of the subscription (small $6 / medium $8.50 / large $22.50;
-large = API only).
+Excel downloads at GET /datasets/{version}/download carry a one-time fee
+on top of the subscription: the dataset's live curve price (pennies,
+hard-capped at $0.10 per download; large = API only).
 """
 
 from __future__ import annotations
@@ -85,6 +85,27 @@ def _emit_toll(
         )
     except Exception as exc:  # TW-208: metering never breaks serving
         log.warning("toll emission %s failed (%s); continuing", event_type, exc)
+
+
+def _emit_neutral_toll(
+    db: Any,
+    org_id: str,
+    request_id: str,
+    lane: str,
+    rows_served: int,
+) -> None:
+    """Neutral data toll (TW-606): rows_served x per-row rate.
+
+    Delegates to paywall.emit_neutral_data_toll. Failures are logged and
+    swallowed (TW-208): metering never breaks serving.
+    """
+    try:
+        paywall.emit_neutral_data_toll(
+            db, org_id, request_id, lane, rows_served,
+            source_type="sci_subseasonal",
+        )
+    except Exception as exc:  # TW-208
+        log.warning("neutral toll emission failed (%s); continuing", exc)
 
 
 def _gate(db: Any, org_id: str) -> str:
@@ -160,10 +181,10 @@ def query_gold(
     if lead_weeks:
         q = q.eq("lead_weeks", lead_weeks)
     rows = _rows(q.limit(min(limit, 10000)).execute())
-    _emit_toll(db, org_id, TOLL_QUERY, request_id)
-    if limit > 1000:
-        # Bulk pull: toll per 1k rows served (TW-549).
-        _emit_toll(db, org_id, TOLL_BULK, f"{request_id}:bulk", quantity=len(rows) / 1000)
+    # TW-606: neutral data toll -- rows_served x per-row rate, converging to
+    # the dataset's current download price on a full pull. Replaces the flat
+    # per-query + bulk tolls so API and download stay economically neutral.
+    _emit_neutral_toll(db, org_id, request_id, LANE, len(rows))
     out = []
     for r in rows:
         cond = r.get("conditions") or {}
@@ -359,9 +380,10 @@ def http_download_dataset(
     x_request_id: str | None = Header(default=None),
     x_org_id: str | None = Header(default=None),
 ) -> StreamingResponse:
-    """Excel download: subscription + one-time tier fee (TW-599 paywall).
+    """Excel download: subscription + one-time curve fee (TW-606).
 
-    Small/medium tiers only — large datasets are API-only (403).
+    Small/medium tiers only -- large datasets are API-only (403). The fee
+    is the dataset's live curve price: pennies, hard-capped at $0.10.
     """
     db = _db()
     org_id = _gate(db, _org_id(x_org_id))
@@ -385,12 +407,12 @@ def http_download_dataset(
         "crps", "skill_vs_climatology", "truth_source", "truth_lag_days",
         "assimilation_window", "reforecast_design", "synthetic",
     ]
-    fee = paywall.excel_fee_cents(tier)
+    fee = paywall.download_fee_cents(db, org_id, row["id"])
     content = paywall.build_excel_bytes(
         rows, columns, DATASET_NAME, version, tier, fee,
         synthetic=all(r.get("synthetic", False) for r in rows) if rows else True,
     )
-    paywall.emit_download_toll(db, org_id, request_id, tier, row["id"])
+    paywall.emit_download_toll(db, org_id, request_id, row["id"])
     # The download itself is also a served read: meter it as a query.
     _emit_toll(db, org_id, TOLL_QUERY, f"{request_id}:download")
     return paywall.excel_response(content, DATASET_NAME, version)

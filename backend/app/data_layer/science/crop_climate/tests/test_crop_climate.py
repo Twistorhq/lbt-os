@@ -588,7 +588,7 @@ def test_reads_require_subscription(seeded_store):
     seeded_store.organizations[0]["subscription_status"] = "active"
 
 
-def test_download_excel_small_tier(seeded_store):
+def test_download_excel_curve_fee(seeded_store):
     client = _test_client(seeded_store)
     r = client.get("/data/v1/science/crop_climate/datasets/1.0.0/download",
                    headers={"X-Org-Id": "org-1"})
@@ -596,10 +596,11 @@ def test_download_excel_small_tier(seeded_store):
     assert "spreadsheetml.sheet" in r.headers["content-type"]
     assert r.content[:4] == b"PK\x03\x04"
     assert 'filename="climateshift-1-1.0.0.xlsx"' in r.headers["content-disposition"]
-    # one-time fee tolled on top of the subscription
+    # one-time fee tolled on top of the subscription: TW-606 Rev 3, the fee
+    # is the dataset's live curve price (pennies, $0.10 cap), not a tier fee
     fees = [t for t in seeded_store.toll_events
             if t.get("event_type") == "data.science.download"]
-    assert fees and fees[0]["amount_cents"] == 600
+    assert fees and fees[0]["amount_cents"] == 1
 
 
 def test_download_requires_subscription(seeded_store):

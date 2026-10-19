@@ -15,8 +15,9 @@ Tolling (TW-549) + paywall (TW-599): every served call is metered via
 paywall.metered_toll (dynamic derivative pricing: volume multiplier on
 trailing-30d science spend); every READ needs an active Twistor subscription
 (402 otherwise). Excel downloads at GET /datasets/{version}/download carry a
-one-time tier fee on top of the subscription (small $6 / medium $8.50 /
-large $22.50; large = API only). Idempotency key = f"sci:{request_id}".
+one-time fee on top of the subscription: the dataset's live curve price
+(pennies, hard-capped at $0.10 per download; large = API only).
+Idempotency key = f"sci:{request_id}".
 A toll failure never breaks a read (TW-208).
 
 Split discipline: /query defaults to split='train'. 'test_future' rows
@@ -30,9 +31,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import math
 import uuid
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 
@@ -132,6 +132,22 @@ def _toll(request: Request | None, event_type: str, org_id: str = "public",
         _request_id(request), event_type, quantity=quantity,
         source_type=source_type, source_id=source_id, org_id=org_id,
         db=_toll_db(store) if store is not None else None)
+
+
+def _neutral_toll(db: Any, org_id: str, request_id: str, lane: str,
+                  rows_served: int, dataset_version_id: str | None = None) -> None:
+    """Neutral data toll (TW-606): rows_served x per-row rate.
+
+    Delegates to paywall.emit_neutral_data_toll. Failures are logged and
+    swallowed (TW-208): metering never breaks serving.
+    """
+    try:
+        paywall.emit_neutral_data_toll(
+            db, org_id, request_id, lane, rows_served,
+            source_type="sci_crop_gold", dataset_version_id=dataset_version_id,
+        )
+    except Exception as exc:  # TW-208
+        log.warning("neutral toll emission failed (%s); continuing", exc)
 
 
 # ---------------------------------------------------------------- envelopes
@@ -234,13 +250,11 @@ def query_gold(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     org_id = _gate(store, x_org_id)
     resolved = store.get_version(version) if version else store.list_versions()[-1]
-    if bulk:
-        _toll(request, EVENT_BULK, org_id=org_id,
-              quantity=max(1, math.ceil(len(rows) / 1000)),
-              source_type="sci_crop_gold", source_id=resolved.id, store=store)
-    else:
-        _toll(request, EVENT_QUERY, org_id=org_id,
-              source_type="sci_crop_gold", source_id=resolved.id, store=store)
+    # TW-606: neutral data toll -- rows_served x per-row rate, converging to
+    # the dataset's current download price on a full pull. Replaces the flat
+    # per-query + bulk tolls so API and download stay economically neutral.
+    _neutral_toll(_toll_db(store), org_id, _request_id(request),
+                  resolved.lane, len(rows), dataset_version_id=resolved.id)
     return _dataset_envelope(store, resolved, rows)
 
 
@@ -377,9 +391,10 @@ def file_correction(payload: schemas.CorrectionCreate, request: Request,
 def download_dataset(version: str, request: Request,
                      x_org_id: Annotated[str | None, Header()] = None,
                      store: models.CropClimateStore = Depends(get_store)):
-    """Excel download: subscription + one-time tier fee (TW-599 paywall).
+    """Excel download: subscription + one-time curve fee (TW-606).
 
-    Small/medium tiers only — large datasets are API-only (403).
+    Small/medium tiers only -- large datasets are API-only (403). The fee
+    is the dataset's live curve price: pennies, hard-capped at $0.10.
     """
     org_id = _gate(store, x_org_id)
     v = _version_or_404(store, version)
@@ -413,13 +428,13 @@ def download_dataset(version: str, request: Request,
             "lab_accreditation_id": traits.get("lab_accreditation_id"),
             "synthetic": r["synthetic"],
         })
-    fee = paywall.excel_fee_cents(tier)
+    fee = paywall.download_fee_cents(_toll_db(store), org_id, v.id)
     content = paywall.build_excel_bytes(
         flat, columns, v.dataset_name, v.semver, tier, fee,
         synthetic=all(r["synthetic"] for r in rows) if rows else True,
     )
     request_id = _request_id(request)
-    paywall.emit_download_toll(_toll_db(store), org_id, request_id, tier, v.id)
+    paywall.emit_download_toll(_toll_db(store), org_id, request_id, v.id)
     _toll(request, EVENT_QUERY, org_id=org_id,
           source_type="sci_crop_gold", source_id=v.id, store=store)
     return paywall.excel_response(content, v.dataset_name, v.semver)
