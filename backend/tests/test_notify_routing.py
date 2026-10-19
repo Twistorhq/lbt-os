@@ -1,6 +1,6 @@
 """TW-620 Twistor Notify: least-cost routing + failover tests (RED first)."""
+
 import unittest
-from dataclasses import dataclass
 
 from app.notify import providers, routing
 
@@ -10,7 +10,6 @@ def _cfg(name, channel, cost, priority=100, enabled=True, fail=False):
     p.name = name
     p.channel = channel
     if fail:
-        orig = p.send
 
         def _fail(**kwargs):
             return providers.ProviderResult(
@@ -49,7 +48,10 @@ class LeastCostRoutingTests(unittest.TestCase):
         self.assertEqual([c.name for c in ordered], ["email-one"])
 
     def test_priority_breaks_cost_ties(self):
-        configs = [_cfg("slow", "email", 1, priority=200), _cfg("fast", "email", 1, priority=50)]
+        configs = [
+            _cfg("slow", "email", 1, priority=200),
+            _cfg("fast", "email", 1, priority=50),
+        ]
         ordered = routing.order_providers(configs, "email")
         self.assertEqual(ordered[0].name, "fast")
 

@@ -1,4 +1,5 @@
 """TW-620 Twistor Notify: send orchestration, cost preview, templates (RED first)."""
+
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -18,6 +19,7 @@ def _fake_db():
         ex.execute.return_value = r
         return ex
 
+    tbl = db.table.return_value
     tbl.insert.side_effect = _fake_insert
     sel = MagicMock()
     sel.execute.return_value = MagicMock(data=[])
@@ -38,9 +40,7 @@ def _null_config(name="null-mail", channel="email", cost=0):
 
 class CostPreviewTests(unittest.TestCase):
     def test_preview_shows_cost_before_send(self):
-        preview = service.preview_cost(
-            [_null_config(cost=3)], "email"
-        )
+        preview = service.preview_cost([_null_config(cost=3)], "email")
         self.assertEqual(preview["provider"], "null-mail")
         self.assertEqual(preview["cost_cents"], 3)
         self.assertEqual(preview["channel"], "email")
@@ -89,14 +89,11 @@ class SendOrchestrationTests(unittest.TestCase):
         self.assertEqual(msg["recipient"], "user@example.com")
         self.assertTrue(msg["recipient_hash"].startswith("sha256:"))
         toll.assert_called_once()
-        self.assertEqual(
-            toll.call_args[1]["idempotency_key"], "notify:msg-test-1"
-        )
+        self.assertEqual(toll.call_args[1]["idempotency_key"], "notify:msg-test-1")
 
     def test_send_marks_failed_when_all_providers_down(self):
         db = _fake_db()
         cfg = _null_config()
-        orig = cfg.provider.send
         cfg.provider.send = lambda **kw: providers.ProviderResult(
             ok=False, error="down", cost_cents=0, latency_ms=1
         )

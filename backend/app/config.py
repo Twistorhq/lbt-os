@@ -186,6 +186,8 @@ TOLL_RATES: dict[str, int] = {
     "data.science.bulk":     25,  # $0.25 per 1k rows on bulk export
     "data.science.ingest":   10,  # $0.10 per ingested batch (lab-side, nominal)
     "data.science.benchmark": 50,  # $0.50 per benchmark submission
+    # TW-620 Twistor Notify: orchestration toll per message sent
+    "notify.message_sent":    1,  # $0.01 per orchestrated notification
 }
 
 # NOTE (TW-550): PLAN_FEATURES removed — it had no consumers and listed only

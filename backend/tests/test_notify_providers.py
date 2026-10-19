@@ -1,4 +1,5 @@
 """TW-620 Twistor Notify: provider interface conformance tests (RED first)."""
+
 import unittest
 
 from app.notify import providers
@@ -37,9 +38,7 @@ class ProviderInterfaceTests(unittest.TestCase):
 
     def test_resend_provider_refuses_without_api_key(self):
         p = providers.ResendEmailProvider(api_key=None)
-        result = p.send(
-            to="user@example.com", subject="hi", body="hello", metadata={}
-        )
+        result = p.send(to="user@example.com", subject="hi", body="hello", metadata={})
         self.assertFalse(result.ok)
         self.assertIn("api key", result.error.lower())
 
