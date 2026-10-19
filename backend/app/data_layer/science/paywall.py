@@ -9,23 +9,23 @@ Delivery doctrine (Justynn 2026-10-18, LAW for scientific datasets):
     for every read; Excel downloads carry a one-time fee ON TOP of the
     subscription (subscription + per-download fee).
 
-Dynamic volume pricing (TW-606, supersedes the flat $6/$8.50/$22.50 tiers):
-  - Excel download price scales with the dataset's CUMULATIVE download count:
+Dynamic volume pricing (TW-606, REVISION 3 2026-10-18: pennies):
+  - Excel download AND API-call price scales with the dataset's CUMULATIVE
+    download count:
       price(d) = floor + (cap - floor) * (d / scale) ** exponent, hard-capped.
     The floor is per-dataset, set by its asset-value tier at launch
-    (standard $0.01, premium/flagship higher). Defaults: floor $0.01 at
-    0 downloads -> $59.99 at 100,000 downloads. Cheap while unproven,
-    meaningful at scale, never unaffordable.
+    (standard $0.01, premium $0.05, flagship $0.09). Defaults: $0.01 at
+    0 downloads -> $0.10 HARD CAP at 100,000 downloads. Everything costs
+    pennies -- no more than $0.10 per download or per API call, ever.
   - API micro-tolls are ECONOMICALLY NEUTRAL with the download price: the
     per-row toll is set so that pulling an entire dataset via API converges
     to approximately the current download price. The researcher's choice
     between API and download is neutral -- the toll is for access pattern,
     not a discount or penalty.
   - Rate-limit tiers are priced off the same curve: higher limits cost more.
-  - Customer tiers: the signup question ("researcher, student, or other")
-    sets the download entry fee -- student $5.99, researcher $10.99,
-    other $10.99. All tiers then pay the same per-request API tolling at
-    the dataset's live curve price. The subscription is still required.
+  - Signup question ("researcher, student, or other") is kept for AUDIENCE
+    TRACKING only -- per-transaction pricing is pennies for everyone.
+    The subscription is still required.
 
 Dynamic derivative pricing (org-level volume discount, unchanged):
   the per-unit toll rate is multiplied by a volume factor derived from the
@@ -68,18 +68,19 @@ DELIVERY_MATRIX = {
 #   price(d) = floor + (cap - floor) * (d / scale) ** exponent, hard-capped.
 # The floor is per-dataset (asset-value tier, set at launch); the curve runs
 # from the dataset's floor up to the cap across 0..scale downloads.
-# Defaults: $0.01 at 0 downloads -> $59.99 at 100,000 downloads.
+# Defaults: $0.01 at 0 downloads -> $0.10 HARD CAP at 100,000 downloads.
+# Everything costs pennies: no more than $0.10 per download or API call, ever.
 DOWNLOAD_CURVE_SCALE_DOWNLOADS = 100_000
 DOWNLOAD_CURVE_EXPONENT = 1.5
-DOWNLOAD_CURVE_CAP_CENTS = 5999  # hard cap $59.99 -- never unaffordable
+DOWNLOAD_CURVE_CAP_CENTS = 10  # hard cap $0.10 -- pennies, no exceptions
 
 # Asset-value tiers: the launch-time value assessment that sets a dataset's
-# price floor. Standard datasets floor at $0.01; more valuable datasets
-# floor higher. Configurable, not hardcoded.
+# price floor. All floors are pennies under the $0.10 cap. Configurable,
+# not hardcoded.
 ASSET_VALUE_TIERS = {
     "standard": 1,  # $0.01 -- default
-    "premium": 999,  # $9.99
-    "flagship": 2999,  # $29.99
+    "premium": 5,  # $0.05
+    "flagship": 9,  # $0.09
 }
 DEFAULT_ASSET_VALUE_TIER = "standard"
 
@@ -115,60 +116,47 @@ def download_price_cents(
     return min(int(round(floor + growth)), cap)
 
 
-# --------------------------------------------- customer tiers (TW-606)
-# Entry fees are gated behind a signup/purchase question:
-#   "Are you a researcher, student, or other?"
-# The tier sets the download entry fee; ALL tiers then pay the same
-# per-request API tolling at the dataset's live curve price.
-# Configurable tier definitions, not hardcoded.
-CUSTOMER_TIERS: dict[str, dict] = {
-    "student": {"entry_fee_cents": 599, "label": "Student: $5.99 entry"},
-    "researcher": {
-        "entry_fee_cents": 1099,
-        "label": "Researcher: $10.99 entry (incl. company researchers)",
-    },
-    "other": {"entry_fee_cents": 1099, "label": "Other: $10.99 entry"},
-}
-DEFAULT_CUSTOMER_TIER = "other"
+# --------------------------------------------- audience tracking (TW-606)
+# The signup/purchase question ("Are you a researcher, student, or other?")
+# is kept for AUDIENCE TRACKING ONLY. Per-transaction pricing is pennies
+# for everyone -- the old tiered entry fees ($5.99/$10.99) were scratched
+# (TW-606 Revision 3: too inflated for a single data pull).
+AUDIENCE_CATEGORIES = ("student", "researcher", "other")
+DEFAULT_AUDIENCE_CATEGORY = "other"
 
 
 def org_customer_tier(db: Any, org_id: str | None) -> str:
-    """The org's customer tier; defaults to 'other'.
+    """The org's audience category; defaults to 'other'.
 
     Set by the signup/purchase question ("researcher, student, or other").
-    Reads organizations.customer_tier when the column exists; graceful
-    default otherwise. The subscription gate is unchanged -- the tier only
-    prices the entry fee.
+    Audience tracking only -- it no longer affects pricing. Reads
+    organizations.customer_tier when the column exists; graceful default
+    otherwise.
     """
     if not org_id or org_id in _UNSCOPED_ORGS:
-        return DEFAULT_CUSTOMER_TIER
+        return DEFAULT_AUDIENCE_CATEGORY
     try:
         resp = (
             db.table("organizations").select("customer_tier").eq("id", org_id).execute()
         )
         rows = getattr(resp, "data", None) or []
         if not rows:
-            return DEFAULT_CUSTOMER_TIER
-        tier = rows[0].get("customer_tier") or DEFAULT_CUSTOMER_TIER
-        return tier if tier in CUSTOMER_TIERS else DEFAULT_CUSTOMER_TIER
-    except Exception:  # TW-208: column missing or lookup down -> default tier
-        return DEFAULT_CUSTOMER_TIER
-
-
-def customer_entry_fee_cents(db: Any, org_id: str | None) -> int:
-    """Entry fee for the org's customer tier, in cents."""
-    tier = org_customer_tier(db, org_id)
-    return int(CUSTOMER_TIERS[tier]["entry_fee_cents"])
+            return DEFAULT_AUDIENCE_CATEGORY
+        tier = rows[0].get("customer_tier") or DEFAULT_AUDIENCE_CATEGORY
+        return tier if tier in AUDIENCE_CATEGORIES else DEFAULT_AUDIENCE_CATEGORY
+    except Exception:  # TW-208: column missing or lookup down -> default
+        return DEFAULT_AUDIENCE_CATEGORY
 
 
 def download_fee_cents(db: Any, org_id: str | None, dataset_version_id: str) -> int:
-    """One-time Excel download fee for this org + dataset, in cents.
+    """One-time Excel download fee for this dataset, in cents.
 
-    The fee is the org's tiered entry fee ($5.99 student / $10.99
-    researcher+other), set by the signup question. Per-request API tolling
-    for all tiers uses the dataset's live curve price (neutral rate).
+    TW-606 Revision 3: the fee IS the dataset's live curve price -- pennies,
+    hard-capped at $0.10. The tiered entry fees are gone; per-transaction
+    pricing is the same for every audience category. org_id is kept for
+    signature compatibility (audience tracking) but does not affect price.
     """
-    return customer_entry_fee_cents(db, org_id)
+    return dataset_download_price_cents(db, dataset_version_id)
 
 
 # Volume-discount derivative tiers: (spend_cents_floor, multiplier).
@@ -410,11 +398,10 @@ def emit_download_toll(
 ) -> dict | None:
     """One-time Excel download fee, ON TOP of the subscription.
 
-    The fee is the org's tiered entry fee from the signup question:
-    student $5.99, researcher $10.99, other $10.99 (all tiers then pay the
-    same per-request API tolls at the dataset's live curve price).
-    Passed as amount_cents; no TOLL_RATES entry needed because the toll
-    service accepts explicit amounts.
+    TW-606 Revision 3: the fee is the dataset's live curve price -- pennies,
+    hard-capped at $0.10 per download. No tiered entry fees. Passed as
+    amount_cents; no TOLL_RATES entry needed because the toll service
+    accepts explicit amounts.
     """
     fee = download_fee_cents(db, org_id, dataset_version_id)
     try:
@@ -440,10 +427,9 @@ def emit_download_toll(
 # converges to approximately the dataset's current CURVE price
 # (download_price_cents at its cumulative download count). The toll is for
 # access pattern, not a discount or penalty.
-# OPEN DESIGN POINT (Rosa review, TW-606): the charged Excel download fee
-# is currently the tiered entry fee ($5.99/$10.99), not the curve price.
-# Full API-vs-download economic neutrality needs Justynn's call on whether
-# downloads should price at the curve (see TW-606).
+# RESOLVED (TW-606 Revision 3, Justynn's call): the charged Excel download
+# fee IS the curve price -- full API-vs-download economic neutrality holds.
+# Both surfaces cost pennies, hard-capped at $0.10 per download or call.
 API_ROWS_EVENT = "data.science.api_rows"
 
 

@@ -492,11 +492,12 @@ def test_http_query_unscoped_org_fails_closed():
 
 
 def test_http_download_excel_small_tier(monkeypatch):
-    # TW-606: the download fee is the org's tiered entry fee, not a flat tier fee
+    # TW-606 Rev 3: the download fee is the dataset's live curve price
+    # (pennies, $0.10 cap) -- same for every audience category
     tier = paywall.dataset_tier(36)
     assert tier == "small"
-    db = FakeDB({"organizations": [{"id": "org-1", "customer_tier": "student"}]})
-    assert paywall.download_fee_cents(db, "org-1", "ver-1") == 599
+    db = FakeDB({})
+    assert paywall.download_fee_cents(db, "org-1", "ver-1") == 1
     assert paywall.delivery_for_tier(tier)["excel"] is True
 
 

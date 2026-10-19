@@ -3,9 +3,30 @@
 **Prepared by Twistor Holdings LLC**
 
 Ticket: TW-606 · Branch: `dre/tw-606-dynamic-pricing` · Author: Dre Coleman
-Reviewer: Rosa Delgado (REQUEST_CHANGES, 2026-10-18 — fixes in progress) · Date: 2026-10-18
+Reviewer: Rosa Delgado · Date: 2026-10-18
 
-## Source
+## REVISION 3 (2026-10-18, Justynn's call — his words: "scratch that")
+
+Justynn scratched the tiered entry fees ($5.99/$10.99) as too inflated for a
+single data pull. New rule: **everything costs pennies** — downloads AND API
+calls hard-capped at **$0.10 per download or per API call**, no exceptions.
+
+- Curve: `price(d) = floor + (10 - floor) * (d/100000)^1.5`, floor per
+  asset-value tier: standard $0.01 / premium $0.05 / flagship $0.09.
+  $0.01 at 0 downloads → $0.10 hard cap at 100,000.
+- `CUSTOMER_TIERS` entry-fee dict, `customer_entry_fee_cents()` removed.
+  `org_customer_tier()` kept for AUDIENCE TRACKING only.
+- `download_fee_cents()` now returns the dataset's live curve price
+  (signature unchanged — the three lane routers needed no edits).
+  `emit_download_toll()` charges the same curve price. This resolves the
+  earlier OPEN DESIGN POINT (Option A): downloads price at the curve, so
+  API-vs-download economic neutrality holds end to end.
+- Subscription gate unchanged. TW-608 no-overcharge rule unchanged.
+- Migration `supabase/migration_sci_paywall_tw606.sql`: comments updated
+  (cap, floors, tracking-only tier); DDL unchanged, still not run on live DB.
+- Tests: 127/127 green; `python3 -m ruff check` clean on all touched files.
+
+## Source (original brief)
 
 Ticket TW-606 (reporter: Justynn, 2026-10-18): replace the flat $6.00/$8.50/$22.50
 Excel tiers in the shared science paywall with a dynamic volume curve —

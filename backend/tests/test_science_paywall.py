@@ -1,6 +1,6 @@
 # Prepared by Twistor Holdings LLC
-"""TW-606 paywall tests: dynamic volume curve, asset-value floors, customer
-tiers, neutral API tolls, rate-limit tiers, subscription gate, Excel delivery.
+"""TW-606 paywall tests: dynamic volume curve, asset-value floors, audience
+tracking, neutral API tolls, rate-limit tiers, subscription gate, Excel delivery.
 
 Unit-level with fakes: no live database, no network.
 """
@@ -76,22 +76,25 @@ def test_delivery_matrix_matches_justynn_spec():
 
 
 def test_download_curve_endpoints():
-    # $0.01 at 0 downloads, $59.99 at 100,000, hard cap beyond
+    # $0.01 at 0 downloads, $0.10 hard cap at 100,000, capped beyond
     assert paywall.download_price_cents(0) == 1
-    assert paywall.download_price_cents(100_000) == 5999
-    assert paywall.download_price_cents(1_000_000) == 5999
+    assert paywall.download_price_cents(100_000) == 10
+    assert paywall.download_price_cents(1_000_000) == 10
     assert paywall.download_price_cents(-50) == 1  # negative clamps
 
 
 def test_download_curve_shape():
-    # exponent 1.5: convex growth, cheap while unproven
+    # exponent 1.5: convex growth, pennies all the way, hard $0.10 cap
     p0 = paywall.download_price_cents(0)
     p10k = paywall.download_price_cents(10_000)
     p50k = paywall.download_price_cents(50_000)
     p100k = paywall.download_price_cents(100_000)
-    assert p0 < p10k < p50k < p100k
-    # at 10k downloads (10% of scale): 1 + 5998 * 0.1**1.5 ~= 190c
-    assert 150 <= p10k <= 250
+    assert p0 <= p10k < p50k < p100k
+    # at 10k downloads (10% of scale): 1 + 9 * 0.1**1.5 ~= 1.3c
+    assert 1 <= p10k <= 2
+    # at 50k downloads: 1 + 9 * 0.5**1.5 ~= 4.2c
+    assert 3 <= p50k <= 5
+    assert p100k == 10  # the hard cap
 
 
 def test_download_curve_configurable_params():
@@ -102,44 +105,66 @@ def test_download_curve_configurable_params():
 
 
 def test_asset_value_floors():
-    # standard floor $0.01; premium/flagship floors higher; curve still caps
+    # standard floor $0.01; premium/flagship floors higher but still
+    # pennies under the $0.10 cap; curve still caps
     assert paywall.floor_for_value_tier("standard") == 1
-    assert paywall.floor_for_value_tier("premium") == 999
-    assert paywall.floor_for_value_tier("flagship") == 2999
+    assert paywall.floor_for_value_tier("premium") == 5
+    assert paywall.floor_for_value_tier("flagship") == 9
     assert paywall.floor_for_value_tier("nonsense") == 1  # unknown -> default
-    assert paywall.download_price_cents(0, floor_cents=999) == 999
-    assert paywall.download_price_cents(100_000, floor_cents=2999) == 5999
+    assert paywall.download_price_cents(0, floor_cents=5) == 5
+    assert paywall.download_price_cents(100_000, floor_cents=9) == 10
 
 
 def test_version_price_floor_from_row():
     assert paywall.version_price_floor_cents(None) == 1
     assert paywall.version_price_floor_cents({}) == 1
-    assert paywall.version_price_floor_cents({"price_floor_cents": 999}) == 999
+    assert paywall.version_price_floor_cents({"price_floor_cents": 5}) == 5
 
 
-def test_customer_tiers():
+def test_customer_tier_audience_tracking():
+    # the signup question is audience tracking only -- no pricing effect
     db = FakeDB({"organizations": [{"id": "org-1", "customer_tier": "student"}]})
     assert paywall.org_customer_tier(db, "org-1") == "student"
-    assert paywall.customer_entry_fee_cents(db, "org-1") == 599
     db2 = FakeDB({"organizations": [{"id": "org-2", "customer_tier": "researcher"}]})
-    assert paywall.customer_entry_fee_cents(db2, "org-2") == 1099
+    assert paywall.org_customer_tier(db2, "org-2") == "researcher"
     db3 = FakeDB({"organizations": [{"id": "org-3", "customer_tier": "other"}]})
-    assert paywall.customer_entry_fee_cents(db3, "org-3") == 1099
+    assert paywall.org_customer_tier(db3, "org-3") == "other"
     # unset -> default 'other'
     db4 = FakeDB({"organizations": [{"id": "org-4"}]})
     assert paywall.org_customer_tier(db4, "org-4") == "other"
-    assert paywall.customer_entry_fee_cents(db4, "org-4") == 1099
     # missing column -> graceful default
     db5 = FakeDB({})
     assert paywall.org_customer_tier(db5, "org-9") == "other"
 
 
-def test_download_fee_uses_tier_entry_fee():
-    # the download fee IS the tiered entry fee, not the curve price
-    db = FakeDB({"organizations": [{"id": "org-1", "customer_tier": "student"}]})
-    assert paywall.download_fee_cents(db, "org-1", "ver-1") == 599
-    db2 = FakeDB({"organizations": [{"id": "org-2", "customer_tier": "researcher"}]})
-    assert paywall.download_fee_cents(db2, "org-2", "ver-1") == 1099
+def test_download_fee_is_curve_price():
+    # TW-606 Rev 3: the download fee IS the dataset's live curve price --
+    # pennies, hard-capped at $0.10. Same for every audience category.
+    db = FakeDB({
+        "sci_dataset_versions": [
+            {"id": "ver-1", "price_floor_cents": 1},
+        ],
+        "toll_events": [],  # 0 downloads -> $0.01
+    })
+    assert paywall.download_fee_cents(db, "org-1", "ver-1") == 1
+    # premium floor starts higher but still pennies
+    db2 = FakeDB({
+        "sci_dataset_versions": [
+            {"id": "ver-2", "price_floor_cents": 9},
+        ],
+        "toll_events": [],
+    })
+    assert paywall.download_fee_cents(db2, "org-2", "ver-2") == 9
+    # even at 100k downloads, never more than $0.10
+    db3 = FakeDB({
+        "sci_dataset_versions": [
+            {"id": "ver-3", "price_floor_cents": 1},
+        ],
+        "toll_events": [
+            {"event_type": "data.science.download", "source_id": "ver-3"},
+        ] * 100_000,
+    })
+    assert paywall.download_fee_cents(db3, "org-3", "ver-3") == 10
 
 
 def test_cumulative_downloads_from_ledger():
@@ -157,15 +182,16 @@ def test_cumulative_downloads_from_ledger():
 def test_dataset_download_price_uses_floor_and_count():
     db = FakeDB({
         "sci_dataset_versions": [
-            {"id": "ver-1", "price_floor_cents": 999, "row_count": 1000},
+            {"id": "ver-1", "price_floor_cents": 5, "row_count": 1000},
         ],
         "toll_events": [
             {"event_type": "data.science.download", "source_id": "ver-1"},
-        ] * 10_000,
+        ] * 50_000,
     })
     price = paywall.dataset_download_price_cents(db, "ver-1")
-    assert price == paywall.download_price_cents(10_000, floor_cents=999)
-    assert price > 999  # above the premium floor
+    assert price == paywall.download_price_cents(50_000, floor_cents=5)
+    assert price > 5  # above the premium floor
+    assert price <= 10  # but never above the $0.10 cap
 
 
 def test_neutral_api_toll_converges_to_download_price(monkeypatch):
@@ -225,7 +251,7 @@ def test_rate_limit_tiers_same_curve():
     assert (paywall.rate_limit_tier_fee_cents(100_000, "scale") >
             paywall.rate_limit_tier_fee_cents(100_000, "pro") >
             paywall.rate_limit_tier_fee_cents(100_000, "standard"))
-    assert paywall.rate_limit_tier_fee_cents(100_000, "standard") == 5999
+    assert paywall.rate_limit_tier_fee_cents(100_000, "standard") == 10
     # unknown tier -> default
     assert paywall.rate_limit_tier_fee_cents(0, "nonsense") == 1
 
@@ -322,7 +348,7 @@ def test_metered_toll_applies_volume_discount(monkeypatch):
     assert calls[2]["amount_cents"] == 62
 
 
-def test_emit_download_toll_charges_entry_fee(monkeypatch):
+def test_emit_download_toll_charges_curve_price(monkeypatch):
     calls = []
 
     def fake_record(db, org_id, event_type, quantity=1.0, amount_cents=None,
@@ -334,12 +360,23 @@ def test_emit_download_toll_charges_entry_fee(monkeypatch):
     import app.services.toll_service as toll_service
 
     monkeypatch.setattr(toll_service, "record_toll_event", fake_record)
-    # student tier -> $5.99 entry fee on top of the subscription
-    db = FakeDB({"organizations": [{"id": "org-1", "customer_tier": "student"}]})
+    # no version row -> floor $0.01 at 0 downloads -> 1c
+    db = FakeDB({})
     paywall.emit_download_toll(db, "org-1", "dl1", "ver-1")
     assert calls[0]["event_type"] == "data.science.download"
-    assert calls[0]["amount_cents"] == 599
+    assert calls[0]["amount_cents"] == 1
     assert calls[0]["source_id"] == "ver-1"
+    # premium version -> floor $0.05, still pennies
+    db2 = FakeDB({
+        "sci_dataset_versions": [
+            {"id": "ver-2", "price_floor_cents": 5},
+        ],
+        "toll_events": [],
+    })
+    paywall.emit_download_toll(db2, "org-2", "dl2", "ver-2")
+    assert calls[1]["event_type"] == "data.science.download"
+    assert calls[1]["amount_cents"] == 5
+    assert calls[1]["source_id"] == "ver-2"
 
 
 # ------------------------------------------------------------------ Excel
