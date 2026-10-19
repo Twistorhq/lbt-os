@@ -82,13 +82,23 @@ def _hash_pii_value(value: Any) -> Any:
     if isinstance(value, dict):
         out = {}
         for k, v in value.items():
-            if _is_contact_key(k) and isinstance(v, str):
-                out[k] = "sha256:" + hashlib.sha256(v.encode()).hexdigest()
-            else:
-                out[k] = _hash_pii_value(v)
+            out[k] = (
+                _hash_contact_value(v) if _is_contact_key(k) else _hash_pii_value(v)
+            )
         return out
     if isinstance(value, (list, tuple)):
         return [_hash_pii_value(v) for v in value]
+    return value
+
+
+def _hash_contact_value(value: Any) -> Any:
+    """Hash every string leaf under a contact-shaped key (lists included)."""
+    if isinstance(value, str):
+        return "sha256:" + hashlib.sha256(value.encode()).hexdigest()
+    if isinstance(value, dict):
+        return _hash_pii_value(value)  # nested keys judged individually
+    if isinstance(value, (list, tuple)):
+        return [_hash_contact_value(v) for v in value]
     return value
 
 

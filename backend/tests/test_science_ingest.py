@@ -476,6 +476,22 @@ class TestPiiHashing:
         assert out["maintainers"][1]["org"] == "NOAA"
         assert out["site"] == "US-Ne1"
 
+    def test_contact_key_string_lists_hashed(self):
+        # Rosa TW-612 round 3: a list of plain strings under a contact-shaped
+        # key must not pass through raw.
+        out = hash_pii_metadata(
+            {
+                "emails": ["a@x.com", "b@x.com"],
+                "contacts": [{"email": "c@x.com", "role": "tech"}],
+                "site": "US-Ne1",
+            }
+        )
+        assert all(e.startswith("sha256:") for e in out["emails"])
+        assert "a@x.com" not in out["emails"][0]
+        assert out["contacts"][0]["email"].startswith("sha256:")
+        assert out["contacts"][0]["role"] == "tech"
+        assert out["site"] == "US-Ne1"
+
     def test_write_hashes_contact_metadata(self, tmp_path):
         db = FakeDB()
         w = BronzeWriter(

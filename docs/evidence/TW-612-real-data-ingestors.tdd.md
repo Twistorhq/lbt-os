@@ -24,7 +24,7 @@ replacing synthetic seeds with real open data per Diego's TW-610 plan.
 - `backend/tests/test_science_ingest.py` — 31 tests
 
 ### Verification
-- 40/40 new tests green; 109/109 with carbon + subseasonal + paywall suites
+- 41/41 new tests green; 137/137 with carbon + subseasonal + paywall suites
 - ruff check + format clean
 - Manual spot-checks (2026-10-18, not committed scripts): real GEFS .idx
   bytes fetched from live S3 (noaa-gefs-retrospective) -> bronze,
