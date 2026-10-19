@@ -71,6 +71,10 @@ class Settings(BaseSettings):
     twilio_from_number: str | None = None  # e.g. +15555550100
     twilio_10dlc_configured: bool = False  # TW-556: M2 recovery SMS requires 10DLC registration
 
+    # Twistor Flows (TW-625) — scheduler tick guard. Unset = tick refuses
+    # (fail-closed); no schedule ever fires without this key.
+    flows_tick_key: str | None = None
+
     # Integration / OAuth
     integration_secret_key: str | None = None
     quickbooks_client_id: str | None = None
@@ -188,6 +192,8 @@ TOLL_RATES: dict[str, int] = {
     "data.science.benchmark": 50,  # $0.50 per benchmark submission
     # TW-620 Twistor Notify: orchestration toll per message sent
     "notify.message_sent":    1,  # $0.01 per orchestrated notification
+    # TW-625 Twistor Flows: execution toll per step executed
+    "flows.step_executed":    1,  # $0.01 per executed workflow step
 }
 
 # NOTE (TW-550): PLAN_FEATURES removed — it had no consumers and listed only
