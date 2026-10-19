@@ -23,6 +23,7 @@ from supabase import Client
 
 from ..config import settings
 from ..database import get_db
+from ..limiter import limiter
 from . import service, tokens
 
 log = logging.getLogger(__name__)
@@ -138,7 +139,9 @@ def _require_org_admin(
 
 
 @saml_router.post("/sso/config")
+@limiter.limit("10/hour")  # B2: config-change throttle
 def sso_config(
+    request: Request,
     body: SsoConfigIn,
     claims: dict = Depends(_require_org_admin),
     db: Client = Depends(get_db),
@@ -277,21 +280,25 @@ def _first(value) -> str | None:
 
 
 @saml_router.get("/sso/saml/{org_id}/login")
+@limiter.limit("30/minute")  # B2
 def saml_login(
     org_id: str,
-    req: Request,
+    request: Request,
     db: Client = Depends(get_db),
     return_to: str | None = None,
 ):
     """SP-initiated login: redirect the browser to the org's IdP."""
     config_row = _get_enabled_config(db, org_id)
-    auth = OneLogin_Saml2_Auth(_prepare_request(req), _sp_settings(org_id, config_row))
+    auth = OneLogin_Saml2_Auth(
+        _prepare_request(request), _sp_settings(org_id, config_row)
+    )
     url = auth.login(return_to=return_to)
     return RedirectResponse(url, status_code=307)
 
 
 @saml_router.post("/sso/saml/{org_id}/acs")
-async def saml_acs(org_id: str, req: Request, db: Client = Depends(get_db)):
+@limiter.limit("20/minute")  # B2
+async def saml_acs(org_id: str, request: Request, db: Client = Depends(get_db)):
     """Assertion Consumer Service: validate the IdP response, provision the
     user + org membership, and mint a Twistor session.
 
@@ -302,10 +309,10 @@ async def saml_acs(org_id: str, req: Request, db: Client = Depends(get_db)):
     unlike unverified OAuth profiles. Documented choice: auto-link allowed.
     """
     config_row = _get_enabled_config(db, org_id)
-    form = await req.form()
+    form = await request.form()
     post_data = {k: v for k, v in form.items()}
     auth = OneLogin_Saml2_Auth(
-        _prepare_request(req, post_data), _sp_settings(org_id, config_row)
+        _prepare_request(request, post_data), _sp_settings(org_id, config_row)
     )
     auth.process_response()
     errors = auth.get_errors()
@@ -375,5 +382,5 @@ async def saml_acs(org_id: str, req: Request, db: Client = Depends(get_db)):
 
     log.info("identity: SAML sign-in for %s in org %s", user["id"], org_id)
     return service._open_session(
-        db, user, _client_ip(req), req.headers.get("user-agent")
+        db, user, _client_ip(request), request.headers.get("user-agent")
     )

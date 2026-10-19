@@ -22,6 +22,7 @@ from supabase import Client
 
 from ..config import settings
 from ..database import get_db
+from ..limiter import limiter
 from . import service
 
 log = logging.getLogger(__name__)
@@ -250,7 +251,8 @@ def _client_ip(req: Request) -> str | None:
 
 
 @oauth_router.get("/oauth/{provider}/start")
-def oauth_start(provider: str):
+@limiter.limit("30/minute")  # B2: OAuth initiation throttle
+def oauth_start(request: Request, provider: str):
     """Return the provider authorization URL (with state + PKCE)."""
     prov = get_provider(provider)
     verifier = _b64u(secrets.token_bytes(32))
@@ -263,8 +265,13 @@ def oauth_start(provider: str):
 
 
 @oauth_router.get("/oauth/{provider}/callback")
+@limiter.limit("20/minute")  # B2: callback throttle
 def oauth_callback(
-    provider: str, code: str, state: str, req: Request, db: Client = Depends(get_db)
+    provider: str,
+    code: str,
+    state: str,
+    request: Request,
+    db: Client = Depends(get_db),
 ):
     """Exchange the code, find-or-create the user, link the OAuth account,
     and mint a Twistor session.
@@ -360,5 +367,5 @@ def oauth_callback(
 
     log.info("identity: OAuth sign-in via %s for user %s", provider, user_id)
     return service._open_session(
-        db, user, _client_ip(req), req.headers.get("user-agent")
+        db, user, _client_ip(request), request.headers.get("user-agent")
     )
