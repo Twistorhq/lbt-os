@@ -95,3 +95,37 @@ def test_identity_link_url_uses_portal_settings(monkeypatch):
     url = email.identity_link_url("rawtok", purpose="verify")
     assert url.startswith("https://portal.twistor.co/auth/magic-link?")
     assert "token=rawtok" in url and "purpose=verify" in url
+
+
+# --------------------------------------------------------------------------
+# M2: recipient addresses must never appear in logs (design-doc PII
+# guarantee) — log subject + truncated recipient hash instead.
+# --------------------------------------------------------------------------
+
+import hashlib
+import logging
+
+
+def _expected_tag(to: str) -> str:
+    return "sha256:" + hashlib.sha256(
+        to.strip().lower().encode("utf-8")).hexdigest()[:12]
+
+
+def test_send_logs_hash_not_recipient_address(monkeypatch, caplog):
+    monkeypatch.setattr(config.settings, "resend_api_key", "re_test_key")
+    calls = _fake_resend(monkeypatch)
+    with caplog.at_level(logging.DEBUG, logger="app.services.email"):
+        email.send_identity_magic_link(
+            to="Victim@Example.com", token="tok123", purpose="login")
+    assert len(calls) == 1
+    assert "Victim@Example.com" not in caplog.text
+    assert "victim@example.com" not in caplog.text
+    assert _expected_tag("Victim@Example.com") in caplog.text
+
+
+def test_send_skipped_path_never_logs_recipient(monkeypatch, caplog):
+    monkeypatch.setattr(config.settings, "resend_api_key", None)
+    with caplog.at_level(logging.DEBUG, logger="app.services.email"):
+        email.send_identity_magic_link(
+            to="u@example.com", token="tok123", purpose="verify")
+    assert "u@example.com" not in caplog.text

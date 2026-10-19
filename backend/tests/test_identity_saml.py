@@ -227,3 +227,44 @@ def test_acs_unknown_org_404(acs_client):
     r = tc.post("/api/v1/identity/sso/saml/nope/acs",
                 data={"SAMLResponse": "fake"})
     assert r.status_code == 404
+
+
+# --------------------------------------------------------------------------
+# B5: SAML ACS — signed assertion from the org's pinned IdP IS the email
+# verification, so email-match auto-link is safe; stamp verified_at.
+# --------------------------------------------------------------------------
+
+def test_acs_existing_user_gets_email_verified_at_stamped(acs_client):
+    tc, fakedb, calls = acs_client
+    fakedb.table("idn_users").insert({"email": "prof@test.edu"}).execute()
+    r = tc.post("/api/v1/identity/sso/saml/org-1/acs",
+                data={"SAMLResponse": "fake"})
+    assert r.status_code == 200, r.text
+    users = fakedb.tables["idn_users"]
+    assert len(users) == 1
+    assert users[0].get("email_verified_at")
+
+
+# --------------------------------------------------------------------------
+# M1: ephemeral Fernet key must fail hard without the explicit dev flag
+# --------------------------------------------------------------------------
+
+def _reset_fernet(monkeypatch):
+    monkeypatch.delenv("TWISTOR_IDENTITY_SAML_ENCRYPTION_KEY", raising=False)
+    monkeypatch.delenv("TWISTOR_IDENTITY_ALLOW_EPHEMERAL", raising=False)
+    monkeypatch.setattr(saml, "_cached_fernet", None)
+    monkeypatch.setattr(saml, "_cached_fernet_key", None)
+
+
+def test_fernet_raises_without_key_and_flag_off(monkeypatch):
+    _reset_fernet(monkeypatch)
+    with pytest.raises(RuntimeError, match="TWISTOR_IDENTITY_ALLOW_EPHEMERAL"):
+        saml._fernet()
+
+
+def test_fernet_ephemeral_allowed_with_explicit_flag(monkeypatch):
+    _reset_fernet(monkeypatch)
+    monkeypatch.setenv("TWISTOR_IDENTITY_ALLOW_EPHEMERAL", "true")
+    with pytest.warns(UserWarning, match="EPHEMERAL"):
+        f = saml._fernet()
+    assert f is saml._fernet()  # cached

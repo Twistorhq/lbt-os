@@ -94,12 +94,22 @@ class FakeOAuthProvider(oauth.OAuthProvider):
         return (f"https://provider.test/auth?client_id=x&state={state}"
                 f"&code_challenge={code_challenge}")
 
+    #: Flip in tests to simulate a provider that did NOT verify email.
+    email_verified = True
+
     def fetch_profile(self, *, code, code_verifier, redirect_uri):
         assert code == "authcode123"
         # The verifier must be the one minted at /start time (from state).
         assert code_verifier == FakeOAuthProvider.seen["verifier"]
         return {"email": "Prof@Test.edu", "provider_user_id": "gp-1",
-                "email_verified": True, "name": "Test Prof"}
+                "email_verified": type(self).email_verified,
+                "name": "Test Prof"}
+
+
+class UnverifiedFakeOAuthProvider(FakeOAuthProvider):
+    """Provider twin whose profile email is NOT verified (B5)."""
+    name = "fake-unverified"
+    email_verified = False
 
 
 @pytest.fixture
@@ -110,6 +120,7 @@ def fakedb():
 @pytest.fixture
 def client(fakedb):
     oauth.register_provider(FakeOAuthProvider())
+    oauth.register_provider(UnverifiedFakeOAuthProvider())
     app = FastAPI()
     app.include_router(oauth.oauth_router, prefix="/api/v1")
     app.dependency_overrides[get_db] = lambda: fakedb
@@ -117,6 +128,7 @@ def client(fakedb):
         yield TestClient(app, raise_server_exceptions=False), fakedb
     finally:
         oauth.PROVIDERS.pop("fake", None)
+        oauth.PROVIDERS.pop("fake-unverified", None)
 
 
 # --------------------------------------------------------------------------
@@ -258,3 +270,82 @@ def test_callback_bad_state_rejected(client):
     r = tc.get("/api/v1/identity/oauth/fake/callback",
                params={"code": "authcode123", "state": "garbage"})
     assert r.status_code in (400, 401)
+
+
+# --------------------------------------------------------------------------
+# B5: no email-match auto-link on unverified provider email
+# --------------------------------------------------------------------------
+
+def _do_unverified_callback(tc, monkeypatch):
+    r = tc.get("/api/v1/identity/oauth/fake-unverified/start")
+    state = parse_qs(urlparse(r.json()["authorization_url"]).query)["state"][0]
+    FakeOAuthProvider.seen["verifier"] = oauth._verify_state(state)["v"]
+    return tc.get("/api/v1/identity/oauth/fake-unverified/callback",
+                  params={"code": "authcode123", "state": state})
+
+
+def test_callback_rejects_unverified_email_link_to_existing_user(
+        client, monkeypatch):
+    # B5 prove-it: attacker pre-registers the victim's email; the victim's
+    # first SSO login with an UNVERIFIED provider email must NOT merge into
+    # the attacker-controlled account.
+    tc, fakedb = client
+    fakedb.table("idn_users").insert({"email": "prof@test.edu"}).execute()
+    calls = _mint_session_capture(monkeypatch, fakedb)
+    r = _do_unverified_callback(tc, monkeypatch)
+    assert r.status_code == 403, r.text
+    assert "verif" in r.json()["detail"].lower()
+    assert not calls  # no session minted
+    assert len(fakedb.tables["idn_oauth_accounts"]) == 0  # nothing linked
+    assert len(fakedb.tables["idn_users"]) == 1  # no duplicate user
+
+
+def test_callback_unverified_email_provisions_new_user_unverified(
+        client, monkeypatch):
+    # Unverified provider email with NO existing account: creation is fine
+    # (matches no-verification signup policy), but it stays unverified.
+    tc, fakedb = client
+    calls = _mint_session_capture(monkeypatch, fakedb)
+    r = _do_unverified_callback(tc, monkeypatch)
+    assert r.status_code == 200, r.text
+    users = fakedb.tables["idn_users"]
+    assert len(users) == 1
+    assert not users[0].get("email_verified_at")
+
+
+def test_callback_verified_email_stamps_verified_at_on_existing(
+        client, monkeypatch):
+    tc, fakedb = client
+    fakedb.table("idn_users").insert({"email": "prof@test.edu"}).execute()
+    calls = _mint_session_capture(monkeypatch, fakedb)
+    r = _do_callback(tc, monkeypatch)
+    assert r.status_code == 200, r.text
+    users = fakedb.tables["idn_users"]
+    assert len(users) == 1
+    assert users[0].get("email_verified_at")
+
+
+# --------------------------------------------------------------------------
+# M1: ephemeral state secret must fail hard without the explicit dev flag
+# --------------------------------------------------------------------------
+
+def _reset_state_secret(monkeypatch):
+    monkeypatch.delenv("TWISTOR_IDENTITY_STATE_SECRET", raising=False)
+    monkeypatch.delenv("TWISTOR_IDENTITY_ALLOW_EPHEMERAL", raising=False)
+    monkeypatch.setattr(oauth, "_ephemeral_state_secret", None)
+
+
+def test_state_secret_raises_without_config_and_flag_off(monkeypatch):
+    _reset_state_secret(monkeypatch)
+    with pytest.raises(RuntimeError, match="TWISTOR_IDENTITY_ALLOW_EPHEMERAL"):
+        oauth._state_secret()
+
+
+def test_state_secret_ephemeral_allowed_with_explicit_flag(monkeypatch):
+    _reset_state_secret(monkeypatch)
+    monkeypatch.setenv("TWISTOR_IDENTITY_ALLOW_EPHEMERAL", "true")
+    with pytest.warns(UserWarning, match="EPHEMERAL"):
+        secret = oauth._state_secret()
+    assert secret  # 32 bytes of hex
+    # Cached: second call reuses it, no second warning.
+    assert oauth._state_secret() == secret
