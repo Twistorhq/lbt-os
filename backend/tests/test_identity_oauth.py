@@ -1,4 +1,9 @@
 """TW-619 (Zeke) — Google OAuth flow tests (TDD)."""
+
+import os
+
+# M1: explicit dev flag required for ephemeral crypto in tests.
+os.environ["TWISTOR_IDENTITY_ALLOW_EPHEMERAL"] = "true"
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -12,6 +17,7 @@ from app.identity import service as identity_service
 # --------------------------------------------------------------------------
 # Test doubles
 # --------------------------------------------------------------------------
+
 
 class _R:
     def __init__(self, data):
@@ -52,8 +58,7 @@ class _Q:
     def execute(self):
         store = self._db.tables[self._table]
         if self._mode == "select":
-            rows = [r for r in store
-                    if all(r.get(k) == v for k, v in self._filters)]
+            rows = [r for r in store if all(r.get(k) == v for k, v in self._filters)]
             if self._limit is not None:
                 rows = rows[: self._limit]
             return _R([dict(r) for r in rows])
@@ -85,14 +90,17 @@ class FakeDB:
 
 class FakeOAuthProvider(oauth.OAuthProvider):
     """Test provider — stands in for Google without any network."""
+
     name = "fake"
     seen = {}
 
     def authorization_url(self, *, state, code_challenge, redirect_uri):
         FakeOAuthProvider.seen["challenge"] = code_challenge
         FakeOAuthProvider.seen["redirect_uri"] = redirect_uri
-        return (f"https://provider.test/auth?client_id=x&state={state}"
-                f"&code_challenge={code_challenge}")
+        return (
+            f"https://provider.test/auth?client_id=x&state={state}"
+            f"&code_challenge={code_challenge}"
+        )
 
     #: Flip in tests to simulate a provider that did NOT verify email.
     email_verified = True
@@ -101,13 +109,17 @@ class FakeOAuthProvider(oauth.OAuthProvider):
         assert code == "authcode123"
         # The verifier must be the one minted at /start time (from state).
         assert code_verifier == FakeOAuthProvider.seen["verifier"]
-        return {"email": "Prof@Test.edu", "provider_user_id": "gp-1",
-                "email_verified": type(self).email_verified,
-                "name": "Test Prof"}
+        return {
+            "email": "Prof@Test.edu",
+            "provider_user_id": "gp-1",
+            "email_verified": type(self).email_verified,
+            "name": "Test Prof",
+        }
 
 
 class UnverifiedFakeOAuthProvider(FakeOAuthProvider):
     """Provider twin whose profile email is NOT verified (B5)."""
+
     name = "fake-unverified"
     email_verified = False
 
@@ -135,6 +147,7 @@ def client(fakedb):
 # State signing
 # --------------------------------------------------------------------------
 
+
 def test_state_sign_verify_roundtrip():
     token = oauth._sign_state({"v": "verifier-1", "n": "nonce-1"})
     payload = oauth._verify_state(token)
@@ -159,6 +172,7 @@ def test_state_expired_rejected(monkeypatch):
 # Provider registry + Google URL
 # --------------------------------------------------------------------------
 
+
 def test_unknown_provider_404(client):
     tc, _ = client
     r = tc.get("/api/v1/identity/oauth/github/start")
@@ -168,8 +182,8 @@ def test_unknown_provider_404(client):
 def test_google_authorization_url_has_pkce(monkeypatch):
     monkeypatch.setenv("TWISTOR_IDENTITY_GOOGLE_CLIENT_ID", "cid123")
     url = oauth.GoogleProvider().authorization_url(
-        state="st8", code_challenge="chal9",
-        redirect_uri="https://api.test/cb")
+        state="st8", code_challenge="chal9", redirect_uri="https://api.test/cb"
+    )
     assert "client_id=cid123" in url
     assert "code_challenge=chal9" in url
     assert "code_challenge_method=S256" in url
@@ -201,12 +215,16 @@ def test_start_returns_authorization_url(client):
 # Callback: find-or-create + session
 # --------------------------------------------------------------------------
 
+
 def _mint_session_capture(monkeypatch, fakedb):
     calls = []
     monkeypatch.setattr(
-        identity_service, "_open_session",
-        lambda db, user, ip=None, user_agent=None: calls.append(
-            {"user": user, "ip": ip}) or {"minted": True})
+        identity_service,
+        "_open_session",
+        lambda db, user, ip=None, user_agent=None: (
+            calls.append({"user": user, "ip": ip}) or {"minted": True}
+        ),
+    )
     return calls
 
 
@@ -214,12 +232,13 @@ def _do_callback(tc, monkeypatch):
     r = tc.get("/api/v1/identity/oauth/fake/start")
     state = parse_qs(urlparse(r.json()["authorization_url"]).query)["state"][0]
     FakeOAuthProvider.seen["verifier"] = oauth._verify_state(state)["v"]
-    return tc.get("/api/v1/identity/oauth/fake/callback",
-                  params={"code": "authcode123", "state": state})
+    return tc.get(
+        "/api/v1/identity/oauth/fake/callback",
+        params={"code": "authcode123", "state": state},
+    )
 
 
-def test_callback_provisions_user_links_account_mints_session(
-        client, monkeypatch):
+def test_callback_provisions_user_links_account_mints_session(client, monkeypatch):
     tc, fakedb = client
     calls = _mint_session_capture(monkeypatch, fakedb)
     r = _do_callback(tc, monkeypatch)
@@ -239,8 +258,9 @@ def test_callback_provisions_user_links_account_mints_session(
 
 def test_callback_links_existing_user_by_email(client, monkeypatch):
     tc, fakedb = client
-    existing = fakedb.table("idn_users").insert(
-        {"email": "prof@test.edu"}).execute().data[0]
+    existing = (
+        fakedb.table("idn_users").insert({"email": "prof@test.edu"}).execute().data[0]
+    )
     calls = _mint_session_capture(monkeypatch, fakedb)
     r = _do_callback(tc, monkeypatch)
     assert r.status_code == 200, r.text
@@ -252,13 +272,11 @@ def test_callback_existing_oauth_account_wins_over_email(client, monkeypatch):
     # Account linked to user A; profile email belongs to user B.
     # The OAuth account link is authoritative — session opens for user A.
     tc, fakedb = client
-    user_a = fakedb.table("idn_users").insert(
-        {"email": "a@test.edu"}).execute().data[0]
-    fakedb.table("idn_users").insert(
-        {"email": "prof@test.edu"}).execute()
+    user_a = fakedb.table("idn_users").insert({"email": "a@test.edu"}).execute().data[0]
+    fakedb.table("idn_users").insert({"email": "prof@test.edu"}).execute()
     fakedb.table("idn_oauth_accounts").insert(
-        {"provider": "fake", "provider_user_id": "gp-1",
-         "user_id": user_a["id"]}).execute()
+        {"provider": "fake", "provider_user_id": "gp-1", "user_id": user_a["id"]}
+    ).execute()
     calls = _mint_session_capture(monkeypatch, fakedb)
     r = _do_callback(tc, monkeypatch)
     assert r.status_code == 200, r.text
@@ -267,8 +285,10 @@ def test_callback_existing_oauth_account_wins_over_email(client, monkeypatch):
 
 def test_callback_bad_state_rejected(client):
     tc, _ = client
-    r = tc.get("/api/v1/identity/oauth/fake/callback",
-               params={"code": "authcode123", "state": "garbage"})
+    r = tc.get(
+        "/api/v1/identity/oauth/fake/callback",
+        params={"code": "authcode123", "state": "garbage"},
+    )
     assert r.status_code in (400, 401)
 
 
@@ -276,16 +296,18 @@ def test_callback_bad_state_rejected(client):
 # B5: no email-match auto-link on unverified provider email
 # --------------------------------------------------------------------------
 
+
 def _do_unverified_callback(tc, monkeypatch):
     r = tc.get("/api/v1/identity/oauth/fake-unverified/start")
     state = parse_qs(urlparse(r.json()["authorization_url"]).query)["state"][0]
     FakeOAuthProvider.seen["verifier"] = oauth._verify_state(state)["v"]
-    return tc.get("/api/v1/identity/oauth/fake-unverified/callback",
-                  params={"code": "authcode123", "state": state})
+    return tc.get(
+        "/api/v1/identity/oauth/fake-unverified/callback",
+        params={"code": "authcode123", "state": state},
+    )
 
 
-def test_callback_rejects_unverified_email_link_to_existing_user(
-        client, monkeypatch):
+def test_callback_rejects_unverified_email_link_to_existing_user(client, monkeypatch):
     # B5 prove-it: attacker pre-registers the victim's email; the victim's
     # first SSO login with an UNVERIFIED provider email must NOT merge into
     # the attacker-controlled account.
@@ -300,26 +322,26 @@ def test_callback_rejects_unverified_email_link_to_existing_user(
     assert len(fakedb.tables["idn_users"]) == 1  # no duplicate user
 
 
-def test_callback_unverified_email_provisions_new_user_unverified(
-        client, monkeypatch):
+def test_callback_unverified_email_provisions_new_user_unverified(client, monkeypatch):
     # Unverified provider email with NO existing account: creation is fine
     # (matches no-verification signup policy), but it stays unverified.
     tc, fakedb = client
     calls = _mint_session_capture(monkeypatch, fakedb)
     r = _do_unverified_callback(tc, monkeypatch)
     assert r.status_code == 200, r.text
+    assert len(calls) == 1  # session minted for the new account
     users = fakedb.tables["idn_users"]
     assert len(users) == 1
     assert not users[0].get("email_verified_at")
 
 
-def test_callback_verified_email_stamps_verified_at_on_existing(
-        client, monkeypatch):
+def test_callback_verified_email_stamps_verified_at_on_existing(client, monkeypatch):
     tc, fakedb = client
     fakedb.table("idn_users").insert({"email": "prof@test.edu"}).execute()
     calls = _mint_session_capture(monkeypatch, fakedb)
     r = _do_callback(tc, monkeypatch)
     assert r.status_code == 200, r.text
+    assert len(calls) == 1
     users = fakedb.tables["idn_users"]
     assert len(users) == 1
     assert users[0].get("email_verified_at")
@@ -328,6 +350,7 @@ def test_callback_verified_email_stamps_verified_at_on_existing(
 # --------------------------------------------------------------------------
 # M1: ephemeral state secret must fail hard without the explicit dev flag
 # --------------------------------------------------------------------------
+
 
 def _reset_state_secret(monkeypatch):
     monkeypatch.delenv("TWISTOR_IDENTITY_STATE_SECRET", raising=False)

@@ -123,7 +123,7 @@ async def request_lifecycle(request: Request, call_next) -> Response:
 
 
 # --- Routers ---
-app.include_router(identity_router, prefix="/api/v1")
+app.include_router(identity_router.router, prefix="/api/v1")
 app.include_router(identity_oauth.oauth_router, prefix="/api/v1")
 app.include_router(identity_saml.saml_router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")

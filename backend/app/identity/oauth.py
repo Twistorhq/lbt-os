@@ -45,13 +45,21 @@ _ephemeral_state_secret: str | None = None
 
 def _state_secret() -> bytes:
     global _ephemeral_state_secret
-    secret = os.environ.get("TWISTOR_IDENTITY_STATE_SECRET") or settings.api_secret
+    secret = os.environ.get("TWISTOR_IDENTITY_STATE_SECRET")
     if not secret:
+        if not service._dev_mode():
+            # M1: fail hard — an ephemeral state secret diverges across
+            # workers, silently breaking in-flight OAuth flows.
+            raise RuntimeError(
+                "TWISTOR_IDENTITY_STATE_SECRET is not set and "
+                "TWISTOR_IDENTITY_ALLOW_EPHEMERAL is not enabled. Refusing "
+                "to sign OAuth state with an ephemeral secret."
+            )
         if _ephemeral_state_secret is None:
             warnings.warn(
-                "TWISTOR_IDENTITY_STATE_SECRET not set — using EPHEMERAL "
+                "TWISTOR_IDENTITY_ALLOW_EPHEMERAL=true — using EPHEMERAL "
                 "OAuth state secret. In-flight OAuth flows will NOT survive "
-                "restarts. Set the env var in production."
+                "restarts or verify across workers."
             )
             _ephemeral_state_secret = secrets.token_hex(32)
         secret = _ephemeral_state_secret
@@ -259,7 +267,12 @@ def oauth_callback(
     provider: str, code: str, state: str, req: Request, db: Client = Depends(get_db)
 ):
     """Exchange the code, find-or-create the user, link the OAuth account,
-    and mint a Twistor session."""
+    and mint a Twistor session.
+
+    B5: email-match auto-link to an EXISTING account requires the provider's
+    email_verified claim. An unverified provider email matching an existing
+    account is rejected (403) — never merged.
+    """
     prov = get_provider(provider)
     try:
         payload = _verify_state(state)
@@ -278,6 +291,7 @@ def oauth_callback(
     )
     email = str(profile["email"]).strip().lower()
     provider_user_id = str(profile["provider_user_id"])
+    email_verified = bool(profile.get("email_verified"))
 
     # The OAuth account link is authoritative: it wins over email matching.
     acct = (
@@ -295,8 +309,27 @@ def oauth_callback(
             db.table("idn_users").select("id").eq("email", email).limit(1).execute()
         ).data
         if existing:
+            if not email_verified:
+                # B5: never auto-link an existing account on an UNVERIFIED
+                # provider email. With no-verification signup, an attacker
+                # who pre-registered the victim's email would absorb the
+                # victim's first SSO login (account takeover). idn_users
+                # email is UNIQUE, so a separate unlinked account is
+                # impossible; reject with an actionable message instead.
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=(
+                        f"This email is already registered, but your "
+                        f"{provider} account did not verify it. Verify "
+                        "your email with the provider first, or sign in "
+                        "with your existing credentials and link the "
+                        "account from settings."
+                    ),
+                )
             user_id = existing[0]["id"]
         else:
+            # No existing account: creation matches the no-verification
+            # signup policy, but the new account stays unverified.
             user_id = (db.table("idn_users").insert({"email": email}).execute()).data[
                 0
             ]["id"]

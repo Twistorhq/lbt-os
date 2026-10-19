@@ -60,7 +60,7 @@ def _token_err(e: tokens.TokenError) -> HTTPException:
 
 @router.post("/signup", status_code=201)
 @limiter.limit("10/hour")  # B2: mass-account-creation throttle
-def signup(req: Request, body: SignupIn, db: Client = Depends(get_db)):
+def signup(request: Request, body: SignupIn, db: Client = Depends(get_db)):
     try:
         return service.signup(db, body.email, body.password, body.org_name)
     except tokens.TokenError as e:
@@ -69,14 +69,14 @@ def signup(req: Request, body: SignupIn, db: Client = Depends(get_db)):
 
 @router.post("/login")
 @limiter.limit("20/minute")  # B2: brute-force throttle (IP bucket)
-def login(body: LoginIn, req: Request, db: Client = Depends(get_db)):
+def login(body: LoginIn, request: Request, db: Client = Depends(get_db)):
     try:
         return service.login(
             db,
             body.email,
             body.password,
-            _client_ip(req),
-            req.headers.get("user-agent"),
+            _client_ip(request),
+            request.headers.get("user-agent"),
         )
     except tokens.TokenError as e:
         raise _token_err(e)
@@ -84,10 +84,13 @@ def login(body: LoginIn, req: Request, db: Client = Depends(get_db)):
 
 @router.post("/refresh")
 @limiter.limit("60/minute")  # B2
-def refresh(body: RefreshIn, req: Request, db: Client = Depends(get_db)):
+def refresh(body: RefreshIn, request: Request, db: Client = Depends(get_db)):
     try:
         return service.refresh(
-            db, body.refresh_token, _client_ip(req), req.headers.get("user-agent")
+            db,
+            body.refresh_token,
+            _client_ip(request),
+            request.headers.get("user-agent"),
         )
     except tokens.TokenError as e:
         raise _token_err(e)
@@ -101,7 +104,7 @@ def logout(body: RefreshIn, db: Client = Depends(get_db)):
 
 @router.post("/magic-link", status_code=202)
 @limiter.limit("5/hour")  # B2: email-bombing throttle
-def magic_link(req: Request, body: MagicLinkIn, db: Client = Depends(get_db)):
+def magic_link(request: Request, body: MagicLinkIn, db: Client = Depends(get_db)):
     # Always 202 — never reveal whether the email exists.
     purpose = body.purpose if body.purpose in ("login", "verify") else "login"
     raw = service.issue_magic_link(db, body.email, purpose=purpose)
@@ -115,10 +118,10 @@ def magic_link(req: Request, body: MagicLinkIn, db: Client = Depends(get_db)):
 
 @router.post("/magic-link/consume")
 @limiter.limit("20/minute")  # B2
-def magic_consume(body: MagicConsumeIn, req: Request, db: Client = Depends(get_db)):
+def magic_consume(body: MagicConsumeIn, request: Request, db: Client = Depends(get_db)):
     try:
         return service.consume_magic_link(
-            db, body.token, _client_ip(req), req.headers.get("user-agent")
+            db, body.token, _client_ip(request), request.headers.get("user-agent")
         )
     except tokens.TokenError as e:
         raise _token_err(e)
@@ -171,7 +174,7 @@ def jwks():
 
 @router.post("/migrate/clerk")
 @limiter.limit("10/hour")  # B2
-def migrate_clerk(body: ClerkMigrateIn, req: Request, db: Client = Depends(get_db)):
+def migrate_clerk(body: ClerkMigrateIn, request: Request, db: Client = Depends(get_db)):
     """One-time bridge: verify a Clerk JWT, link or create the Twistor
     identity user, and return a Twistor session. After migration the
     client uses Twistor tokens exclusively.
@@ -231,5 +234,5 @@ def migrate_clerk(body: ClerkMigrateIn, req: Request, db: Client = Depends(get_d
             .execute()
         ).data[0]
     return service._open_session(
-        db, user, _client_ip(req), req.headers.get("user-agent")
+        db, user, _client_ip(request), request.headers.get("user-agent")
     )

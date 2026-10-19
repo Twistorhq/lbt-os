@@ -55,10 +55,18 @@ def _fernet() -> Fernet:
         _cached_fernet = None
     if _cached_fernet is None:
         if not key:
+            if not service._dev_mode():
+                # M1: fail hard — an ephemeral key diverges across workers,
+                # leaving stored SSO configs undecryptable cross-worker.
+                raise RuntimeError(
+                    "TWISTOR_IDENTITY_SAML_ENCRYPTION_KEY is not set and "
+                    "TWISTOR_IDENTITY_ALLOW_EPHEMERAL is not enabled. Refusing "
+                    "to encrypt SSO configs with an ephemeral key."
+                )
             warnings.warn(
-                "TWISTOR_IDENTITY_SAML_ENCRYPTION_KEY not set — generating "
-                "EPHEMERAL key. Stored SSO configs will NOT survive "
-                "restarts. Set the env var in production."
+                "TWISTOR_IDENTITY_ALLOW_EPHEMERAL=true — generating EPHEMERAL "
+                "SAML encryption key. Stored SSO configs will NOT survive "
+                "restarts or decrypt across workers."
             )
             key = Fernet.generate_key().decode("ascii")
         _cached_fernet = Fernet(key.encode("ascii") if isinstance(key, str) else key)
@@ -285,7 +293,14 @@ def saml_login(
 @saml_router.post("/sso/saml/{org_id}/acs")
 async def saml_acs(org_id: str, req: Request, db: Client = Depends(get_db)):
     """Assertion Consumer Service: validate the IdP response, provision the
-    user + org membership, and mint a Twistor session."""
+    user + org membership, and mint a Twistor session.
+
+    B5: a valid, signature-checked assertion from the org's PINNED IdP
+    (strict mode + wantAssertionsSigned + org-admin-registered x509 cert)
+    IS the email verification — the IdP cryptographically vouches for the
+    NameID — so email-match auto-link to an existing account is safe here,
+    unlike unverified OAuth profiles. Documented choice: auto-link allowed.
+    """
     config_row = _get_enabled_config(db, org_id)
     form = await req.form()
     post_data = {k: v for k, v in form.items()}
@@ -316,17 +331,26 @@ async def saml_acs(org_id: str, req: Request, db: Client = Depends(get_db)):
     existing = (
         db.table("idn_users").select("*").eq("email", email).limit(1).execute()
     ).data
+    # B5: the signature-checked assertion just proved the IdP vouches for
+    # this email, so stamp email_verified_at for existing users too.
+    verified_at = _now_iso()
     if existing:
         user = existing[0]
+        if not user.get("email_verified_at"):
+            (
+                db.table("idn_users")
+                .update({"email_verified_at": verified_at})
+                .eq("id", user["id"])
+                .execute()
+            )
+            user["email_verified_at"] = verified_at
     else:
         user = (
             db.table("idn_users")
             .insert(
                 {
                     "email": email,
-                    # IdP-authenticated: the IdP already proved ownership of this
-                    # email, so it counts as verified.
-                    "email_verified_at": _now_iso(),
+                    "email_verified_at": verified_at,
                 }
             )
             .execute()
