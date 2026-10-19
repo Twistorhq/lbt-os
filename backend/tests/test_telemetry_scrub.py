@@ -64,3 +64,27 @@ def test_original_dict_not_mutated():
     scrub.scrub_properties(props, org_id="org-1")
     assert props["email"] == "a@b.com"
     assert props["nested"]["phone"] == "1"
+
+
+def test_segment_matching_no_overmatch():
+    # hostname/filename must NOT match the "name" hint; shipping/skip must
+    # NOT match "ip"; adobe must NOT match "dob".
+    props = {
+        "hostname": "web-1",
+        "filename": "a.csv",
+        "shipping": "fast",
+        "adobe": "suite",
+        "user_email": "a@b.com",
+        "emailAddress": "c@d.com",
+        "ip_address": "1.2.3.4",
+        "dob": "1990-01-01",
+    }
+    out = scrub.scrub_properties(props, org_id="org-1")
+    assert out["hostname"] == "web-1"
+    assert out["filename"] == "a.csv"
+    assert out["shipping"] == "fast"
+    assert out["adobe"] == "suite"
+    assert out["user_email"] != "a@b.com"
+    assert out["emailAddress"] != "c@d.com"
+    assert out["ip_address"] != "1.2.3.4"
+    assert out["dob"] != "1990-01-01"

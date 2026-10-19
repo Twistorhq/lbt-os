@@ -85,3 +85,40 @@ BEGIN
         CREATE POLICY tlm_budgets_deny_all ON tlm_budgets FOR ALL USING (false);
     END IF;
 END $$;
+
+-- Atomic budget bump. One statement: no lost-update race when concurrent
+-- capture batches bump the same org's counter. The backend calls this via
+-- db.rpc("tlm_bump_budget", ...); if the function is not deployed yet the
+-- backend falls back to a read-modify-write upsert (under-counts under
+-- concurrency — fails toward the customer).
+CREATE OR REPLACE FUNCTION tlm_bump_budget(
+    p_org_id UUID,
+    p_delta BIGINT,
+    p_cap BIGINT,
+    p_period_start DATE,
+    p_warn BOOLEAN
+)
+RETURNS TABLE (
+    org_id UUID,
+    monthly_cap BIGINT,
+    used BIGINT,
+    period_start DATE,
+    warn_sent BOOLEAN
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    INSERT INTO tlm_budgets (org_id, monthly_cap, used, period_start, warn_sent)
+    VALUES (p_org_id, p_cap, p_delta, p_period_start, p_warn)
+    ON CONFLICT (org_id) DO UPDATE SET
+        used = tlm_budgets.used + EXCLUDED.used,
+        warn_sent = tlm_budgets.warn_sent OR EXCLUDED.warn_sent,
+        monthly_cap = COALESCE(EXCLUDED.monthly_cap, tlm_budgets.monthly_cap);
+    RETURN QUERY
+        SELECT b.org_id, b.monthly_cap, b.used, b.period_start, b.warn_sent
+        FROM tlm_budgets b
+        WHERE b.org_id = p_org_id;
+END;
+$$;

@@ -54,6 +54,16 @@ class TelemetryEvent(BaseModel):
             raise ValueError("event name must not be blank")
         return v
 
+    @field_validator("occurred_at")
+    @classmethod
+    def _coerce_utc(cls, v: datetime) -> datetime:
+        # Naive datetimes are assumed UTC (documented) — never server-local,
+        # so buckets don't shift with the server's timezone. Fail-loud on
+        # anything else happens in the query layer via _as_utc.
+        if v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v.astimezone(timezone.utc)
+
     @field_validator("properties")
     @classmethod
     def _check_properties(cls, v: dict[str, Any]) -> dict[str, Any]:

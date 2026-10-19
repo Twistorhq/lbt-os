@@ -4,6 +4,8 @@ The TW-630 wedge: over the tier, ingestion SAMPLES (recorded rate) instead
 of dropping or surprise-billing. Sampling, not silence.
 """
 
+import pytest
+
 from app.telemetry import budgets
 
 
@@ -57,13 +59,7 @@ def test_rate_one_keeps_everything_and_zero_keeps_nothing():
 
 
 def test_invalid_rate_rejected():
-    try:
+    with pytest.raises(ValueError):
         budgets.should_keep("k", 1.5)
-        raise AssertionError("should have raised")
-    except ValueError:
-        pass
-    try:
+    with pytest.raises(ValueError):
         budgets.should_keep("k", -0.1)
-        raise AssertionError("should have raised")
-    except ValueError:
-        pass

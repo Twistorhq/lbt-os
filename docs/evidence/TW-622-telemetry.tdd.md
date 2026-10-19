@@ -58,3 +58,61 @@ main (missing lxml/xmlsec libs in this environment).
 No untrusted plan content encountered. All requirements came from the
 Marcus brief + standing doctrine (TW-552 PII, TW-208 fail-soft, TW-630
 wedge). No destructive or credential-handling steps taken.
+
+## 5. Round 2 — Rosa REQUEST_CHANGES (2026-10-19), all addressed
+
+Rosa's full-diff review returned REQUEST_CHANGES: 2 blockers, 6 majors,
+4 nits. Every item fixed and proven by new tests; she re-runs the gate
+the same turn. Fix list:
+
+BLOCKERS
+- B1 monthly budget never reset: `get_or_create_budget` now rolls
+  `used`/`warn_sent`/`period_start` forward when the stored period is
+  not the current UTC month. New: `test_budget_rolls_over_new_month`,
+  `test_budget_keeps_current_month`. `date.today()` (local) replaced
+  with UTC throughout.
+- B2 `DatafeedExportIn.min_cohort` allowed ge=2 against the documented
+  k>=5 doctrine: now ge=5.
+
+MAJORS
+- M3 silent 10k fetch truncation: `fetch_events` returns
+  {events, fetched, truncated}; all five query endpoints surface
+  `truncated` in their responses. New: `test_fetch_events_reports_truncation`,
+  `test_trends_response_carries_truncated_flag`.
+- M4 naive `occurred_at`: `TelemetryEvent` now coerces naive datetimes
+  to UTC in a model validator (documented assumption, never
+  server-local). New: `test_naive_occurred_at_coerced_to_utc`.
+- M5 scrub over-matching: key hints now match whole segments
+  (camel/snake/kebab/dot boundaries), not substrings — "hostname" and
+  "shipping" no longer match "name"/"ip". New:
+  `test_segment_matching_no_overmatch`.
+- M6 PostHog funnels vanished after import: mapped funnels are now
+  persisted as saved insights with slugified keys (collision-suffixed).
+  New: `test_import_persists_funnels_as_insights`; migration test now
+  asserts the name rides along on the report.
+- M7 duplicate insight key 500: `create_insight` raises `InsightExists`
+  (pre-check + 23505 race guard); router maps to 409. New:
+  `test_create_insight_duplicate_key_raises_409`,
+  `test_create_insight_duplicate_key_409`.
+- M8 budget lost-update race: `tlm_bump_budget` RPC (single-statement
+  atomic bump) added to `supabase/migration_telemetry_v1.sql`; service
+  prefers RPC, falls back to upsert honestly when undeployed. New:
+  `test_bump_budget_uses_rpc_when_available`,
+  `test_bump_budget_falls_back_when_rpc_missing`.
+- M9 "no raw PII" over-read: documented as a V1 limitation in the
+  scrub module docstring, router docstring, and design doc
+  (key-name heuristic; orgs declare custom PII keys via
+  `extra_pii_keys`; schema-declared registry is V2).
+
+NITS
+- `test_invalid_rate_rejected` uses pytest.raises; `_retention_tail`
+  moved above use with a top-level timedelta import; the 80% log line
+  uses `budgets.WARN_RATIO`.
+
+Round-2 state: 65/65 telemetry tests green (54 pre-existing + 11 new);
+`ruff check` and `ruff format --check` clean on all touched files. The 7 xmlsec
+collection errors remain pre-existing and environmental (verified on
+main). Migration SQL still unexecuted against a live DB (integration
+pass owns it).
+
+Prepared by Twistor Holdings LLC

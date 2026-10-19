@@ -8,14 +8,17 @@
 - Datafeed: cohort-level aggregates for the benchmark niches (k>=5 gate).
 
 Org scoping: the caller's active org comes from the Twistor Identity JWT
-(claims["org"]). Every endpoint 403s without an active org. No raw PII
-in any request or response — the scrubber runs before storage.
+(claims["org"]). Every endpoint 403s without an active org. PII is
+scrubbed at ingestion (TW-552) — see scrub.py for the documented V1
+limitation (key-name heuristic; orgs must declare PII-shaped custom
+keys via extra_pii_keys).
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -25,7 +28,7 @@ from supabase import Client
 
 from ..database import get_db
 from ..limiter import limiter
-from . import datafeed, migration, query, service
+from . import budgets, datafeed, migration, query, service
 from .models import (
     BreakdownQuery,
     CaptureBatch,
@@ -87,7 +90,7 @@ class PostHogImportIn(BaseModel):
 class DatafeedExportIn(BaseModel):
     event: str = Field(min_length=1, max_length=128)
     group_props: list[str] = Field(min_length=1, max_length=5)
-    min_cohort: int = Field(default=5, ge=2, le=1000)
+    min_cohort: int = Field(default=5, ge=5, le=1000)
     start: datetime
     end: datetime
     limit: int = Field(default=10000, ge=1, le=100000)
@@ -118,7 +121,7 @@ def capture(
             "telemetry: org %s at %.0f%% of monthly event tier "
             "(received=%d stored=%d sampled=%s)",
             org_id,
-            80.0,
+            budgets.WARN_RATIO * 100,
             result["received"],
             result["stored"],
             result["sampled"],
@@ -134,11 +137,14 @@ def trends(
     org_id: str = Depends(_require_org),
     db: Client = Depends(get_db),
 ):
-    events = service.fetch_events(db, org_id, [body.event], body.start, body.end)
+    fetched = service.fetch_events(db, org_id, [body.event], body.start, body.end)
     return {
         "event": body.event,
         "bucket": body.bucket,
-        "rows": query.trend(events, body.event, body.start, body.end, body.bucket),
+        "rows": query.trend(
+            fetched["events"], body.event, body.start, body.end, body.bucket
+        ),
+        "truncated": fetched["truncated"],
     }
 
 
@@ -154,10 +160,12 @@ def funnels(
     window = migration.funnel_window(body.funnel)
     # Pad the fetch by the funnel window: a step-1 near `end` still gets
     # its full window of follow-up steps (no truncated windows at the edge).
-    events = service.fetch_events(
+    fetched = service.fetch_events(
         db, org_id, step_events, body.start, body.end + window
     )
-    return query.funnel(events, step_events, window, body.start, body.end)
+    out = query.funnel(fetched["events"], step_events, window, body.start, body.end)
+    out["truncated"] = fetched["truncated"]
+    return out
 
 
 @router.post("/retention")
@@ -168,21 +176,26 @@ def retention(
     org_id: str = Depends(_require_org),
     db: Client = Depends(get_db),
 ):
-    events = service.fetch_events(
+    fetched = service.fetch_events(
         db,
         org_id,
         [body.cohort_event, body.return_event],
         body.start,
         body.end + _retention_tail(body.days),
     )
-    return query.retention(
-        events, body.cohort_event, body.return_event, body.days, body.start, body.end
+    out = query.retention(
+        fetched["events"],
+        body.cohort_event,
+        body.return_event,
+        body.days,
+        body.start,
+        body.end,
     )
+    out["truncated"] = fetched["truncated"]
+    return out
 
 
-def _retention_tail(days: int):
-    from datetime import timedelta
-
+def _retention_tail(days: int) -> timedelta:
     return timedelta(days=days)
 
 
@@ -194,13 +207,19 @@ def breakdown(
     org_id: str = Depends(_require_org),
     db: Client = Depends(get_db),
 ):
-    events = service.fetch_events(db, org_id, [body.event], body.start, body.end)
+    fetched = service.fetch_events(db, org_id, [body.event], body.start, body.end)
     return {
         "event": body.event,
         "property": body.property,
         "rows": query.breakdown(
-            events, body.event, body.property, body.start, body.end, body.limit
+            fetched["events"],
+            body.event,
+            body.property,
+            body.start,
+            body.end,
+            body.limit,
         ),
+        "truncated": fetched["truncated"],
     }
 
 
@@ -217,6 +236,8 @@ def create_insight(
         return service.create_insight(
             db, org_id, body.key, body.kind, body.definition, actor
         )
+    except service.InsightExists as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     except service.TelemetryError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
@@ -285,22 +306,55 @@ def import_posthog(
     request: Request,
     body: PostHogImportIn,
     org_id: str = Depends(_require_org),
+    actor: str = Depends(_require_actor),
     db: Client = Depends(get_db),
 ):
     """Import a PostHog export. Mapped events are ingested (scrubbed);
-    unmapped sections are reported honestly, never silently dropped."""
+    mapped funnels are persisted as saved insights; unmapped sections are
+    reported honestly, never silently dropped."""
     report = migration.migrate_with_report(body.export)
     ingested = (
         service.ingest_events(db, org_id, report.events)
         if report.events
         else {"received": 0, "stored": 0}
     )
+    persisted_keys: list[str] = []
+    for i, mapped in enumerate(report.funnels):
+        key = _import_funnel_key(mapped.name, i)
+        attempt = key
+        suffix = 2
+        while True:
+            try:
+                service.create_insight(
+                    db,
+                    org_id,
+                    attempt,
+                    "funnel",
+                    {"funnel": mapped.definition.model_dump(mode="json")},
+                    actor,
+                )
+                persisted_keys.append(attempt)
+                break
+            except service.InsightExists:
+                attempt = f"{key}-{suffix}"
+                suffix += 1
     return {
         "events_ingested": ingested["stored"],
         "funnels_mapped": len(report.funnels),
-        "funnel_definitions": [f.model_dump(mode="json") for f in report.funnels],
+        "funnels_persisted": persisted_keys,
+        "funnel_definitions": [
+            m.definition.model_dump(mode="json") for m in report.funnels
+        ],
         "unmapped": report.unmapped,
     }
+
+
+def _import_funnel_key(name: str | None, index: int) -> str:
+    """Slugify a PostHog funnel name into a valid insight key."""
+    slug = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-")
+    if not slug:
+        slug = f"posthog-funnel-{index + 1}"
+    return slug[:64]
 
 
 @router.post("/datafeed/export")
@@ -313,12 +367,13 @@ def datafeed_export(
 ):
     """Cohort-level aggregates for the benchmark niches. k-anonymity
     gated; no identifiers leave the building."""
-    events = service.fetch_events(
+    fetched = service.fetch_events(
         db, org_id, [body.event], body.start, body.end, body.limit
     )
     return {
         "event": body.event,
         "rows": datafeed.cohort_aggregates(
-            events, body.event, body.group_props, body.min_cohort
+            fetched["events"], body.event, body.group_props, body.min_cohort
         ),
+        "truncated": fetched["truncated"],
     }

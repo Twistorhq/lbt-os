@@ -354,3 +354,70 @@ def test_datafeed_export_suppresses_small_cohorts():
     assert r.status_code == 200, r.text
     trades = [row["cohort"]["trade"] for row in r.json()["rows"]]
     assert trades == ["hvac"]
+
+
+def test_trends_response_carries_truncated_flag():
+    c = make_client()
+    c.post(
+        "/telemetry/capture",
+        json={
+            "events": [
+                {
+                    "event": "signup",
+                    "distinct_id": "u1",
+                    "occurred_at": "2026-10-01T12:00:00+00:00",
+                }
+            ]
+        },
+    )
+    r = c.post(
+        "/telemetry/trends",
+        json={
+            "event": "signup",
+            "start": "2026-10-01T00:00:00+00:00",
+            "end": "2026-10-04T00:00:00+00:00",
+            "bucket": "day",
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["truncated"] is False  # honest uncertainty, never silent
+
+
+def test_create_insight_duplicate_key_409():
+    c = make_client()
+    payload = {
+        "key": "dup-key",
+        "kind": "trend",
+        "definition": {"event": "signup"},
+    }
+    assert c.post("/telemetry/admin/insights", json=payload).status_code == 201
+    r = c.post("/telemetry/admin/insights", json=payload)
+    assert r.status_code == 409, r.text
+
+
+def test_import_persists_funnels_as_insights():
+    # Rosa MAJOR 6: mapped funnels must persist as insights, not vanish
+    # after the response.
+    c = make_client()
+    r = c.post(
+        "/telemetry/admin/import/posthog",
+        json={
+            "export": {
+                "events": [],
+                "funnels": [
+                    {
+                        "name": "Signup Flow",
+                        "steps": [{"name": "sent"}, {"name": "opened"}],
+                        "funnel_window_days": 3,
+                    }
+                ],
+            }
+        },
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["funnels_mapped"] == 1
+    assert body["funnels_persisted"] == ["signup-flow"]
+    got = c.get("/telemetry/admin/insights/signup-flow")
+    assert got.status_code == 200, got.text
+    assert got.json()["kind"] == "funnel"

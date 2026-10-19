@@ -60,6 +60,9 @@ def test_migrate_with_report_lists_unmapped_honestly():
     report = migration.migrate_with_report(export)
     assert len(report.events) == 1
     assert len(report.funnels) == 1
+    # Mapped funnels carry their name so the import can persist them.
+    assert report.funnels[0].name == "f"
+    assert [s.event for s in report.funnels[0].definition.steps] == ["a", "b"]
     unmapped = " ".join(report.unmapped).lower()
     for word in ("session replay", "heatmap", "experiment", "feature flag"):
         assert word in unmapped

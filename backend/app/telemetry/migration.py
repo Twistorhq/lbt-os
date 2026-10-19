@@ -33,9 +33,18 @@ class MigrationError(Exception):
 
 
 @dataclass
+class MappedFunnel:
+    """A PostHog funnel plus its original name, so the import can persist
+    it as a named insight instead of dropping the definition."""
+
+    name: str | None
+    definition: FunnelDefinition
+
+
+@dataclass
 class MigrationReport:
     events: list[TelemetryEvent] = field(default_factory=list)
-    funnels: list[FunnelDefinition] = field(default_factory=list)
+    funnels: list[MappedFunnel] = field(default_factory=list)
     unmapped: list[str] = field(default_factory=list)
 
 
@@ -96,7 +105,12 @@ def migrate_with_report(export: dict[str, Any]) -> MigrationReport:
             report.unmapped.append(f"event skipped: {exc}")
     for ph in export.get("funnels") or []:
         try:
-            report.funnels.append(from_posthog_funnel(ph))
+            report.funnels.append(
+                MappedFunnel(
+                    name=(ph.get("name") or "").strip() or None,
+                    definition=from_posthog_funnel(ph),
+                )
+            )
         except MigrationError as exc:
             report.unmapped.append(f"funnel skipped: {exc}")
     for section, label in UNMAPPED_SECTIONS.items():

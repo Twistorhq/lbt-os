@@ -52,6 +52,9 @@ metered too. Telemetry's answer:
   versioned, attributed.
 - `tlm_budgets` — org monthly cap, used, period_start, warn_sent.
 - RLS deny-all; service role only. Idempotent migration.
+- `tlm_bump_budget` RPC: atomic monthly-counter bump (single statement;
+  no lost-update race). The backend falls back to a read-modify-write
+  upsert when the function is not deployed yet.
 
 ## API
 
@@ -62,7 +65,14 @@ metered too. Telemetry's answer:
 - `POST /telemetry/admin/import/posthog` — migration import (30/min).
 - `POST /telemetry/datafeed/export` — benchmark aggregates (30/min).
 
-All endpoints org-scoped from the Identity JWT. No raw PII in any response.
+All endpoints org-scoped from the Identity JWT. PII is scrubbed at
+ingestion (TW-552). V1 limitation (documented): the scrubber is a
+key-name heuristic — free-text values under non-hint keys are stored
+as-is; orgs declare PII-shaped custom keys via extra_pii_keys.
+
+All query responses carry a `truncated` flag when the bounded event
+fetch hits its cap — honest uncertainty, never silently incomplete
+counts.
 
 ## Customer zero
 

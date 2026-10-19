@@ -36,24 +36,90 @@ class InsightNotFound(TelemetryError):
     pass
 
 
+class InsightExists(TelemetryError):
+    """Duplicate (org_id, key). The router maps this to 409."""
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _utc_today() -> date:
+    return _utcnow().date()
+
+
 def get_or_create_budget(db: Client, org_id: str) -> dict[str, Any]:
+    """Fetch the org's budget row, rolling over to a new month when the
+    stored period is stale. Without the rollover the 'monthly' tier would
+    accumulate for life and permanently sample after month one."""
     res = db.table("tlm_budgets").select("*").eq("org_id", org_id).execute()
     rows = res.data or []
+    today = _utc_today()
     if rows:
-        return rows[0]
+        row = rows[0]
+        period = str(row.get("period_start") or "")[:7]
+        if period != today.strftime("%Y-%m"):
+            row = {
+                **row,
+                "used": 0,
+                "warn_sent": False,
+                "period_start": today.isoformat(),
+            }
+            res2 = db.table("tlm_budgets").upsert(row, on_conflict="org_id").execute()
+            return (res2.data or [row])[0]
+        return row
     row = {
         "org_id": org_id,
         "monthly_cap": DEFAULT_MONTHLY_CAP,
         "used": 0,
-        "period_start": date.today().isoformat(),
+        "period_start": today.isoformat(),
         "warn_sent": False,
     }
     created = db.table("tlm_budgets").upsert(row, on_conflict="org_id").execute()
     return (created.data or [row])[0]
+
+
+def _bump_budget(
+    db: Client,
+    org_id: str,
+    delta: int,
+    cap: int | None,
+    warn: bool,
+    fallback_used: int,
+    fallback_period: str,
+) -> dict[str, Any]:
+    """Atomically add `delta` to the org's budget counter.
+
+    Preferred path: the `tlm_bump_budget` RPC (single statement, no
+    lost-update race). Fallback: read-modify-write upsert, which can lose
+    concurrent updates but fails toward the customer (under-counts usage).
+    """
+    today = _utc_today().isoformat()
+    try:
+        res = db.rpc(
+            "tlm_bump_budget",
+            {
+                "p_org_id": org_id,
+                "p_delta": delta,
+                "p_cap": cap,
+                "p_period_start": today,
+                "p_warn": warn,
+            },
+        ).execute()
+        rows = res.data or []
+        if rows and isinstance(rows[0], dict) and "used" in rows[0]:
+            return rows[0]
+    except Exception as exc:  # RPC not deployed yet — fall back honestly
+        log.warning("telemetry: budget rpc unavailable, upsert fallback: %s", exc)
+    row = {
+        "org_id": org_id,
+        "monthly_cap": cap,
+        "used": fallback_used + delta,
+        "period_start": fallback_period,
+        "warn_sent": warn,
+    }
+    res = db.table("tlm_budgets").upsert(row, on_conflict="org_id").execute()
+    return (res.data or [row])[0]
 
 
 def ingest_events(
@@ -99,16 +165,15 @@ def ingest_events(
     # Honest metering: the tier counts RECEIVED events, not stored ones.
     # Sampling never hides usage from the customer.
     warn_now = bool(decision["warn"] and not budget.get("warn_sent"))
-    db.table("tlm_budgets").upsert(
-        {
-            "org_id": org_id,
-            "monthly_cap": cap,
-            "used": used + len(events),
-            "period_start": budget.get("period_start"),
-            "warn_sent": bool(budget.get("warn_sent") or decision["warn"]),
-        },
-        on_conflict="org_id",
-    ).execute()
+    _bump_budget(
+        db,
+        org_id,
+        len(events),
+        cap,
+        bool(budget.get("warn_sent") or decision["warn"]),
+        fallback_used=used,
+        fallback_period=str(budget.get("period_start") or ""),
+    )
 
     return {
         "received": len(events),
@@ -127,8 +192,14 @@ def fetch_events(
     start: datetime,
     end: datetime,
     limit: int = FETCH_LIMIT,
-) -> list[dict[str, Any]]:
-    """Bounded event fetch for the query engine. Shapes rows for query.py."""
+) -> dict[str, Any]:
+    """Bounded event fetch for the query engine. Shapes rows for query.py.
+
+    Returns {"events", "fetched", "truncated"} — the truncation flag is
+    honest uncertainty: callers must surface it instead of presenting
+    silently incomplete counts as complete.
+    """
+    capped = min(limit, FETCH_LIMIT)
     res = (
         db.table("tlm_events")
         .select("event_name,distinct_id_hash,properties,occurred_at")
@@ -137,7 +208,7 @@ def fetch_events(
         .gte("occurred_at", start.isoformat())
         .lt("occurred_at", end.isoformat())
         .order("occurred_at")
-        .limit(min(limit, FETCH_LIMIT))
+        .limit(capped)
         .execute()
     )
     out = []
@@ -155,7 +226,7 @@ def fetch_events(
                 "properties": r.get("properties") or {},
             }
         )
-    return out
+    return {"events": out, "fetched": len(out), "truncated": len(out) >= capped}
 
 
 def create_insight(
@@ -170,6 +241,8 @@ def create_insight(
         validated = InsightDefinition(key=key, kind=kind, definition=definition)
     except ValidationError as exc:
         raise TelemetryError(f"invalid insight: {exc}") from exc
+    if get_insight(db, org_id, validated.key) is not None:
+        raise InsightExists(f"insight '{validated.key}' already exists")
     row = {
         "org_id": org_id,
         "key": validated.key,
@@ -181,7 +254,13 @@ def create_insight(
         "created_at": _utcnow().isoformat(),
         "updated_at": _utcnow().isoformat(),
     }
-    res = db.table("tlm_insights").insert(row).execute()
+    try:
+        res = db.table("tlm_insights").insert(row).execute()
+    except Exception as exc:
+        # Race with another writer between the check above and the insert.
+        if "23505" in str(exc) or "duplicate" in str(exc).lower():
+            raise InsightExists(f"insight '{validated.key}' already exists") from exc
+        raise
     return (res.data or [row])[0]
 
 
