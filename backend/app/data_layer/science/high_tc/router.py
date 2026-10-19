@@ -154,6 +154,7 @@ def dataset_detail(semver: str, db: Annotated[Client, Depends(get_db)], response
     )
     version = schemas.DatasetVersionRead(**_json_safe(res.data)) if res.data else None
     if version is None:
+        paywall.enforce_rate_limit(db, ORG_SCIENCE)  # TW-608: 429 shutoff
         raise HTTPException(status_code=404, detail=f"unknown dataset version {semver}")
     corr = (
         db.table("sci_corrections")
@@ -187,6 +188,7 @@ def query_gold(
     bulk: Annotated[bool, Query()] = False,
     limit: Annotated[int, Query(ge=1, le=5000)] = 100,
 ):
+    paywall.enforce_rate_limit(db, ORG_SCIENCE)  # TW-608: 429 shutoff
     """Filtered gold query. Tolls data.science.query; bulk exports also toll
     data.science.bulk per 1k rows."""
     request_id = _request_id(x_request_id)
@@ -252,6 +254,7 @@ def list_benchmarks(db: Annotated[Client, Depends(get_db)], response: Response =
     res = db.table("sci_benchmarks").select("*").eq("lane", LANE).execute()
     out: list[schemas.BenchmarkRead] = []
     for b in res.data or []:
+        paywall.enforce_rate_limit(db, ORG_SCIENCE)  # TW-608: 429 shutoff
         runs = (
             db.table("sci_benchmark_runs")
             .select("*")
@@ -276,6 +279,7 @@ def submit_benchmark_run(
     x_request_id: Annotated[str | None, Header()] = None,
     x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
 ):
+    paywall.enforce_rate_limit(db, ORG_SCIENCE)  # TW-608: 429 shutoff
     """Submit a benchmark run. Manifest required — no manifest, no leaderboard."""
     request_id = _request_id(x_request_id)
     require_science_key(x_api_key, db, "high_tc")  # auth gate; key unused after
@@ -330,6 +334,7 @@ def correction_feed(
     response: Response = None,
     dataset_version: Annotated[str | None, Query()] = None,
 ):
+    paywall.enforce_rate_limit(db, ORG_SCIENCE)  # TW-608: 429 shutoff
     """Correction feed per dataset — errata propagate forward, history intact."""
     q = db.table("sci_corrections").select("*").eq("lane", LANE)
     if dataset_version:
@@ -360,6 +365,7 @@ def ingest_batch(
     x_request_id: Annotated[str | None, Header()] = None,
     x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
 ):
+    paywall.enforce_rate_limit(db, ORG_SCIENCE)  # TW-608: 429 shutoff
     """Batch ingestion. One bad record -> dead_letters, never kills the run."""
     request_id = _request_id(x_request_id)
     key = require_science_key(x_api_key, db, "high_tc")

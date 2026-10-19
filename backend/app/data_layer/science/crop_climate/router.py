@@ -89,8 +89,8 @@ def _toll_db(store: models.CropClimateStore):
 
 
 def _gate(store: models.CropClimateStore, org_id: str | None) -> str:
-    """TW-599 paywall: every read needs an active Twistor subscription."""
-    return paywall.require_active_subscription(_toll_db(store), org_id)
+    """TW-599 paywall: subscription (402) + rate limit (429, TW-608)."""
+    return paywall.gate(_toll_db(store), org_id)
 
 
 def _request_id(request: Request | None) -> str:

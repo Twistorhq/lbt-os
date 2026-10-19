@@ -166,6 +166,7 @@ def list_datasets(
     db: Any = Depends(get_db),
     x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ) -> dict[str, Any]:
+    paywall.enforce_rate_limit(db, "public-science")  # TW-608: 429 shutoff
     request_id = x_request_id or str(uuid.uuid4())
     res = (
         db.table(_VERSIONS_TABLE)
@@ -192,6 +193,7 @@ def get_dataset(
     db: Any = Depends(get_db),
     x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ) -> dict[str, Any]:
+    paywall.enforce_rate_limit(db, "public-science")  # TW-608: 429 shutoff
     request_id = x_request_id or str(uuid.uuid4())
     q = db.table(_VERSIONS_TABLE).select("*").eq("lane", LANE)
     # Accept a semver ("1.0.0") or a version UUID.
@@ -233,6 +235,7 @@ def query_gold(
     db: Any = Depends(get_db),
     x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ) -> dict[str, Any]:
+    paywall.enforce_rate_limit(db, "public-science")  # TW-608: 429 shutoff
     request_id = x_request_id or str(uuid.uuid4())
     params = schemas.ElectroQueryParams(
         composition=composition,
@@ -283,6 +286,7 @@ def list_benchmarks(
     db: Any = Depends(get_db),
     x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ) -> dict[str, Any]:
+    paywall.enforce_rate_limit(db, "public-science")  # TW-608: 429 shutoff
     request_id = x_request_id or str(uuid.uuid4())
     q = db.table("sci_benchmarks").select("*").eq("lane", LANE)
     if status:
@@ -340,6 +344,7 @@ def ingest_batch(
     x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> dict[str, Any]:
+    paywall.enforce_rate_limit(db, "public-science")  # TW-608: 429 shutoff
     request_id = x_request_id or str(uuid.uuid4())
     key = require_science_key(x_api_key, db, "electrocatalysis")
     enforce_lab_binding(key, [str(r.lab_id) for r in batch.records])
@@ -419,6 +424,7 @@ def list_corrections(
     db: Any = Depends(get_db),
     x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ) -> dict[str, Any]:
+    paywall.enforce_rate_limit(db, "public-science")  # TW-608: 429 shutoff
     request_id = x_request_id or str(uuid.uuid4())
     q = (
         db.table("sci_corrections")
