@@ -123,7 +123,11 @@ def update_flag(
         k for k in patch if k in row["definition"] and row["definition"][k] != patch[k]
     )
     new_version = int(row.get("version", 1)) + 1
-    updated = {"definition": flag.model_dump(mode="json"), "version": new_version}
+    updated = {
+        "definition": flag.model_dump(mode="json"),
+        "version": new_version,
+        "updated_at": _now().isoformat(),
+    }
     saved = (
         db.table("flg_flags")
         .update(updated)
@@ -206,7 +210,11 @@ def apply_due_schedules(db: Any, org_id: str, now: datetime) -> int:
         flag = FlagDefinition(**definition)
         new_version = int(row.get("version", 1)) + 1
         db.table("flg_flags").update(
-            {"definition": flag.model_dump(mode="json"), "version": new_version}
+            {
+                "definition": flag.model_dump(mode="json"),
+                "version": new_version,
+                "updated_at": _now().isoformat(),
+            }
         ).eq("org_id", org_id).eq("key", row["key"]).execute()
         _record_audit(
             db,

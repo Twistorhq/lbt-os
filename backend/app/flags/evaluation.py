@@ -13,15 +13,20 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
-from .models import Condition, EvaluationResult, FlagDefinition
+from .models import Condition, DefinitionError, EvaluationResult, FlagDefinition
 
 # Buckets are 0..9999 so percentages map 1:1 to integer ranges.
 _BUCKETS = 10000
 
 
 def _bucket(flag_key: str, targeting_key: str) -> int:
-    """Deterministic bucket for a (flag, targeting key) pair."""
-    digest = hashlib.sha256(f"{flag_key}:{targeting_key}".encode("utf-8")).digest()
+    """Deterministic bucket for a (flag, targeting key) pair.
+
+    The NUL separator makes the pair unambiguous: naive concatenation
+    would collide _bucket("a:b", "c") with _bucket("a", "b:c"), correlating
+    rollouts across flags.
+    """
+    digest = hashlib.sha256(f"{flag_key}\x00{targeting_key}".encode("utf-8")).digest()
     return int.from_bytes(digest[:4], "big") % _BUCKETS
 
 
@@ -111,9 +116,14 @@ def evaluate(flag: FlagDefinition, context: dict[str, Any]) -> EvaluationResult:
             then = rule.then
             if then.variation is not None:
                 idx = then.variation
-            else:
-                assert then.percentage is not None
+            elif then.percentage is not None:
                 idx = _pick_percentage(flag.key, targeting_key, then.percentage)
+            else:
+                # Unreachable: RuleThen validation requires exactly one.
+                # Explicit guard, not assert — asserts vanish under -O.
+                raise DefinitionError(
+                    f"rule {rule.name!r} has neither variation nor percentage"
+                )
             return EvaluationResult(
                 flag_key=flag.key,
                 value=flag.variations[idx].value,

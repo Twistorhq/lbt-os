@@ -30,40 +30,33 @@ router = APIRouter(prefix="/flags", tags=["flags"])
 _bearer_scheme = HTTPBearer(auto_error=False)
 
 
-def _require_org(creds: HTTPAuthorizationCredentials = Depends(_bearer_scheme)) -> str:
+def _verified_claims(
+    creds: HTTPAuthorizationCredentials = Depends(_bearer_scheme),
+) -> dict:
     # Local import: identity is the auth authority; flags must not import
     # it at module load (keeps the package importable in tests).
     from ..identity import service as idn_service
     from ..identity import tokens as idn_tokens
 
     if not creds:
-        raise HTTPException(status_code=401, detail="missing bearer <redacted>")
+        raise HTTPException(status_code=401, detail="missing credentials")
     try:
         claims = idn_tokens.verify_access_token(
             idn_service.get_verification_keypairs(), creds.credentials
         )
     except idn_tokens.TokenError:
         raise HTTPException(status_code=401, detail="invalid token")
+    return claims
+
+
+def _require_org(claims: dict = Depends(_verified_claims)) -> str:
     org_id = claims.get("org")
     if not org_id:
         raise HTTPException(status_code=403, detail="no active org on token")
     return org_id
 
 
-def _require_actor(
-    creds: HTTPAuthorizationCredentials = Depends(_bearer_scheme),
-) -> str:
-    from ..identity import service as idn_service
-    from ..identity import tokens as idn_tokens
-
-    if not creds:
-        raise HTTPException(status_code=401, detail="missing bearer <redacted>")
-    try:
-        claims = idn_tokens.verify_access_token(
-            idn_service.get_verification_keypairs(), creds.credentials
-        )
-    except idn_tokens.TokenError:
-        raise HTTPException(status_code=401, detail="invalid token")
+def _require_actor(claims: dict = Depends(_verified_claims)) -> str:
     return str(claims.get("sub") or claims.get("email") or "unknown")
 
 

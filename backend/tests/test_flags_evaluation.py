@@ -296,3 +296,14 @@ class TestValidation:
             models.FlagDefinition(
                 key="bad", enabled=True, variations=[], default_variation=0
             )
+
+
+class TestBucketSeparator:
+    """Rosa round-1 nit: naive concat collides _bucket("a:b","c") with
+    _bucket("a","b:c"). The NUL separator makes the pair unambiguous."""
+
+    def test_separator_prevents_collision(self):
+        assert evaluation._bucket("a:b", "c") != evaluation._bucket("a", "b:c")
+
+    def test_deterministic_still(self):
+        assert evaluation._bucket("flag", "user") == evaluation._bucket("flag", "user")

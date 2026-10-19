@@ -30,9 +30,11 @@ class DefinitionError(ValueError):
 class _StrictBase(BaseModel):
     """Base that surfaces EVERY construction failure as raw DefinitionError.
 
-    Pydantic wraps validator and model_post_init errors in ValidationError;
-    the Flags contract is fail-loud with a single error type, so __init__
-    converts. DefinitionError raised inside passes through untouched.
+    Pydantic v2 wraps everything raised during validation — including a
+    DefinitionError from a nested model's model_post_init — in
+    ValidationError. __init__ normalizes back: a DefinitionError passes
+    through untouched, a ValidationError is converted. The Flags contract
+    is fail-loud with a single error type on every construction path.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -40,6 +42,8 @@ class _StrictBase(BaseModel):
     def __init__(self, **data: Any) -> None:
         try:
             super().__init__(**data)
+        except DefinitionError:
+            raise
         except ValidationError as e:
             raise DefinitionError(str(e)) from e
 
@@ -70,6 +74,13 @@ class Condition(_StrictBase):
         if self.op not in OPERATORS:
             raise DefinitionError(
                 f"unknown operator {self.op!r}; want one of {OPERATORS}"
+            )
+        if self.op in ("in", "not_in") and not isinstance(self.value, list):
+            # Unwrapping a single value would silently turn set-membership
+            # into substring matching ("beta" in "beta" is True).
+            raise DefinitionError(
+                f"operator {self.op!r} requires a list value, "
+                f"got {type(self.value).__name__}"
             )
 
 

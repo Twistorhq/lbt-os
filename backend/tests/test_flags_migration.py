@@ -152,3 +152,78 @@ class TestMigratedFlagEvaluates:
         assert "semVerGreaterThan" in report.unmapped[0]
         # The mappable clause still landed.
         assert len(report.flag.targeting[0].conditions) == 1
+
+
+class TestFallthroughPreserved:
+    """Rosa round-1 blocker: fallthrough was silently dropped when rules exist."""
+
+    def test_rules_plus_fallthrough_variation_appends_catch_all(self):
+        ld = _ld_boolean_flag()  # has one rule; fallthrough variation 0
+        ld["fallthrough"] = {"variation": 1}
+        ld["offVariation"] = 0
+        report = migration.migrate_with_report(ld)
+        assert report.unmapped == []
+        assert len(report.flag.targeting) == 2
+        catch_all = report.flag.targeting[-1]
+        assert catch_all.conditions == []
+        assert catch_all.then.variation == 1
+        # Strict import succeeds — nothing silently dropped.
+        flag = migration.from_launchdarkly(ld)
+        # Non-matching context serves the fallthrough, not offVariation.
+        res = evaluation.evaluate(
+            flag, {"targeting_key": "u9", "attributes": {"plan": "free"}}
+        )
+        assert res.value is True
+        assert res.rule_name == "migrated fallthrough"
+
+    def test_rules_plus_fallthrough_rollout_appends_catch_all(self):
+        ld = _ld_boolean_flag()
+        ld["fallthrough"] = {
+            "rollout": {
+                "variations": [
+                    {"variation": 0, "weight": 50000},
+                    {"variation": 1, "weight": 50000},
+                ]
+            }
+        }
+        flag = migration.from_launchdarkly(ld)
+        catch_all = flag.targeting[-1]
+        assert catch_all.conditions == []
+        assert catch_all.then.percentage == {0: 50, 1: 50}
+
+    def test_disabled_flag_still_serves_off_variation(self):
+        ld = _ld_boolean_flag()
+        ld["on"] = False
+        ld["offVariation"] = 1
+        ld["fallthrough"] = {"variation": 0}
+        flag = migration.from_launchdarkly(ld)
+        res = evaluation.evaluate(flag, {"targeting_key": "u1", "attributes": {}})
+        assert res.value is True  # offVariation, not fallthrough
+        assert res.reason == "disabled"
+
+    def test_empty_rollout_raises_definition_error(self):
+        with pytest.raises(models.DefinitionError):
+            migration._rollout_to_percentage({"variations": []})
+
+
+class TestInRequiresList:
+    """Rosa round-1 major: hand-written `in` with a scalar silently degraded
+    to substring matching. Now fails loud."""
+
+    def test_in_with_scalar_raises(self):
+        with pytest.raises(models.DefinitionError):
+            models.FlagDefinition(
+                key="k",
+                enabled=True,
+                variations=[{"value": False}, {"value": True}],
+                default_variation=0,
+                targeting=[
+                    {
+                        "name": "r",
+                        "conditions": [
+                            {"attribute": "plan", "op": "in", "value": "beta"}
+                        ],
+                        "then": {"variation": 1},
+                    }
+                ],
+            )

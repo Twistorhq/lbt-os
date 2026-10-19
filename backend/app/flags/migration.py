@@ -91,8 +91,11 @@ def _map_clause(clause: dict[str, Any], unmapped: list[str]) -> Condition | None
 
 def _rollout_to_percentage(rollout: dict[str, Any]) -> dict[int, int]:
     """LD weights are per-mille of 100000; convert to integer percents."""
+    entries = rollout.get("variations", [])
+    if not entries:
+        raise DefinitionError("rollout has no variations to convert")
     out: dict[int, int] = {}
-    for entry in rollout.get("variations", []):
+    for entry in entries:
         weight = entry.get("weight", 0)
         out[int(entry["variation"])] = round(weight / 1000)
     total = sum(out.values())
@@ -139,8 +142,17 @@ def migrate_with_report(ld_flag: dict[str, Any]) -> MigrationReport:
             )
         )
 
+    # Fallthrough: in LaunchDarkly this is what serves when the flag is ON
+    # and no rule matched. That maps to a final catch-all rule (empty
+    # conditions match everything), NOT to default_variation — the default
+    # serves offVariation when the flag is DISABLED. Dropping the fallthrough
+    # when rules exist would silently change serve behavior, so it is always
+    # preserved: as a catch-all rule when rules exist, as the default value
+    # when the flag has no rules at all.
+    off_variation = int(ld_flag.get("offVariation", 0))
+    default_variation = off_variation
     fallthrough = ld_flag.get("fallthrough") or {}
-    if not targeting and "rollout" in fallthrough:
+    if "rollout" in fallthrough:
         targeting.append(
             TargetingRule(
                 name="migrated fallthrough rollout",
@@ -150,11 +162,18 @@ def migrate_with_report(ld_flag: dict[str, Any]) -> MigrationReport:
                 ),
             )
         )
-        default_variation = int(ld_flag.get("offVariation", 0))
-    elif not targeting and "variation" in fallthrough:
-        default_variation = int(fallthrough["variation"])
-    else:
-        default_variation = int(ld_flag.get("offVariation", 0))
+    elif "variation" in fallthrough:
+        ft_variation = int(fallthrough["variation"])
+        if targeting:
+            targeting.append(
+                TargetingRule(
+                    name="migrated fallthrough",
+                    conditions=[],
+                    then=RuleThen(variation=ft_variation),
+                )
+            )
+        else:
+            default_variation = ft_variation
 
     flag = FlagDefinition(
         key=str(ld_flag.get("key", "")),
