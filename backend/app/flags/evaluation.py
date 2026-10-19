@@ -13,7 +13,7 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
-from .models import Condition, FlagDefinition, EvaluationResult
+from .models import Condition, EvaluationResult, FlagDefinition
 
 # Buckets are 0..9999 so percentages map 1:1 to integer ranges.
 _BUCKETS = 10000
@@ -43,13 +43,23 @@ def _match_condition(cond: Condition, attributes: dict[str, Any]) -> bool:
         if op == "contains":
             return bool(want in actual)
         if op == "starts_with":
-            return isinstance(actual, str) and isinstance(want, str) and actual.startswith(want)
+            return (
+                isinstance(actual, str)
+                and isinstance(want, str)
+                and actual.startswith(want)
+            )
         if op == "ends_with":
-            return isinstance(actual, str) and isinstance(want, str) and actual.endswith(want)
+            return (
+                isinstance(actual, str)
+                and isinstance(want, str)
+                and actual.endswith(want)
+            )
         if op in ("gt", "gte", "lt", "lte"):
             if isinstance(actual, bool) or isinstance(want, bool):
                 return False
-            if not isinstance(actual, (int, float)) or not isinstance(want, (int, float)):
+            if not isinstance(actual, (int, float)) or not isinstance(
+                want, (int, float)
+            ):
                 return False
             if op == "gt":
                 return bool(actual > want)
@@ -63,9 +73,7 @@ def _match_condition(cond: Condition, attributes: dict[str, Any]) -> bool:
     return False  # unknown op — validated at definition time, never here
 
 
-def _pick_percentage(
-    flag_key: str, targeting_key: str, split: dict[int, int]
-) -> int:
+def _pick_percentage(flag_key: str, targeting_key: str, split: dict[int, int]) -> int:
     bucket = _bucket(flag_key, targeting_key)
     cumulative = 0
     # Sorted by variation index for a stable, documented layout.

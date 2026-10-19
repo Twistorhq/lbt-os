@@ -60,7 +60,6 @@ OPERATORS = (
 
 
 class Condition(_StrictBase):
-
     attribute: str
     op: str
     value: Any
@@ -90,15 +89,12 @@ class RuleThen(_StrictBase):
         if self.percentage is not None:
             total = sum(self.percentage.values())
             if total != 100:
-                raise DefinitionError(
-                    f"percentage split must sum to 100, got {total}"
-                )
+                raise DefinitionError(f"percentage split must sum to 100, got {total}")
             if any(p < 0 for p in self.percentage.values()):
                 raise DefinitionError("percentage split values must be >= 0")
 
 
 class TargetingRule(_StrictBase):
-
     name: str
     conditions: list[Condition] = Field(default_factory=list)
     then: RuleThen
@@ -114,13 +110,11 @@ class ScheduleChange(_StrictBase):
 
 
 class Variation(_StrictBase):
-
     value: Any
     name: str | None = None
 
 
 class FlagDefinition(_StrictBase):
-
     key: str
     name: str | None = None
     description: str | None = None
@@ -158,7 +152,6 @@ class FlagDefinition(_StrictBase):
 
 
 class EvaluationResult(_StrictBase):
-
     flag_key: str
     value: Any
     variation_index: int
@@ -167,7 +160,6 @@ class EvaluationResult(_StrictBase):
 
 
 class AuditEntry(_StrictBase):
-
     flag_key: str
     action: str  # create | update | delete | flip | schedule_applied
     actor: str

@@ -25,6 +25,7 @@ from .data_layer.science.pfas import router as sci_pfas_router
 from .data_layer.science.subseasonal import router as sci_subseasonal_router
 from .data_layer.science.turbulence import router as sci_turbulence_router
 from .flows import router as flows_router
+from .flags import router as flags_router
 from .identity import oauth as identity_oauth
 from .identity import router as identity_router
 from .identity import saml as identity_saml
@@ -130,6 +131,7 @@ app.include_router(identity_oauth.oauth_router, prefix="/api/v1")
 app.include_router(identity_saml.saml_router, prefix="/api/v1")
 app.include_router(notify_router.router, prefix="/api/v1")
 app.include_router(flows_router.router, prefix="/api/v1")
+app.include_router(flags_router.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
 app.include_router(bi.router, prefix="/api/v1")
 app.include_router(calls.router, prefix="/api/v1")

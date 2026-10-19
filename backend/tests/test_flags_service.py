@@ -22,8 +22,22 @@ def _table_mock(rows=None):
     def _insert(row):
         return _exec([dict(row, id=f"row-{len(rows)}")])
 
+    class _UpdateChain:
+        """update(payload).eq(...).eq(...).execute() returns the payload."""
+
+        def __init__(self, payload):
+            self._payload = payload
+
+        def eq(self, *a, **k):
+            return self
+
+        def execute(self):
+            m = MagicMock()
+            m.data = [dict(self._payload)]
+            return m
+
     tbl.insert.side_effect = _insert
-    tbl.update.side_effect = lambda row: _exec([dict(row)])
+    tbl.update.side_effect = lambda row: _UpdateChain(row)
     tbl.upsert.side_effect = lambda row, on_conflict=None: _exec([dict(row)])
     chain = MagicMock()
     chain.execute.return_value = MagicMock(data=list(rows))
@@ -153,7 +167,7 @@ class TestUpdate:
         service.flip_flag(db, "org-1", "new-checkout", False, actor="ops@example.com")
         inserted = db._tables["flg_audit"].insert.call_args[0][0]
         assert inserted["action"] == "flip"
-        assert "enabled False" in inserted["summary"]
+        assert inserted["summary"] == "enabled True -> False"
 
 
 class TestDelete:
@@ -174,7 +188,7 @@ class TestSchedules:
         return _flag_row(
             definition=_defn(
                 scheduled=[{"at": at.isoformat(), "enabled": False}]
-            ).model_dump()
+            ).model_dump(mode="json")
         )
 
     def test_due_schedule_flips_flag(self):
@@ -195,7 +209,9 @@ class TestSchedules:
         assert applied == 0
 
     def test_naive_at_treated_as_utc(self):
-        past_naive = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=1)
+        past_naive = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+            hours=1
+        )
         db = _db_with(self._row_with_schedule(past_naive))
         applied = service.apply_due_schedules(db, "org-1", datetime.now(timezone.utc))
         assert applied == 1
@@ -204,8 +220,18 @@ class TestSchedules:
 class TestAuditTrail:
     def test_audit_lists_most_recent_first(self):
         rows = [
-            {"flag_key": "k", "action": "flip", "actor": "a", "at": "2026-10-19T10:00:00+00:00"},
-            {"flag_key": "k", "action": "create", "actor": "a", "at": "2026-10-19T09:00:00+00:00"},
+            {
+                "flag_key": "k",
+                "action": "flip",
+                "actor": "a",
+                "at": "2026-10-19T10:00:00+00:00",
+            },
+            {
+                "flag_key": "k",
+                "action": "create",
+                "actor": "a",
+                "at": "2026-10-19T09:00:00+00:00",
+            },
         ]
         db = _db_with(audit_rows=rows)
         entries = service.list_audit(db, "org-1", "k")

@@ -62,9 +62,7 @@ class TestTargetingRules:
             targeting=[
                 {
                     "name": "beta users",
-                    "conditions": [
-                        {"attribute": "plan", "op": "eq", "value": "beta"}
-                    ],
+                    "conditions": [{"attribute": "plan", "op": "eq", "value": "beta"}],
                     "then": {"variation": 1},
                 }
             ]
@@ -79,9 +77,7 @@ class TestTargetingRules:
             targeting=[
                 {
                     "name": "beta users",
-                    "conditions": [
-                        {"attribute": "plan", "op": "eq", "value": "beta"}
-                    ],
+                    "conditions": [{"attribute": "plan", "op": "eq", "value": "beta"}],
                     "then": {"variation": 1},
                 }
             ]
@@ -114,9 +110,7 @@ class TestTargetingRules:
             targeting=[
                 {
                     "name": "beta users",
-                    "conditions": [
-                        {"attribute": "plan", "op": "eq", "value": "beta"}
-                    ],
+                    "conditions": [{"attribute": "plan", "op": "eq", "value": "beta"}],
                     "then": {"variation": 1},
                 }
             ]
@@ -165,9 +159,7 @@ class TestTargetingRules:
             targeting=[
                 {
                     "name": "r",
-                    "conditions": [
-                        {"attribute": "a", "op": op, "value": cond_val}
-                    ],
+                    "conditions": [{"attribute": "a", "op": op, "value": cond_val}],
                     "then": {"variation": 1},
                 }
             ]
@@ -201,17 +193,14 @@ class TestPercentageRollout:
         # (Not asserting they differ for one key — asserting the bucket
         # function includes the flag key.)
         b1 = evaluation._bucket("flag-a", "user-1")
-        b2 = evaluation.evaluate(
-            _bool_flag(key="flag-a"), _ctx(key="user-1")
-        )
+        b2 = evaluation.evaluate(_bool_flag(key="flag-a"), _ctx(key="user-1"))
         assert 0 <= b1 < 10000
         assert b2.reason in ("default", "targeting_rule")
 
     def test_rollout_distribution_roughly_matches(self):
         flag = self._rollout_flag()
         on = sum(
-            evaluation.evaluate(flag, _ctx(key=f"user-{i}")).value
-            for i in range(2000)
+            evaluation.evaluate(flag, _ctx(key=f"user-{i}")).value for i in range(2000)
         )
         # 10% expected; allow wide tolerance — this is a smoke check that
         # bucketing spreads, not a statistical proof.
@@ -283,9 +272,7 @@ class TestValidation:
                 enabled=True,
                 variations=[{"value": False}, {"value": True}],
                 default_variation=0,
-                targeting=[
-                    {"name": "r", "conditions": [], "then": {"variation": 9}}
-                ],
+                targeting=[{"name": "r", "conditions": [], "then": {"variation": 9}}],
             )
 
     def test_unknown_operator_rejected(self):
@@ -298,9 +285,7 @@ class TestValidation:
                 targeting=[
                     {
                         "name": "r",
-                        "conditions": [
-                            {"attribute": "a", "op": "fuzzy", "value": 1}
-                        ],
+                        "conditions": [{"attribute": "a", "op": "fuzzy", "value": 1}],
                         "then": {"variation": 1},
                     }
                 ],

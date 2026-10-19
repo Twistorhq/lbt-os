@@ -14,8 +14,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
-
 from .models import (
     Condition,
     DefinitionError,
@@ -113,7 +111,9 @@ class MigrationReport(_StrictBase):
 def migrate_with_report(ld_flag: dict[str, Any]) -> MigrationReport:
     """Migrate one LD flag dict; report constructs that did not map."""
     unmapped: list[str] = []
-    variations = [Variation(value=v.get("value")) for v in ld_flag.get("variations", [])]
+    variations = [
+        Variation(value=v.get("value")) for v in ld_flag.get("variations", [])
+    ]
     targeting: list[TargetingRule] = []
 
     for i, rule in enumerate(ld_flag.get("rules", [])):
@@ -127,7 +127,9 @@ def migrate_with_report(ld_flag: dict[str, Any]) -> MigrationReport:
         elif "rollout" in rule:
             then = RuleThen(percentage=_rollout_to_percentage(rule["rollout"]))
         else:
-            unmapped.append(f"rule {i} ({rule.get('description')!r}): no variation/rollout")
+            unmapped.append(
+                f"rule {i} ({rule.get('description')!r}): no variation/rollout"
+            )
             continue
         targeting.append(
             TargetingRule(
@@ -143,7 +145,9 @@ def migrate_with_report(ld_flag: dict[str, Any]) -> MigrationReport:
             TargetingRule(
                 name="migrated fallthrough rollout",
                 conditions=[],
-                then=RuleThen(percentage=_rollout_to_percentage(fallthrough["rollout"])),
+                then=RuleThen(
+                    percentage=_rollout_to_percentage(fallthrough["rollout"])
+                ),
             )
         )
         default_variation = int(ld_flag.get("offVariation", 0))

@@ -123,17 +123,28 @@ class TestClauseMapping:
 class TestMigratedFlagEvaluates:
     def test_migrated_flag_serves_rule_then_default(self):
         flag = migration.from_launchdarkly(_ld_boolean_flag())
-        assert evaluation.evaluate(
-            flag, {"targeting_key": "u1", "attributes": {"plan": "beta"}}
-        ).value is True
-        assert evaluation.evaluate(
-            flag, {"targeting_key": "u2", "attributes": {"plan": "free"}}
-        ).value is False
+        assert (
+            evaluation.evaluate(
+                flag, {"targeting_key": "u1", "attributes": {"plan": "beta"}}
+            ).value
+            is True
+        )
+        assert (
+            evaluation.evaluate(
+                flag, {"targeting_key": "u2", "attributes": {"plan": "free"}}
+            ).value
+            is False
+        )
 
     def test_migrated_flag_report_lists_unmapped(self):
         ld = _ld_boolean_flag()
         ld["rules"][0]["clauses"].append(
-            {"attribute": "ver", "op": "semVerGreaterThan", "values": ["1.0"], "negate": False}
+            {
+                "attribute": "ver",
+                "op": "semVerGreaterThan",
+                "values": ["1.0"],
+                "negate": False,
+            }
         )
         report = migration.migrate_with_report(ld)
         assert report.flag.key == "new-checkout"
