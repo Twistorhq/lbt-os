@@ -109,8 +109,9 @@ NITS
   moved above use with a top-level timedelta import; the 80% log line
   uses `budgets.WARN_RATIO`.
 
-Round-2 state: 65/65 telemetry tests green (54 pre-existing + 11 new);
-`ruff check` and `ruff format --check` clean on all touched files. The 7 xmlsec
+Round-2 state: 75/75 telemetry tests green (8 test files; 11 tests added
+in this round); `ruff check` and `ruff format --check` clean on all
+touched files. The 7 xmlsec
 collection errors remain pre-existing and environmental (verified on
 main). Migration SQL still unexecuted against a live DB (integration
 pass owns it).
