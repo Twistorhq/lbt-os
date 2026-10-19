@@ -124,11 +124,11 @@ def trigger(
     row = get_workflow(db, org_id, workflow_id)
     if not row:
         raise KeyError(f"workflow {workflow_id} not found")
+    paused_reason = (row.get("paused_reason") or "").strip()
     row = maybe_auto_resume(db, org_id, row)
     if not row:
-        raise PermissionError(
-            f"workflow {workflow_id} is paused and the budget day has not rolled over"
-        )
+        detail = f" ({paused_reason})" if paused_reason else ""
+        raise PermissionError(f"workflow {workflow_id} is paused{detail}")
     return executor.run_workflow(db, org_id, row, trigger_input or {})
 
 

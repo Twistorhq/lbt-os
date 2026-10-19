@@ -129,3 +129,67 @@ webhook `headers` support.
 
 - No new untrusted content entered the build during the fix round; all
   changes trace to Rosa's ticketed findings.
+
+## Fix round 2 (Rosa round-2 re-review: REQUEST_CHANGES, 2 tick-path majors)
+
+Rosa's round-2 re-review confirmed the 3 blockers genuinely fixed but
+proved by execution that the scheduler tick's partial-column selects
+broke the production resume path. Both majors fixed and proven below.
+
+**Major 1 — tick resume scan dropped the new columns.** The tick's
+`flw_runs` scan selected only
+`id,org_id,workflow_id,resume_at,resume_step_id`, so on the production
+resume path any delay-then-personalize run errored on "unknown context
+path" (context never restored) and the per-run step cap restarted at 0
+(re-opening the loop-cap bypass). Fix: the scan now selects
+`context,steps_executed` too (scheduler.py). Proven by
+`TickResumePathTests::test_tick_resumes_delay_then_personalize_with_persisted_context`
+— runs the REAL `scheduler.tick` against a row-filtering fake DB with a
+suspended run carrying `steps_executed: 1` of a 3-step cap and persisted
+context; asserts the send goes out to the persisted recipient
+(`tick@shop.com`), the run completes, and the cap counts against
+persisted steps. Also covered by
+`TickSelectColumnsTests::test_resume_scan_selects_context_and_steps_executed`
+(asserts the select list).
+
+**Major 2 — budget auto-resume unreachable from the tick.** `budget_reset_for_today`
+was wired only into `service.trigger` (manual API); the tick's schedule
+scan (`eq status active`) and suspended-resume scan (skip if not active)
+never attempted it, so a schedule-triggered workflow hitting 100% stayed
+paused past day rollover until a human touched it. Fix:
+`service.maybe_auto_resume(db, org_id, row)` extracted as a shared
+helper; the tick's schedule scan now selects
+`id,org_id,definition,status,paused_reason,last_tick_at,alert_to,name`
+with `in_(status, [active, paused])` and runs every candidate through it;
+the suspended-resume scan does the same instead of skipping non-active
+rows. Manually-paused workflows stay paused (helper only touches
+`task budget*` reasons and only when today's counters are back under
+cap). Proven by `TickAutoResumeTests` (4 tests):
+`test_schedule_scan_auto_resumes_after_day_rollover`,
+`test_manually_paused_workflow_stays_paused_on_tick`,
+`test_suspended_run_resumes_after_budget_auto_resume`,
+`MaybeAutoResumeTests::test_no_rollover_stays_paused`.
+
+**Nit — cron `dow=7` validated but never fired.** Sunday is 0 in the tick's
+comparison; 7 passed validation and silently never matched. Fix:
+`_cron_due` normalizes 7 to 0. Proven by `CronDowSevenTests`
+(Sunday 2026-10-18 fires on both 0 and 7; Monday 2026-10-19 fires on
+neither).
+
+- Command: `python3 -m pytest backend/tests/test_flows_*.py -q`
+- Output: `75 passed` (67 round-1 + 8 new tick-path tests). GREEN.
+- Regression: full-suite failure/error lists byte-identical to main
+  (43 pre-existing, 0 new; Rosa independently re-ran: 20 pre-existing
+  failures each side, passed 536 vs 461 = exactly the 75 new flows tests).
+- Lint: `ruff check` + `ruff format` clean on all touched files.
+- Rosa round-3 verdict: REQUEST_CHANGES on docs only (this section)
+  + one error-message nit (trigger's PermissionError now restores
+  `paused_reason` in the message). Tick-path code verified solid by her
+  independent repro; column-gap audit clean — no remaining gaps.
+
+## Plan-safety notes (fix round 2)
+
+- No new untrusted content entered the build; all changes trace to
+  Rosa's ticketed round-2 findings. Follow-up TW-644 ticketed separately
+  (webhook_trigger/tick bypassing service.trigger's paused gate —
+  Rosa's pre-existing note, defense-in-depth hardening).
