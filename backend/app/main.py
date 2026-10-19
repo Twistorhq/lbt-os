@@ -119,6 +119,8 @@ async def request_lifecycle(request: Request, call_next) -> Response:
 
 
 # --- Routers ---
+from .identity import router as identity_router
+app.include_router(identity_router, prefix="/api/v1")
 app.include_router(admin.router,                   prefix="/api/v1")
 app.include_router(bi.router,                      prefix="/api/v1")
 app.include_router(calls.router,                   prefix="/api/v1")

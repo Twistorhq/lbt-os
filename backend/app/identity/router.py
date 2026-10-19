@@ -1,0 +1,202 @@
+"""TW-619 Twistor Identity — HTTP API."""
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel, EmailStr
+from supabase import Client
+
+from ..auth import _verify_clerk_jwt  # migration bridge reuses Clerk verifier
+from ..database import get_db
+from . import keys, service, tokens
+
+router = APIRouter(prefix="/identity", tags=["identity"])
+bearer = HTTPBearer(auto_error=False)
+
+
+class SignupIn(BaseModel):
+    email: EmailStr
+    password: str
+    org_name: str | None = None
+
+
+class LoginIn(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class RefreshIn(BaseModel):
+    refresh_token: str
+
+
+class MagicLinkIn(BaseModel):
+    email: EmailStr
+
+
+class MagicConsumeIn(BaseModel):
+    token: str
+
+
+class SwitchOrgIn(BaseModel):
+    org_id: str
+
+
+class ClerkMigrateIn(BaseModel):
+    clerk_jwt: str
+
+
+def _client_ip(req: Request) -> str | None:
+    fwd = req.headers.get("x-forwarded-for")
+    return (
+        fwd.split(",")[0].strip() if fwd else (req.client.host if req.client else None)
+    )
+
+
+def _token_err(e: tokens.TokenError) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e))
+
+
+@router.post("/signup", status_code=201)
+def signup(body: SignupIn, db: Client = Depends(get_db)):
+    try:
+        return service.signup(db, body.email, body.password, body.org_name)
+    except tokens.TokenError as e:
+        raise _token_err(e)
+
+
+@router.post("/login")
+def login(body: LoginIn, req: Request, db: Client = Depends(get_db)):
+    try:
+        return service.login(
+            db,
+            body.email,
+            body.password,
+            _client_ip(req),
+            req.headers.get("user-agent"),
+        )
+    except tokens.TokenError as e:
+        raise _token_err(e)
+
+
+@router.post("/refresh")
+def refresh(body: RefreshIn, req: Request, db: Client = Depends(get_db)):
+    try:
+        return service.refresh(
+            db, body.refresh_token, _client_ip(req), req.headers.get("user-agent")
+        )
+    except tokens.TokenError as e:
+        raise _token_err(e)
+
+
+@router.post("/logout", status_code=204)
+def logout(body: RefreshIn, db: Client = Depends(get_db)):
+    service.logout(db, body.refresh_token)
+    return None
+
+
+@router.post("/magic-link", status_code=202)
+def magic_link(body: MagicLinkIn, db: Client = Depends(get_db)):
+    # Always 202 — never reveal whether the email exists.
+    raw = service.issue_magic_link(db, body.email)
+    # Zeke wires actual email delivery; raw token returned here ONLY until
+    # the mailer lands (dev convenience, flagged for removal before prod).
+    return {"sent": True, "_dev_token": raw}
+
+
+@router.post("/magic-link/consume")
+def magic_consume(body: MagicConsumeIn, req: Request, db: Client = Depends(get_db)):
+    try:
+        return service.consume_magic_link(
+            db, body.token, _client_ip(req), req.headers.get("user-agent")
+        )
+    except tokens.TokenError as e:
+        raise _token_err(e)
+
+
+def _require_twistor_user(
+    creds: HTTPAuthorizationCredentials = Depends(bearer),
+) -> dict:
+    if not creds:
+        raise HTTPException(status_code=401, detail="missing bearer token")
+    try:
+        return tokens.verify_access_token(service.get_keypair(), creds.credentials)
+    except tokens.TokenError as e:
+        raise _token_err(e)
+
+
+@router.get("/me")
+def me(claims: dict = Depends(_require_twistor_user), db: Client = Depends(get_db)):
+    user = (
+        db.table("idn_users")
+        .select("id,email,email_verified_at,created_at")
+        .eq("id", claims["sub"])
+        .limit(1)
+        .execute()
+    ).data
+    if not user:
+        raise HTTPException(status_code=401, detail="unknown user")
+    orgs = service._user_orgs(db, claims["sub"])
+    return {"user": user[0], "orgs": orgs, "active_org": claims.get("org")}
+
+
+@router.post("/orgs/switch")
+def switch_org(
+    body: SwitchOrgIn,
+    claims: dict = Depends(_require_twistor_user),
+    db: Client = Depends(get_db),
+):
+    try:
+        return service.switch_org(db, claims["sub"], body.org_id)
+    except tokens.TokenError as e:
+        raise _token_err(e)
+
+
+@router.get("/.well-known/jwks.json")
+def jwks():
+    return keys.public_jwks([service.get_keypair()])
+
+
+@router.post("/migrate/clerk")
+def migrate_clerk(body: ClerkMigrateIn, req: Request, db: Client = Depends(get_db)):
+    """One-time bridge: verify a Clerk JWT, link or create the Twistor
+    identity user, and return a Twistor session. After migration the
+    client uses Twistor tokens exclusively."""
+    try:
+        payload = _verify_clerk_jwt(body.clerk_jwt)
+    except HTTPException:
+        raise HTTPException(status_code=401, detail="invalid Clerk token")
+    clerk_id = payload.get("sub")
+    if not clerk_id:
+        raise HTTPException(status_code=401, detail="invalid Clerk token")
+    existing = (
+        db.table("idn_users")
+        .select("id")
+        .eq("clerk_user_id", clerk_id)
+        .limit(1)
+        .execute()
+    ).data
+    if existing:
+        user = (
+            db.table("idn_users")
+            .select("*")
+            .eq("id", existing[0]["id"])
+            .limit(1)
+            .execute()
+        ).data[0]
+    else:
+        email = payload.get("email") or f"{clerk_id}@clerk.migrated"
+        user = (
+            db.table("idn_users")
+            .insert(
+                {
+                    "email": str(email).lower(),
+                    "clerk_user_id": clerk_id,
+                    "email_verified_at": __import__("datetime")
+                    .datetime.now(__import__("datetime").timezone.utc)
+                    .isoformat(),
+                }
+            )
+            .execute()
+        ).data[0]
+    return service._open_session(
+        db, user, _client_ip(req), req.headers.get("user-agent")
+    )
