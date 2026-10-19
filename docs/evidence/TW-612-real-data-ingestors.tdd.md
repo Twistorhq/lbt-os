@@ -9,7 +9,7 @@ replacing synthetic seeds with real open data per Diego's TW-610 plan.
 ### Files
 - `backend/app/data_layer/science/ingest/__init__.py` — lane constants
 - `backend/app/data_layer/science/ingest/licenses.py` — license verdicts
-  (GREEN/YELLOW/RED), 17-source registry, gold-promotion gate
+  (GREEN/YELLOW/RED), 21-source registry, gold-promotion gate
 - `backend/app/data_layer/science/ingest/bronze.py` — BronzeWriter:
   streaming fetch, sha256, idempotent re-runs, per-item fault isolation (TW-208)
 - `backend/app/data_layer/science/ingest/s2s.py` — GEFS, 20CRv3, ERA5/WB2,
@@ -21,10 +21,10 @@ replacing synthetic seeds with real open data per Diego's TW-610 plan.
 - `backend/requirements-ingest.txt` — worker deps (FOSS, $0)
 - `supabase/migration_sci_ingest_v1.sql` — license columns on bronze +
   `sci_bronze_gold_eligible` view (GREEN only)
-- `backend/tests/test_science_ingest.py` — 31 tests
+- `backend/tests/test_science_ingest.py` — 42 tests
 
 ### Verification
-- 41/41 new tests green; 137/137 with carbon + subseasonal + paywall suites
+- 42/42 new tests green; 138/138 with carbon + subseasonal + paywall suites
 - ruff check + format clean
 - Manual spot-checks (2026-10-18, not committed scripts): real GEFS .idx
   bytes fetched from live S3 (noaa-gefs-retrospective) -> bronze,

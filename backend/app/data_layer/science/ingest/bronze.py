@@ -92,7 +92,8 @@ def _hash_pii_value(value: Any) -> Any:
 
 
 def _hash_contact_value(value: Any) -> Any:
-    """Hash every string leaf under a contact-shaped key (lists included)."""
+    """Hash string leaves and list leaves under a contact-shaped key; dict
+    subkeys are judged individually by _hash_pii_value."""
     if isinstance(value, str):
         return "sha256:" + hashlib.sha256(value.encode()).hexdigest()
     if isinstance(value, dict):
