@@ -15,8 +15,9 @@ Tolling (TW-549) + paywall (TW-599): every served call is metered via
 paywall.metered_toll (dynamic derivative pricing: volume multiplier on
 trailing-30d science spend); every READ needs an active Twistor subscription
 (402 otherwise). Excel downloads at GET /datasets/{version}/download carry a
-one-time tier fee on top of the subscription (small $6 / medium $8.50 /
-large $22.50; large = API only). Idempotency key = f"sci:{request_id}".
+one-time fee on top of the subscription: the dataset's live curve price
+(pennies, hard-capped at $0.10 per download; large = API only).
+Idempotency key = f"sci:{request_id}".
 A toll failure never breaks a read (TW-208).
 
 Split discipline: /query defaults to split='train'. 'test_future' rows
@@ -390,9 +391,10 @@ def file_correction(payload: schemas.CorrectionCreate, request: Request,
 def download_dataset(version: str, request: Request,
                      x_org_id: Annotated[str | None, Header()] = None,
                      store: models.CropClimateStore = Depends(get_store)):
-    """Excel download: subscription + one-time tiered entry fee (TW-606).
+    """Excel download: subscription + one-time curve fee (TW-606).
 
-    Small/medium tiers only -- large datasets are API-only (403).
+    Small/medium tiers only -- large datasets are API-only (403). The fee
+    is the dataset's live curve price: pennies, hard-capped at $0.10.
     """
     org_id = _gate(store, x_org_id)
     v = _version_or_404(store, version)

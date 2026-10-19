@@ -104,6 +104,22 @@ def test_download_curve_configurable_params():
     assert paywall.download_price_cents(1_000_000, cap_cents=1000) == 1000
 
 
+def test_floor_never_exceeds_cap():
+    # Rosa (TW-606 round 2): a stale/misconfigured floor above the cap must
+    # never resurrect a higher price. Hard $0.10 cap, no exceptions.
+    assert paywall.download_price_cents(0, floor_cents=999) == 10
+    assert paywall.download_price_cents(100_000, floor_cents=999) == 10
+    assert paywall.download_price_cents(50_000, floor_cents=2999) == 10
+    # a DB version row with a stale rev-2 floor is clamped too
+    db = FakeDB({
+        "sci_dataset_versions": [
+            {"id": "ver-9", "price_floor_cents": 2999},
+        ],
+        "toll_events": [],
+    })
+    assert paywall.download_fee_cents(db, "org-1", "ver-9") == 10
+
+
 def test_asset_value_floors():
     # standard floor $0.01; premium/flagship floors higher but still
     # pennies under the $0.10 cap; curve still caps

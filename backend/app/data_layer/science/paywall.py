@@ -102,16 +102,19 @@ def download_price_cents(
 
     price(d) = floor + (cap - floor) * (d / scale) ** exponent, capped.
     The exponent, scale, and cap are keyword-configurable, not hardcoded.
-    Raises ValueError on nonsense config (non-positive scale, negative
-    exponent) -- fail fast on programmer error in a money function.
+    The floor is CLAMPED to the cap: a misconfigured/stale floor above the
+    cap can never resurrect a higher price (Justynn's rule: hard $0.10 cap,
+    no exceptions). Raises ValueError on nonsense config (non-positive
+    scale, negative exponent) -- fail fast on programmer error in a money
+    function.
     """
     if scale <= 0:
         raise ValueError(f"download curve scale must be positive, got {scale}")
     if exponent < 0:
         raise ValueError(f"download curve exponent must be >= 0, got {exponent}")
     d = max(0, int(download_count))
-    floor = max(1, int(floor_cents))
-    cap = max(floor, int(cap_cents))
+    cap = max(1, int(cap_cents))
+    floor = min(max(1, int(floor_cents)), cap)
     growth = (cap - floor) * (d / scale) ** float(exponent)
     return min(int(round(floor + growth)), cap)
 

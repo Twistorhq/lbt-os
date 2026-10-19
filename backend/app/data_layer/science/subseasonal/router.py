@@ -23,9 +23,9 @@ active Twistor subscription (402 otherwise) — TW-599 paywall, day one.
 Paywall (TW-599): subscription gate via paywall.require_active_subscription;
 API tolls metered with dynamic derivative pricing
 (paywall.metered_toll: volume multiplier on trailing-30d science spend);
-Excel downloads at GET /datasets/{version}/download carry a one-time tier
-fee on top of the subscription (small $6 / medium $8.50 / large $22.50;
-large = API only).
+Excel downloads at GET /datasets/{version}/download carry a one-time fee
+on top of the subscription: the dataset's live curve price (pennies,
+hard-capped at $0.10 per download; large = API only).
 """
 
 from __future__ import annotations
@@ -380,9 +380,10 @@ def http_download_dataset(
     x_request_id: str | None = Header(default=None),
     x_org_id: str | None = Header(default=None),
 ) -> StreamingResponse:
-    """Excel download: subscription + one-time tiered entry fee (TW-606).
+    """Excel download: subscription + one-time curve fee (TW-606).
 
-    Small/medium tiers only -- large datasets are API-only (403).
+    Small/medium tiers only -- large datasets are API-only (403). The fee
+    is the dataset's live curve price: pennies, hard-capped at $0.10.
     """
     db = _db()
     org_id = _gate(db, _org_id(x_org_id))
