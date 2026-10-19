@@ -32,19 +32,26 @@ def _cron_due(cron: str, now: datetime.datetime) -> bool:
     if len(fields) != 5:
         return False
     minute, hour, dom, month, dow = fields
+    # cron dow: 0 and 7 both mean Sunday; python: Monday=0
+    py_dow = (now.weekday() + 1) % 7
     checks = [
         (minute, now.minute),
         (hour, now.hour),
         (dom, now.day),
         (month, now.month),
-        # cron dow: 0 and 7 both mean Sunday; python: Monday=0
-        (dow, (now.weekday() + 1) % 7),
     ]
     for field, value in checks:
         if field == "*":
             continue
         try:
             if int(field) != value:
+                return False
+        except ValueError:
+            return False
+    if dow != "*":
+        try:
+            # 7 is Sunday in cron, 0 in the comparison
+            if (0 if int(dow) == 7 else int(dow)) != py_dow:
                 return False
         except ValueError:
             return False
@@ -59,11 +66,15 @@ def tick(db: Client, now: datetime.datetime | None = None) -> dict:
     skipped: list[str] = []
 
     # --- due schedules ---------------------------------------------------
+    # Paused-on-budget workflows are included: maybe_auto_resume flips
+    # them active when the UTC day has rolled the counters over.
     try:
         rows = (
             db.table("flw_workflows")
-            .select("id,definition,status,last_tick_at")
-            .eq("status", "active")
+            .select(
+                "id,org_id,definition,status,paused_reason,last_tick_at,alert_to,name"
+            )
+            .in_("status", ["active", "paused"])
             .execute()
             .data
             or []
@@ -79,6 +90,11 @@ def tick(db: Client, now: datetime.datetime | None = None) -> dict:
 
     for row in rows:
         try:
+            from . import service as _service
+
+            row = _service.maybe_auto_resume(db, row.get("org_id"), row)
+            if not row:
+                continue
             trig = (row.get("definition") or {}).get("trigger") or {}
             if trig.get("type") != "schedule":
                 continue
@@ -88,16 +104,7 @@ def tick(db: Client, now: datetime.datetime | None = None) -> dict:
             last = row.get("last_tick_at")
             if last and last >= now.strftime("%Y-%m-%d %H:%M"):
                 continue  # already fired this minute
-            try:
-                full = (
-                    db.table("flw_workflows")
-                    .select("*")
-                    .eq("id", row["id"])
-                    .execute()
-                    .data[0]
-                )
-            except Exception:
-                continue
+            full = row  # scan already carries definition, org_id, alert_to
             org_id = full.get("org_id")
             result = executor.run_workflow(db, org_id, full, {})
             fired.append(f"{row['id']}:{result['status']}")
@@ -114,7 +121,9 @@ def tick(db: Client, now: datetime.datetime | None = None) -> dict:
     try:
         suspended = (
             db.table("flw_runs")
-            .select("id,org_id,workflow_id,resume_at,resume_step_id")
+            .select(
+                "id,org_id,workflow_id,resume_at,resume_step_id,context,steps_executed"
+            )
             .eq("status", "suspended")
             .execute()
             .data
@@ -129,6 +138,8 @@ def tick(db: Client, now: datetime.datetime | None = None) -> dict:
             resume_at = run.get("resume_at")
             if not resume_at or resume_at > now.isoformat():
                 continue
+            from . import service as _service
+
             full = (
                 db.table("flw_workflows")
                 .select("*")
@@ -136,7 +147,10 @@ def tick(db: Client, now: datetime.datetime | None = None) -> dict:
                 .execute()
                 .data[0]
             )
-            if full.get("status") != "active":
+            # A budget-paused workflow auto-resumes when the day rolled
+            # the counters over; other paused states stay suspended.
+            full = _service.maybe_auto_resume(db, run["org_id"], full)
+            if not full:
                 continue
             result = resume_run(db, run["org_id"], full, run)
             resumed.append(f"{run['id']}:{result['status']}")

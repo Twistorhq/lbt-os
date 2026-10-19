@@ -97,32 +97,38 @@ def set_status(
     return rows[0] if rows else None
 
 
+def maybe_auto_resume(db: Client, org_id: str, row: dict) -> dict | None:
+    """Resume a budget-paused workflow when the UTC day has rolled over.
+
+    A 100%-budget pause must not outlive the budget period that caused
+    it. Returns the refreshed (active) row, the already-active row
+    unchanged, or None when no resume applies. Used by both the manual
+    trigger path and the scheduler tick.
+    """
+    if row.get("status") == "active":
+        return row
+    if not (row.get("paused_reason") or "").startswith("task budget"):
+        return None
+    from . import budgets
+
+    wf = models.validate_definition(row["definition"])
+    if budgets.budget_reset_for_today(db, org_id, row["id"], wf.budget):
+        set_status(db, org_id, row["id"], "active")
+        return get_workflow(db, org_id, row["id"])
+    return None
+
+
 def trigger(
     db: Client, org_id: str, workflow_id: str, trigger_input: dict | None = None
 ) -> dict:
     row = get_workflow(db, org_id, workflow_id)
     if not row:
         raise KeyError(f"workflow {workflow_id} not found")
-    if row.get("status") != "active":
-        # A budget-exhaustion pause must not outlive the budget period:
-        # if today's counters are back under every cap, auto-resume.
-        if (row.get("paused_reason") or "").startswith("task budget"):
-            from . import budgets
-
-            wf = models.validate_definition(row["definition"])
-            if budgets.budget_reset_for_today(db, org_id, workflow_id, wf.budget):
-                set_status(db, org_id, workflow_id, "active")
-                row = get_workflow(db, org_id, workflow_id)
-            else:
-                raise PermissionError(
-                    f"workflow {workflow_id} is paused "
-                    f"({row.get('paused_reason') or 'no reason recorded'})"
-                )
-        else:
-            raise PermissionError(
-                f"workflow {workflow_id} is {row.get('status')} "
-                f"({row.get('paused_reason') or 'no reason recorded'})"
-            )
+    row = maybe_auto_resume(db, org_id, row)
+    if not row:
+        raise PermissionError(
+            f"workflow {workflow_id} is paused and the budget day has not rolled over"
+        )
     return executor.run_workflow(db, org_id, row, trigger_input or {})
 
 

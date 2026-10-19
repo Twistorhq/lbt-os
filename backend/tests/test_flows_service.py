@@ -27,6 +27,7 @@ def _table_mock(rows=None):
     chain.eq.return_value = chain
     chain.order.return_value = chain
     chain.limit.return_value = chain
+    chain.in_.return_value = chain
     tbl.select.return_value = chain
     tbl.eq.return_value = chain
     return tbl
