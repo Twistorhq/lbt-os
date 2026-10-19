@@ -50,7 +50,8 @@ owning user, never logged. Flagged for Rosa's PII review.
   honors it.
 - Rate limits (slowapi, IP buckets): signup 10/hr, login 20/min, refresh
   60/min, magic-link issue 5/hr, magic-link consume 20/min, Clerk
-  migration 10/hr.
+  migration 10/hr, OAuth start 30/min, OAuth callback 20/min,
+  SSO config 10/hr, SAML login 30/min, SAML ACS 20/min.
 - Clerk migration: one-time per clerk_user_id (`clerk_migrated_at`),
   sunsettable via `TWISTOR_IDENTITY_CLERK_MIGRATION_ENABLED=false`.
 

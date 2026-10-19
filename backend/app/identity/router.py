@@ -1,5 +1,8 @@
 """TW-619 Twistor Identity — HTTP API."""
 
+import datetime
+import os
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr
@@ -182,9 +185,6 @@ def migrate_clerk(body: ClerkMigrateIn, request: Request, db: Client = Depends(g
     M4: replay-protected (clerk_migrated_at set once; repeats rejected)
     and sunsettable via TWISTOR_IDENTITY_CLERK_MIGRATION_ENABLED=false.
     """
-    import datetime
-    import os
-
     if os.environ.get(
         "TWISTOR_IDENTITY_CLERK_MIGRATION_ENABLED", "true"
     ).lower() not in ("1", "true", "yes"):

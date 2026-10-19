@@ -120,7 +120,9 @@ def _require_org_admin(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="missing bearer token"
         )
     try:
-        claims = tokens.verify_access_token(service.get_keypair(), creds.credentials)
+        claims = tokens.verify_access_token(
+            service.get_verification_keypairs(), creds.credentials
+        )
     except tokens.TokenError as e:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e))
     membership = (
