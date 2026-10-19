@@ -29,7 +29,7 @@ def _require_org(creds: HTTPAuthorizationCredentials = Depends(bearer)) -> str:
     from ..identity import tokens as idn_tokens
 
     if not creds:
-        raise HTTPException(status_code=401, detail="missing bearer <redacted>")
+        raise HTTPException(status_code=401, detail="missing bearer token")
     try:
         claims = idn_tokens.verify_access_token(
             idn_service.get_verification_keypairs(), creds.credentials
@@ -237,7 +237,7 @@ def get_run(
 @router.post("/webhook/{key}")
 @limiter.limit("60/minute")
 def webhook_trigger(
-    request: Request, key: str, body: dict = {}, db: Client = Depends(get_db)
+    request: Request, key: str, body: dict | None = None, db: Client = Depends(get_db)
 ):
     # No JWT here: the trigger key is the secret. Rate-limited.
     row = service.find_by_webhook_key(db, key)

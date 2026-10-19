@@ -100,14 +100,30 @@ def _convert_trigger(trigger: dict) -> dict:
 def from_zapier(zap: dict) -> dict:
     """Convert Zapier-concept JSON to a Flows definition dict.
 
-    Raises UnsupportedStepError on anything V1 cannot represent.
+    A filter ("only continue if") wraps all REMAINING actions in its
+    then-branch — the Zapier semantic. Anything V1 cannot represent
+    raises UnsupportedStepError (loud, never silently dropped).
     The result is NOT yet validated — call models.validate_definition.
     """
     if not isinstance(zap, dict):
         raise UnsupportedStepError("zap must be a JSON object")
-    steps = [_convert_action(a) for a in (zap.get("actions") or [])]
-    if not steps:
+    actions = zap.get("actions") or []
+    if not actions:
         raise UnsupportedStepError("zap has no actions to migrate")
+    steps: list[dict] = []
+    i = 0
+    while i < len(actions):
+        action = actions[i]
+        app = (action.get("app") or "").lower()
+        act = (action.get("action") or "").lower()
+        if app == "filter" and act in ("only_continue", "continue"):
+            branch = _convert_action(action)
+            # everything after the filter runs only when it passes
+            branch["then"] = [_convert_action(a) for a in actions[i + 1 :]]
+            steps.append(branch)
+            break
+        steps.append(_convert_action(action))
+        i += 1
     return {
         "name": zap.get("name") or "imported zap",
         "trigger": _convert_trigger(zap.get("trigger") or {}),

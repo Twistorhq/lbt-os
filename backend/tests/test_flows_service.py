@@ -164,7 +164,10 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(len(out["fired"]), 1)
         rw.assert_called_once()
 
-    def test_tick_skips_unsupported_cron_loudly(self):
+    def test_tick_ignores_unvalidatable_cron(self):
+        # Definition-time validation rejects ranges (see
+        # DefinitionHardeningTests); a legacy row carrying one simply
+        # never fires at tick time.
         now = datetime.datetime(2026, 10, 19, 9, 0, tzinfo=datetime.timezone.utc)
         wf = _wf_row(
             definition={
@@ -177,9 +180,10 @@ class SchedulerTests(unittest.TestCase):
         db.table.side_effect = lambda n: _table_mock(
             [wf] if n == "flw_workflows" else []
         )
-        out = scheduler.tick(db, now)
+        with patch("app.flows.scheduler.executor.run_workflow") as rw:
+            out = scheduler.tick(db, now)
         self.assertEqual(out["fired"], [])
-        self.assertEqual(out["skipped"], ["wf-1"])
+        rw.assert_not_called()
 
 
 if __name__ == "__main__":

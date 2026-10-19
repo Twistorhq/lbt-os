@@ -54,22 +54,31 @@ bills) and per-task metering nobody can forecast. Flows answers:
 ```
 
 Triggers: `manual`, `webhook` (key in path, the key is the secret),
-`schedule` (`cron` — evaluated by the tick endpoint).
+`schedule` (`cron` — 5 fields, `*` or integer only; ranges/lists are
+rejected at definition time, evaluated by the tick endpoint).
 
 Step types V1: `notify` (via Twistor Notify), `delay` (suspends the run;
-resumed by tick), `branch` (tiny safe condition evaluator: `==`, `!=`,
-`>`, `<`, `in` on `{{path}}` values), `webhook` (outbound HTTP),
+resumed by tick — top-level only; nested delays are rejected at
+definition time because V1 resume tracks a single step id), `branch`
+(tiny safe condition evaluator: `==`, `!=`, `>`, `<`, `in` on `{{path}}`
+values), `webhook` (outbound HTTPS only, SSRF-guarded: private/loopback
+IPs refused, redirects blocked, JSON bodies, host-only error logging),
 `set` (context variable), `loop` (iterate a list with a circuit breaker:
 iteration cap + error-rate breaker — if over half the iterations error,
-the loop breaks and the workflow pauses).
+the loop breaks and the workflow pauses; max 3 nesting levels; every
+iteration counts against the per-run step cap and gets its own toll
+idempotency key).
 
 ## Execution
 
 Synchronous executor (Notify V1 did the same; async workers are Dre's
 follow-up lane). Every step writes to `flw_run_steps`; the run ledger is
-the receipt. Delay steps suspend with `resume_at`; `POST /flows/tick`
-(guarded by `FLOWS_TICK_KEY`, fail-closed when unset) resumes due
-continuations and fires due schedules.
+the receipt. Delay steps suspend with `resume_at` and persist the full
+step context to `flw_runs.context`; `POST /flows/tick` (guarded by
+`FLOWS_TICK_KEY`, fail-closed when unset) resumes due continuations —
+each resume persists the NEW resume point, so multi-delay sequences
+(Touch 1-4) move forward and never re-send. A budget-exhaustion pause
+auto-resumes when the UTC day rolls the counters back under cap.
 
 ## MCP exposure
 

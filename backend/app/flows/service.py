@@ -104,10 +104,25 @@ def trigger(
     if not row:
         raise KeyError(f"workflow {workflow_id} not found")
     if row.get("status") != "active":
-        raise PermissionError(
-            f"workflow {workflow_id} is {row.get('status')} "
-            f"({row.get('paused_reason') or 'no reason recorded'})"
-        )
+        # A budget-exhaustion pause must not outlive the budget period:
+        # if today's counters are back under every cap, auto-resume.
+        if (row.get("paused_reason") or "").startswith("task budget"):
+            from . import budgets
+
+            wf = models.validate_definition(row["definition"])
+            if budgets.budget_reset_for_today(db, org_id, workflow_id, wf.budget):
+                set_status(db, org_id, workflow_id, "active")
+                row = get_workflow(db, org_id, workflow_id)
+            else:
+                raise PermissionError(
+                    f"workflow {workflow_id} is paused "
+                    f"({row.get('paused_reason') or 'no reason recorded'})"
+                )
+        else:
+            raise PermissionError(
+                f"workflow {workflow_id} is {row.get('status')} "
+                f"({row.get('paused_reason') or 'no reason recorded'})"
+            )
     return executor.run_workflow(db, org_id, row, trigger_input or {})
 
 

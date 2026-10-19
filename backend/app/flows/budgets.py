@@ -149,6 +149,12 @@ def check_and_consume(
     over_cost = new_cost > budget.max_cost_per_day_cents
     if over_runs or over_cost:
         _pause_workflow(db, org_id, workflow_id, "task budget exhausted (100%)")
+        try:
+            db.table("flw_workflows").update(
+                {"last_warning": "budget hit 100% — workflow auto-paused"}
+            ).eq("id", workflow_id).eq("org_id", org_id).execute()
+        except Exception as exc:
+            log.warning("flows: warning state write failed: %s", exc)
         return "blocked", {"workflow_paused": True, "reason": "budget 100%"}
 
     # 80% on any dimension -> warn once per day.
@@ -177,17 +183,40 @@ def check_and_consume(
     }
 
 
-def toll_step(db: Client, org_id: str, run_id: str, step_id: str) -> None:
-    """Emit the $0.01 step toll. TW-208: ledger failure never fails the run."""
+def toll_step(
+    db: Client, org_id: str, run_id: str, step_id: str, key_suffix: str = ""
+) -> None:
+    """Emit the $0.01 step toll. TW-208: ledger failure never fails the run.
+
+    key_suffix distinguishes loop iterations (":3") so the idempotency
+    key stays unique per executed step — iterations 2+ are tolled, not
+    deduped away.
+    """
     try:
         toll_service.record_toll_event(
             db,
             org_id,
             "flows.step_executed",
             quantity=1,
-            idempotency_key=f"flows:{run_id}:{step_id}",
+            idempotency_key=f"flows:{run_id}:{step_id}{key_suffix}",
             source_type="flw_run_steps",
-            source_id=f"{run_id}:{step_id}",
+            source_id=f"{run_id}:{step_id}{key_suffix}",
         )
     except Exception as exc:
         log.warning("flows: step toll failed (run unaffected): %s", exc)
+
+
+def budget_reset_for_today(
+    db: Client, org_id: str, workflow_id: str, budget: models.Budget
+) -> bool:
+    """True when today's counters are back under every cap.
+
+    Used to auto-resume workflows that were paused on a 100% budget hit
+    once the UTC day rolls over — a pause must not outlive the budget
+    period that caused it.
+    """
+    counter = _get_counter(db, org_id, workflow_id)
+    return (
+        counter["runs"] < budget.max_runs_per_day
+        and counter["cost_cents"] < budget.max_cost_per_day_cents
+    )

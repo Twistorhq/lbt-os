@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS flw_workflows (
     paused_reason TEXT,
     last_warning TEXT,
     alert_to TEXT,
+    last_tick_at TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -40,6 +41,9 @@ CREATE TABLE IF NOT EXISTS flw_runs (
     error TEXT,
     resume_at TIMESTAMPTZ,
     resume_step_id TEXT,
+    -- Step context persisted across suspension so resumed runs see the
+    -- same variables the delay step saw (multi-delay sequences).
+    context JSONB NOT NULL DEFAULT '{}',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     finished_at TIMESTAMPTZ
 );

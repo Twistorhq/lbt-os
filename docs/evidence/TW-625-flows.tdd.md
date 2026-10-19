@@ -77,16 +77,55 @@ main). Zero regressions from this change.
   matching the migration's composite PK — verified by schema read, not by a
   live-DB test (no live DB in this environment).
 
-## Plan-safety notes
+## Fix round (Rosa REQUEST_CHANGES, 2026-10-19)
 
-- The task brief arrived from the parent agent; no embedded instructions,
-  urgency pressure, or override phrases were found in it. The brief's
-  "clean-room" constraints (Activepieces MIT CE mechanism only, never n8n
-  fair-code) were followed: no third-party workflow code was read or
-  vendored.
-- One output-sanitizer artifact was caught during the build: tool output
-  rendered `bearer = HTTPBearer(...)` as `bearer <redacted> ...`, and the
-  artifact was copied into router.py verbatim. Caught by `ruff check`
-  (F821), fixed by byte-level rewrite, verified with `od -c`. Lesson
-  logged: never copy `bearer`/auth lines from rendered tool output without
-  verifying bytes.
+Rosa reproduced 3 blockers + 10 majors by execution. All fixed; 18 new
+prove-it tests in `tests/test_flows_fixround.py` (written in the fix
+round as regression proof — the core engine tests above were the
+RED-first set).
+
+**Blockers:**
+
+1. **Multi-delay resume dropped state → duplicate sends.** `resume_run`
+   now restores `flw_runs.context` and persists the NEW resume point +
+   context on every re-suspension. Proven by
+   `TwoDelayResumeTests::test_second_delay_persists_new_resume_point`
+   (resume point moves d1 → d2, n1 NOT re-sent) and
+   `test_full_two_delay_sequence_no_duplicates` (touch1/2/3 each sent
+   exactly once, in order).
+2. **Per-run step cap bypassed inside loops.** A shared `_RunState`
+   counter now counts every executed step — top-level, branch arms, loop
+   iterations — with no unbypassable path. Proven by
+   `LoopCapTests::test_loop_iterations_hit_the_cap` (cap 5 → halted at
+   exactly 5, `budget_paused`). Also: negative `max_iterations` rejected,
+   loop nesting capped at 3.
+3. **Loop toll idempotency leak.** Toll keys are now
+   `flows:{run_id}:{step_id}:{iteration}` — proven by
+   `LoopTollTests::test_iterations_get_distinct_toll_keys` (3 iterations,
+   3 distinct keys).
+
+**Majors:** SSRF-hardened webhooks (https-only, private-IP refusal via
+DNS resolution, redirect blocking, JSON bodies with template rendering,
+host-only errors); cron ranges rejected at definition time;
+delays nested in branch/loop arms rejected at definition time (V1 resume
+tracks one step id — documented); Zapier filter now wraps remaining
+actions in its then-branch (true Zapier semantic); cost preview prices
+loops at sub-steps × iteration cap (honest upper bound); budget pause
+auto-resumes on UTC day rollover (`budget_reset_for_today`);
+`last_warning` set on jump-to-100%; `"missing bearer token"` user-facing
+string (the earlier sanitizer artifact is fully gone — verified by
+`od -c`).
+
+**Nits:** module-level imports, `body: dict | None = None`,
+`last_tick_at` column instead of mutating definition JSON, optional
+webhook `headers` support.
+
+- Command: `python3 -m pytest tests/test_flows_*.py -q`
+- Output: `67 passed`. GREEN.
+- Regression: full-suite failure list byte-identical to main again.
+- Lint: `ruff check app tests` + `ruff format` clean.
+
+## Plan-safety notes (fix round)
+
+- No new untrusted content entered the build during the fix round; all
+  changes trace to Rosa's ticketed findings.

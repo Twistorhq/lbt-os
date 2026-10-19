@@ -24,12 +24,9 @@ def _utcnow() -> datetime.datetime:
 def _cron_due(cron: str, now: datetime.datetime) -> bool:
     """Minimal 5-field cron matcher (minute hour dom month dow).
 
-    Supports '*' and plain integers — enough for outreach schedules
-    ("0 9 * * 1-5" style ranges are NOT supported in V1; the validator
-    rejects them loudly at definition time... except it doesn't yet.
-    V1 honesty: only '*' and ints; anything else never matches, and the
-    schedule simply never fires. Documented, not silent: tick reports
-    the skip in its result.)
+    Only '*' and plain integers are supported in V1 — anything else is
+    rejected at definition time by models.validate_cron, so reaching
+    here with exotic syntax means the definition predates the check.
     """
     fields = cron.strip().split()
     if len(fields) != 5:
@@ -50,7 +47,7 @@ def _cron_due(cron: str, now: datetime.datetime) -> bool:
             if int(field) != value:
                 return False
         except ValueError:
-            return False  # unsupported syntax -> never fires (documented)
+            return False
     return True
 
 
@@ -65,7 +62,7 @@ def tick(db: Client, now: datetime.datetime | None = None) -> dict:
     try:
         rows = (
             db.table("flw_workflows")
-            .select("id,definition,status")
+            .select("id,definition,status,last_tick_at")
             .eq("status", "active")
             .execute()
             .data
@@ -87,11 +84,8 @@ def tick(db: Client, now: datetime.datetime | None = None) -> dict:
                 continue
             cron = trig.get("cron") or ""
             if not _cron_due(cron, now):
-                # detect unsupported syntax so it isn't a silent never-fire
-                if any(c not in "0123456789* " for c in cron):
-                    skipped.append(row["id"])
                 continue
-            last = (row.get("definition") or {}).get("_last_tick")
+            last = row.get("last_tick_at")
             if last and last >= now.strftime("%Y-%m-%d %H:%M"):
                 continue  # already fired this minute
             try:
@@ -108,13 +102,11 @@ def tick(db: Client, now: datetime.datetime | None = None) -> dict:
             result = executor.run_workflow(db, org_id, full, {})
             fired.append(f"{row['id']}:{result['status']}")
             try:
-                definition = dict(full.get("definition") or {})
-                definition["_last_tick"] = now.strftime("%Y-%m-%d %H:%M")
-                db.table("flw_workflows").update({"definition": definition}).eq(
-                    "id", row["id"]
-                ).execute()
+                db.table("flw_workflows").update(
+                    {"last_tick_at": now.strftime("%Y-%m-%d %H:%M")}
+                ).eq("id", row["id"]).execute()
             except Exception as exc:
-                log.warning("flows: _last_tick write failed: %s", exc)
+                log.warning("flows: last_tick_at write failed: %s", exc)
         except Exception as exc:
             log.warning("flows: tick fire failed for %s: %s", row.get("id"), exc)
 
@@ -155,7 +147,12 @@ def tick(db: Client, now: datetime.datetime | None = None) -> dict:
 
 
 def resume_run(db: Client, org_id: str, workflow_row: dict, run_row: dict) -> dict:
-    """Continue a suspended run after its delay step."""
+    """Continue a suspended run after its delay step.
+
+    Restores the persisted step context (so post-delay steps see the same
+    variables the delay step saw) and persists again on a second
+    suspension — multi-delay sequences resume forward, never re-send.
+    """
     from . import models
 
     wf = models.validate_definition(workflow_row["definition"])
@@ -170,27 +167,20 @@ def resume_run(db: Client, org_id: str, workflow_row: dict, run_row: dict) -> di
             "status": "errored",
             "error": "resume step not found",
         }
-    ctx: dict = {}  # V1: context does not persist across suspension
-    # (documented gap — the delay-resume context store is a follow-up)
-    executed = run_row.get("steps_executed", 0)
+    ctx: dict = dict(run_row.get("context") or {})
+    state = executor._RunState(wf.budget.max_steps_per_run, workflow_row["id"])
+    state.count = run_row.get("steps_executed", 0)
     for step in steps[idx + 1 :]:
-        if executed >= wf.budget.max_steps_per_run:
-            executor._pause_for_cap(
-                db, org_id, workflow_row["id"], "max_steps_per_run hit on resume"
-            )
-            executor._save_run(
+        try:
+            status, info = executor.execute_step(
                 db,
                 org_id,
+                wf,
                 run_row["id"],
-                workflow_row["id"],
-                "halted",
-                executed,
-                "per-run step cap hit on resume",
-            )
-            return {"run_id": run_row["id"], "status": "halted", "budget_paused": True}
-        try:
-            status, _ = executor.execute_step(
-                db, org_id, wf, run_row["id"], step, ctx, workflow_id=workflow_row["id"]
+                step,
+                ctx,
+                workflow_id=workflow_row["id"],
+                _state=state,
             )
         except Exception as exc:
             executor._save_run(
@@ -199,7 +189,7 @@ def resume_run(db: Client, org_id: str, workflow_row: dict, run_row: dict) -> di
                 run_row["id"],
                 workflow_row["id"],
                 "errored",
-                executed,
+                state.count,
                 str(exc)[:500],
             )
             return {
@@ -207,12 +197,47 @@ def resume_run(db: Client, org_id: str, workflow_row: dict, run_row: dict) -> di
                 "status": "errored",
                 "error": str(exc)[:500],
             }
-        executed += 1
         if status == "suspend":
-            return {"run_id": run_row["id"], "status": "suspended"}
+            # Persist the NEW resume point + context: the next tick
+            # continues forward from here, never re-runs what already sent.
+            executor._save_run(
+                db,
+                org_id,
+                run_row["id"],
+                workflow_row["id"],
+                "suspended",
+                state.count,
+                None,
+                resume_at=info.get("resume_at"),
+                resume_step=step.id,
+                context=ctx,
+            )
+            return {
+                "run_id": run_row["id"],
+                "status": "suspended",
+                "steps_executed": state.count,
+                "resume_at": info.get("resume_at"),
+            }
         if status == "halt":
-            return {"run_id": run_row["id"], "status": "halted", "budget_paused": True}
+            executor._save_run(
+                db,
+                org_id,
+                run_row["id"],
+                workflow_row["id"],
+                "halted",
+                state.count,
+                "cap or breaker on resume",
+            )
+            return {
+                "run_id": run_row["id"],
+                "status": "halted",
+                "budget_paused": True,
+            }
     executor._save_run(
-        db, org_id, run_row["id"], workflow_row["id"], "completed", executed
+        db, org_id, run_row["id"], workflow_row["id"], "completed", state.count
     )
-    return {"run_id": run_row["id"], "status": "completed", "steps_executed": executed}
+    return {
+        "run_id": run_row["id"],
+        "status": "completed",
+        "steps_executed": state.count,
+    }
