@@ -12,12 +12,23 @@ log = logging.getLogger(__name__)
 
 REFRESH_TTL_DAYS = 30
 MAGIC_LINK_TTL_MINUTES = 15
+MIN_PASSWORD_LENGTH = 12
 
 _cached_keypair: Keypair | None = None
+_cached_previous: Keypair | None = None
+
+
+def _dev_mode() -> bool:
+    return os.environ.get("TWISTOR_IDENTITY_ALLOW_EPHEMERAL", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
 
 
 def get_keypair() -> Keypair:
-    """Load the signing keypair. Env first; ephemeral dev fallback (loud)."""
+    """Load the signing keypair. Env first; ephemeral ONLY with explicit
+    dev flag (M1: multi-worker deployments must never silently diverge)."""
     global _cached_keypair
     if _cached_keypair:
         return _cached_keypair
@@ -25,14 +36,41 @@ def get_keypair() -> Keypair:
     kid = os.environ.get("TWISTOR_IDENTITY_KID", "tw-1")
     if pem:
         _cached_keypair = keys.load_keypair(pem, kid)
-    else:
+    elif _dev_mode():
         warnings.warn(
-            "TWISTOR_IDENTITY_PRIVATE_KEY not set — using EPHEMERAL keypair. "
-            "Tokens will NOT survive restarts. Set the env var in production."
+            "TWISTOR_IDENTITY_ALLOW_EPHEMERAL=true — using EPHEMERAL keypair. "
+            "Tokens will NOT verify across workers or restarts."
         )
-        log.warning("identity: ephemeral keypair in use (dev only)")
+        log.warning("identity: ephemeral keypair in use (explicit dev flag)")
         _cached_keypair = keys.generate_keypair(kid="tw-dev-ephemeral")
+    else:
+        raise RuntimeError(
+            "TWISTOR_IDENTITY_PRIVATE_KEY is not set and "
+            "TWISTOR_IDENTITY_ALLOW_EPHEMERAL is not enabled. Refusing to "
+            "start with an ephemeral signing key."
+        )
     return _cached_keypair
+
+
+def get_previous_keypair() -> Keypair | None:
+    """Previous signing key for rotation grace (M3: kid grace window)."""
+    global _cached_previous
+    if _cached_previous:
+        return _cached_previous
+    pem = os.environ.get("TWISTOR_IDENTITY_PREVIOUS_PRIVATE_KEY")
+    if not pem:
+        return None
+    kid = os.environ.get("TWISTOR_IDENTITY_PREVIOUS_KID", "tw-0")
+    _cached_previous = keys.load_keypair(pem, kid)
+    return _cached_previous
+
+
+def get_verification_keypairs() -> list[Keypair]:
+    kps = [get_keypair()]
+    prev = get_previous_keypair()
+    if prev:
+        kps.append(prev)
+    return kps
 
 
 def _now():
@@ -113,6 +151,10 @@ def signup(db, email: str, password: str, org_name: str | None = None) -> dict:
     """Create user + org + owner membership. Returns user (no session until
     first login — explicit, auditable)."""
     email = email.strip().lower()
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise tokens.TokenError(
+            f"password must be at least {MIN_PASSWORD_LENGTH} characters"
+        )
     existing = (
         db.table("idn_users").select("id").eq("email", email).limit(1).execute()
     ).data
@@ -172,6 +214,10 @@ def login(db, email: str, password: str, ip=None, user_agent=None) -> dict:
 
 
 def _open_session(db, user: dict, ip=None, user_agent=None) -> dict:
+    # B3: the disabled check lives here so EVERY session-minting path
+    # (login, magic link, OAuth, SAML, Clerk migration) enforces it.
+    if user.get("is_disabled"):
+        raise tokens.TokenError("account disabled")
     kp = get_keypair()
     orgs = _user_orgs(db, user["id"])
     org_id = orgs[0]["org_id"] if orgs else None
@@ -278,16 +324,19 @@ def consume_magic_link(db, raw_token: str, ip=None, user_agent=None) -> dict:
     if not res.data:
         raise tokens.TokenError("invalid magic link")
     link = res.data[0]
-    if link.get("used_at"):
-        raise tokens.TokenError("magic link already used")
     if datetime.fromisoformat(link["expires_at"]) < _now():
         raise tokens.TokenError("magic link expired")
-    (
+    # B1: atomic single-use — the UPDATE only lands when used_at IS NULL,
+    # so two concurrent consumes can't both succeed (no TOCTOU).
+    claimed = (
         db.table("idn_magic_links")
         .update({"used_at": _now().isoformat()})
         .eq("id", link["id"])
+        .is_("used_at", "null")
         .execute()
     )
+    if not claimed.data:
+        raise tokens.TokenError("magic link already used")
     user = link["idn_users"]
     if isinstance(user, list):
         user = user[0]

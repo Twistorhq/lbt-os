@@ -35,12 +35,24 @@ owning user, never logged. Flagged for Rosa's PII review.
   `sub=user_id, org=org_id, role, email_verified, kid` header.
 - Refresh: 32-byte opaque, sha256 stored. 30-day expiry, rotation on every
   use. Reuse of a rotated token → revoke entire family (theft detection).
-- Key mgmt: `TWISTOR_IDENTITY_PRIVATE_KEY` (PEM). Dev fallback: ephemeral
-  keypair with loud warning. `GET /identity/.well-known/jwks.json`
-  publishes public keys by kid; verification accepts current + previous kid
-  (grace window).
-- Passwords: argon2id (`argon2-cffi`). Magic links: 32-byte token, sha256
-  stored, 15-min expiry, single use.
+- Key mgmt: `TWISTOR_IDENTITY_PRIVATE_KEY` (PEM). Ephemeral keypair ONLY with
+  explicit `TWISTOR_IDENTITY_ALLOW_EPHEMERAL=true` (fail-hard otherwise —
+  multi-worker deployments must never silently diverge keys).
+  `GET /identity/.well-known/jwks.json` publishes public keys by kid.
+  Rotation grace: `TWISTOR_IDENTITY_PREVIOUS_PRIVATE_KEY` (+ optional
+  `_PREVIOUS_KID`) — `verify_access_token` matches the token's kid header
+  against current + previous keys, so the old kid verifies during rotation.
+- Passwords: argon2id (`argon2-cffi`), minimum 12 characters at signup.
+  Magic links: 32-byte token, sha256 stored, 15-min expiry, single use via
+  atomic conditional update (`used_at IS NULL`) — no TOCTOU.
+- Disabled accounts: `is_disabled` is enforced in `_open_session`, so every
+  session-minting path (login, magic link, OAuth, SAML, Clerk migration)
+  honors it.
+- Rate limits (slowapi, IP buckets): signup 10/hr, login 20/min, refresh
+  60/min, magic-link issue 5/hr, magic-link consume 20/min, Clerk
+  migration 10/hr.
+- Clerk migration: one-time per clerk_user_id (`clerk_migrated_at`),
+  sunsettable via `TWISTOR_IDENTITY_CLERK_MIGRATION_ENABLED=false`.
 
 ## Endpoints (`/identity` router)
 

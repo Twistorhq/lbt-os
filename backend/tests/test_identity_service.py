@@ -1,11 +1,15 @@
 """TW-619 service tests with an in-memory supabase-py-compatible fake."""
 
+import os
 import uuid
 from datetime import datetime, timezone
 
 import pytest
 
-from app.identity import service, tokens
+# M1: explicit dev flag required for ephemeral signing keys in tests.
+os.environ["TWISTOR_IDENTITY_ALLOW_EPHEMERAL"] = "true"
+
+from app.identity import service, tokens  # noqa: E402
 
 
 class _Result:
@@ -116,7 +120,7 @@ def db():
     return FakeDB()
 
 
-def _signup(db, email="a@x.co", pw="s3cret!!"):
+def _signup(db, email="a@x.co", pw="s3cret!!s3cret!!"):
     return service.signup(db, email, pw, org_name="Acme")
 
 
@@ -135,16 +139,16 @@ def test_signup_duplicate_email_rejected(db):
 
 def test_login_ok_and_bad_password(db):
     _signup(db)
-    sess = service.login(db, "a@x.co", "s3cret!!")
+    sess = service.login(db, "a@x.co", "s3cret!!s3cret!!")
     assert "access_token" in sess and "refresh_token" in sess
     assert sess["orgs"][0]["role"] == "owner"
     with pytest.raises(tokens.TokenError):
-        service.login(db, "a@x.co", "nope")
+        service.login(db, "a@x.co", "nope-nope-nope")
 
 
 def test_refresh_rotates_and_old_token_dies(db):
     _signup(db)
-    s1 = service.login(db, "a@x.co", "s3cret!!")
+    s1 = service.login(db, "a@x.co", "s3cret!!s3cret!!")
     s2 = service.refresh(db, s1["refresh_token"])
     assert s2["refresh_token"] != s1["refresh_token"]
     # old token was rotated -> presenting it again triggers reuse detection
@@ -157,7 +161,7 @@ def test_refresh_rotates_and_old_token_dies(db):
 
 def test_logout_kills_family(db):
     _signup(db)
-    s1 = service.login(db, "a@x.co", "s3cret!!")
+    s1 = service.login(db, "a@x.co", "s3cret!!s3cret!!")
     service.logout(db, s1["refresh_token"])
     with pytest.raises(tokens.TokenError):
         service.refresh(db, s1["refresh_token"])
@@ -180,7 +184,7 @@ def test_magic_link_provisions_passwordless_user(db):
 
 def test_switch_org_rejects_nonmember(db):
     _signup(db)
-    s1 = service.login(db, "a@x.co", "s3cret!!")
+    s1 = service.login(db, "a@x.co", "s3cret!!s3cret!!")
     uid = s1["user"]["id"]
     with pytest.raises(tokens.TokenError):
         service.switch_org(db, uid, "00000000-0000-0000-0000-000000000000")
@@ -188,8 +192,61 @@ def test_switch_org_rejects_nonmember(db):
 
 def test_switch_org_ok(db):
     _signup(db)
-    s1 = service.login(db, "a@x.co", "s3cret!!")
+    s1 = service.login(db, "a@x.co", "s3cret!!s3cret!!")
     uid, org_id = s1["user"]["id"], s1["orgs"][0]["org_id"]
     out = service.switch_org(db, uid, org_id)
     claims = tokens.verify_access_token(service.get_keypair(), out["access_token"])
     assert claims["org"] == org_id and claims["role"] == "owner"
+
+
+def test_signup_rejects_short_password(db):
+    with pytest.raises(tokens.TokenError):
+        service.signup(db, "short@x.co", "tiny", org_name="Acme")
+
+
+def test_disabled_user_blocked_everywhere(db):
+    _signup(db)
+    uid = (
+        db.table("idn_users")
+        .select("id")
+        .eq("email", "a@x.co")
+        .limit(1)
+        .execute()
+        .data[0]["id"]
+    )
+    db.table("idn_users").update({"is_disabled": True}).eq("id", uid).execute()
+    with pytest.raises(tokens.TokenError):
+        service.login(db, "a@x.co", "s3cret!!s3cret!!")
+    raw = service.issue_magic_link(db, "a@x.co")
+    with pytest.raises(tokens.TokenError):
+        service.consume_magic_link(db, raw)
+
+
+def test_ephemeral_keypair_requires_explicit_flag():
+    # fresh module state without the dev flag -> hard failure (M1)
+    os.environ.pop("TWISTOR_IDENTITY_ALLOW_EPHEMERAL", None)
+    os.environ.pop("TWISTOR_IDENTITY_PRIVATE_KEY", None)
+    import app.identity.service as svc
+
+    svc._cached_keypair = None
+    try:
+        with pytest.raises(RuntimeError):
+            svc.get_keypair()
+    finally:
+        os.environ["TWISTOR_IDENTITY_ALLOW_EPHEMERAL"] = "true"
+        svc._cached_keypair = None
+
+
+def test_kid_rotation_grace_window():
+    from app.identity import keys
+
+    old_kp = keys.generate_keypair(kid="tw-0")
+    new_kp = keys.generate_keypair(kid="tw-1")
+    tok = tokens.mint_access_token(old_kp, user_id="u1")
+    # old kid still verifies when presented in the grace list (M3)
+    claims = tokens.verify_access_token([new_kp, old_kp], tok)
+    assert claims["sub"] == "u1"
+    # unknown kid with no fallback -> rejected
+    other = keys.generate_keypair(kid="tw-9")
+    with pytest.raises(tokens.TokenError):
+        tokens.verify_access_token([other], tok)

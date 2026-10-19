@@ -44,17 +44,30 @@ def mint_access_token(
     )
 
 
-def verify_access_token(keypair: Keypair, token: str, issuer: str = ISSUER) -> dict:
-    try:
-        return jwt.decode(
-            token,
-            keypair.public_pem,
-            algorithms=["RS256"],
-            issuer=issuer,
-            options={"require_exp": True, "require_iss": True, "require_sub": True},
-        )
-    except JWTError as e:
-        raise TokenError(f"invalid token: {e}") from e
+def verify_access_token(keypairs, token: str, issuer: str = ISSUER) -> dict:
+    """Verify against the keypair whose kid matches the token header (M3:
+    rotation grace — previous kid still verifies during the window)."""
+    if isinstance(keypairs, Keypair):
+        keypairs = [keypairs]
+    kid = get_kid(token)
+    candidates = [kp for kp in keypairs if kp.kid == kid] or keypairs
+    last_err: Exception | None = None
+    for kp in candidates:
+        try:
+            return jwt.decode(
+                token,
+                kp.public_pem,
+                algorithms=["RS256"],
+                issuer=issuer,
+                options={
+                    "require_exp": True,
+                    "require_iss": True,
+                    "require_sub": True,
+                },
+            )
+        except JWTError as e:
+            last_err = e
+    raise TokenError(f"invalid token: {last_err}") from last_err
 
 
 def get_kid(token: str) -> str | None:

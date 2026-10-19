@@ -7,6 +7,7 @@ from supabase import Client
 
 from ..auth import _verify_clerk_jwt  # migration bridge reuses Clerk verifier
 from ..database import get_db
+from ..limiter import limiter
 from ..services import email as email_service
 from . import keys, service, tokens
 
@@ -58,7 +59,8 @@ def _token_err(e: tokens.TokenError) -> HTTPException:
 
 
 @router.post("/signup", status_code=201)
-def signup(body: SignupIn, db: Client = Depends(get_db)):
+@limiter.limit("10/hour")  # B2: mass-account-creation throttle
+def signup(req: Request, body: SignupIn, db: Client = Depends(get_db)):
     try:
         return service.signup(db, body.email, body.password, body.org_name)
     except tokens.TokenError as e:
@@ -66,6 +68,7 @@ def signup(body: SignupIn, db: Client = Depends(get_db)):
 
 
 @router.post("/login")
+@limiter.limit("20/minute")  # B2: brute-force throttle (IP bucket)
 def login(body: LoginIn, req: Request, db: Client = Depends(get_db)):
     try:
         return service.login(
@@ -80,6 +83,7 @@ def login(body: LoginIn, req: Request, db: Client = Depends(get_db)):
 
 
 @router.post("/refresh")
+@limiter.limit("60/minute")  # B2
 def refresh(body: RefreshIn, req: Request, db: Client = Depends(get_db)):
     try:
         return service.refresh(
@@ -96,18 +100,21 @@ def logout(body: RefreshIn, db: Client = Depends(get_db)):
 
 
 @router.post("/magic-link", status_code=202)
-def magic_link(body: MagicLinkIn, db: Client = Depends(get_db)):
+@limiter.limit("5/hour")  # B2: email-bombing throttle
+def magic_link(req: Request, body: MagicLinkIn, db: Client = Depends(get_db)):
     # Always 202 — never reveal whether the email exists.
     purpose = body.purpose if body.purpose in ("login", "verify") else "login"
     raw = service.issue_magic_link(db, body.email, purpose=purpose)
     # Fire-and-forget: Resend skips silently when unconfigured. The raw
     # token is emailed and never stored, logged, or returned.
     email_service.send_identity_magic_link(
-        to=body.email.strip().lower(), token=raw, purpose=purpose)
+        to=body.email.strip().lower(), token=raw, purpose=purpose
+    )
     return {"sent": True}
 
 
 @router.post("/magic-link/consume")
+@limiter.limit("20/minute")  # B2
 def magic_consume(body: MagicConsumeIn, req: Request, db: Client = Depends(get_db)):
     try:
         return service.consume_magic_link(
@@ -123,7 +130,9 @@ def _require_twistor_user(
     if not creds:
         raise HTTPException(status_code=401, detail="missing bearer token")
     try:
-        return tokens.verify_access_token(service.get_keypair(), creds.credentials)
+        return tokens.verify_access_token(
+            service.get_verification_keypairs(), creds.credentials
+        )
     except tokens.TokenError as e:
         raise _token_err(e)
 
@@ -157,14 +166,26 @@ def switch_org(
 
 @router.get("/.well-known/jwks.json")
 def jwks():
-    return keys.public_jwks([service.get_keypair()])
+    return keys.public_jwks(service.get_verification_keypairs())
 
 
 @router.post("/migrate/clerk")
+@limiter.limit("10/hour")  # B2
 def migrate_clerk(body: ClerkMigrateIn, req: Request, db: Client = Depends(get_db)):
     """One-time bridge: verify a Clerk JWT, link or create the Twistor
     identity user, and return a Twistor session. After migration the
-    client uses Twistor tokens exclusively."""
+    client uses Twistor tokens exclusively.
+
+    M4: replay-protected (clerk_migrated_at set once; repeats rejected)
+    and sunsettable via TWISTOR_IDENTITY_CLERK_MIGRATION_ENABLED=false.
+    """
+    import datetime
+    import os
+
+    if os.environ.get(
+        "TWISTOR_IDENTITY_CLERK_MIGRATION_ENABLED", "true"
+    ).lower() not in ("1", "true", "yes"):
+        raise HTTPException(status_code=410, detail="Clerk migration window is closed")
     try:
         payload = _verify_clerk_jwt(body.clerk_jwt)
     except HTTPException:
@@ -172,14 +193,22 @@ def migrate_clerk(body: ClerkMigrateIn, req: Request, db: Client = Depends(get_d
     clerk_id = payload.get("sub")
     if not clerk_id:
         raise HTTPException(status_code=401, detail="invalid Clerk token")
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     existing = (
         db.table("idn_users")
-        .select("id")
+        .select("id,clerk_migrated_at")
         .eq("clerk_user_id", clerk_id)
         .limit(1)
         .execute()
     ).data
     if existing:
+        if existing[0].get("clerk_migrated_at"):
+            raise HTTPException(
+                status_code=409, detail="already migrated to Twistor Identity"
+            )
+        db.table("idn_users").update({"clerk_migrated_at": now}).eq(
+            "id", existing[0]["id"]
+        ).execute()
         user = (
             db.table("idn_users")
             .select("*")
@@ -195,9 +224,8 @@ def migrate_clerk(body: ClerkMigrateIn, req: Request, db: Client = Depends(get_d
                 {
                     "email": str(email).lower(),
                     "clerk_user_id": clerk_id,
-                    "email_verified_at": __import__("datetime")
-                    .datetime.now(__import__("datetime").timezone.utc)
-                    .isoformat(),
+                    "clerk_migrated_at": now,
+                    "email_verified_at": now,
                 }
             )
             .execute()

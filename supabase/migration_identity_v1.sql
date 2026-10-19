@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS idn_users (
     password_hash TEXT,
     email_verified_at TIMESTAMPTZ,
     clerk_user_id TEXT UNIQUE,
+    clerk_migrated_at TIMESTAMPTZ,  -- M4: one-time migration enforcement
     last_sign_in_at TIMESTAMPTZ,
     is_disabled BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -118,3 +119,14 @@ ALTER TABLE idn_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE idn_magic_links ENABLE ROW LEVEL SECURITY;
 ALTER TABLE idn_oauth_accounts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE idn_sso_configs ENABLE ROW LEVEL SECURITY;
+
+-- =============================================================
+-- DOWN section (manual rollback, reverse order)
+-- =============================================================
+-- DROP TABLE IF EXISTS idn_sso_configs;
+-- DROP TABLE IF EXISTS idn_oauth_accounts;
+-- DROP TABLE IF EXISTS idn_magic_links;
+-- DROP TABLE IF EXISTS idn_sessions;
+-- DROP TABLE IF EXISTS idn_org_memberships;
+-- DROP TABLE IF EXISTS idn_users;
+-- DROP FUNCTION IF EXISTS idn_touch_updated_at();
