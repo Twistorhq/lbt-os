@@ -59,6 +59,28 @@ def sha256_file(path: str, chunk: int = 1 << 20) -> str:
     return h.hexdigest()
 
 
+# TW-552 PII doctrine: contact-shaped metadata values are hashed at ingestion,
+# never stored raw. Keys matching these patterns get sha256 treatment.
+_CONTACT_KEY_HINTS = ("email", "phone", "contact", "address", "name")
+
+
+def hash_pii_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of metadata with contact-shaped values hashed.
+
+    Keys containing email/phone/contact/address/name hints have their values
+    replaced with 'sha256:<digest>'. Everything else passes through verbatim.
+    """
+    out = {}
+    for key, value in metadata.items():
+        if any(hint in key.lower() for hint in _CONTACT_KEY_HINTS) and isinstance(
+            value, str
+        ):
+            out[key] = "sha256:" + hashlib.sha256(value.encode()).hexdigest()
+        else:
+            out[key] = value
+    return out
+
+
 def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -99,6 +121,37 @@ class BronzeWriter:
                     break
                 out.write(block)
 
+    # -- license validation -------------------------------------------------
+    @staticmethod
+    def _validate_license(item: IngestItem) -> None:
+        """Refuse items whose declared license doesn't match the registry.
+
+        Registered source_key: the tag must be exactly the registered one.
+        "custom": GREEN is refused without a written justification in metadata
+        (prevents silent self-declared GREEN for RED sources).
+        """
+        from .licenses import KNOWN_LICENSES, VERDICT_GREEN
+
+        if item.source_key == "custom":
+            if item.license.verdict == VERDICT_GREEN and not item.metadata.get(
+                "license_justification"
+            ):
+                raise ValueError(
+                    "custom source claiming GREEN needs metadata['license_justification']"
+                )
+            return
+        expected = KNOWN_LICENSES.get(item.source_key)
+        if expected is None:
+            raise ValueError(
+                f"unknown source_key {item.source_key!r}: not in license registry"
+            )
+        if item.license != expected:
+            raise ValueError(
+                f"license mismatch for {item.source_key!r}: declared "
+                f"{item.license.tag}/{item.license.verdict}, registry says "
+                f"{expected.tag}/{expected.verdict}"
+            )
+
     # -- idempotency ----------------------------------------------------------
     def _existing_by_hash(self, content_hash: str) -> str | None:
         resp = (
@@ -114,12 +167,27 @@ class BronzeWriter:
 
     # -- write ----------------------------------------------------------------
     def write(self, item: IngestItem) -> IngestResult:
-        """Fetch one item into bronze. Never raises for item-level failures."""
-        lane_dir = os.path.join(self.storage_root, self.lane)
-        os.makedirs(lane_dir, exist_ok=True)
-        tmp_fd, tmp_path = tempfile.mkstemp(prefix="ingest-", dir=lane_dir)
-        os.close(tmp_fd)
+        """Fetch one item into bronze. Never raises for item-level failures.
+
+        License hardening (Rosa TW-612): the declared license is validated
+        against the registry before a byte is stored. A planner cannot
+        self-declare GREEN for a RED source.
+        """
         try:
+            self._validate_license(item)
+        except ValueError as exc:
+            log.warning(
+                "bronze license rejected lane=%s url=%s: %s",
+                self.lane,
+                item.remote_url,
+                exc,
+            )
+            return IngestResult(item, None, None, error=str(exc))
+        lane_dir = os.path.join(self.storage_root, self.lane)
+        try:
+            os.makedirs(lane_dir, exist_ok=True)
+            tmp_fd, tmp_path = tempfile.mkstemp(prefix="ingest-", dir=lane_dir)
+            os.close(tmp_fd)
             self.fetcher(item.remote_url, tmp_path)
             content_hash = sha256_file(tmp_path)
 
@@ -148,7 +216,7 @@ class BronzeWriter:
                 "license_tag": item.license.tag,
                 "license_verdict": item.license.verdict,
                 "license_source_url": item.license.source_url,
-                "source_metadata": item.metadata,
+                "source_metadata": hash_pii_metadata(item.metadata),
             }
             resp = self.db.table("sci_bronze_artifacts").insert(row).execute()
             data = getattr(resp, "data", None) or []

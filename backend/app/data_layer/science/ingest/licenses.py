@@ -8,9 +8,12 @@ YELLOW = usable only after a per-source check Dre performs at ingest time
 RED    = excluded from any revenue-touching product. May live in bronze for
          research/provenance, NEVER in gold, NEVER behind the paywall.
 
-The paywall must never sell what the license does not allow. gold_promotion
-is refused for anything that is not GREEN -- this is enforced in code
-(can_promote_to_gold) and in the DB (CHECK constraint in the migration).
+The paywall must never sell what the license does not allow. Gold promotion
+is refused for anything that is not GREEN -- enforced in code
+(can_promote_to_gold, assert_gold_eligible, BronzeWriter.gold_gate, and
+write()-time registry validation). The migration constrains the verdict
+enum and exposes a GREEN-only view; full license lineage into dataset
+versions is a follow-up (the paywalled surface is application-gated today).
 """
 
 from __future__ import annotations
@@ -207,7 +210,19 @@ register(
         tag="CC-BY-4.0",
         verdict=VERDICT_GREEN,
         source_url="https://www.isric.org/accessing-wosis-using-r",
-        notes="Public-tier WoSIS records only. Restricted-tier records use wosis-restricted (RED).",
+        notes="Public-tier WoSIS records only (datasetCode in the public tier). "
+        "Assigned per-profile by retier_wosis_artifact(), never at page plan time.",
+    ),
+)
+register(
+    "wosis-untiered",
+    LicenseTag(
+        tag="tier-pending",
+        verdict=VERDICT_YELLOW,
+        source_url="https://www.isric.org/accessing-wosis-using-r",
+        notes="Page-level artifact before per-profile tier resolution. YELLOW until "
+        "retier_wosis_artifact() splits public (GREEN) from restricted (RED). "
+        "Never promotable to gold in this state.",
     ),
 )
 register(

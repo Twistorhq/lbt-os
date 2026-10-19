@@ -8,7 +8,7 @@ Medallion discipline for real data:
             preserved, never converted silently.
   gold    - ONLY records whose license_verdict is GREEN (redistributable).
             NC / restricted / unknown licenses are quarantined out of gold
-            by construction: promote_to_gold() refuses anything else.
+            by construction: assert_gold_eligible() refuses anything else.
 
 PII doctrine (TW-552): source contact info is hashed at ingestion, never raw.
 """

@@ -54,26 +54,57 @@ def wosis_profiles_query(first: int = 100, after: str | None = None) -> dict:
 
 
 def plan_wosis(pages: int = 1, page_size: int = 100) -> list[IngestItem]:
-    """WoSIS carbon profiles. YELLOW: the worker checks each profile's
-    dataset license tier; public -> wosis-public (GREEN), restricted ->
-    wosis-restricted (RED, flagged partition, never gold)."""
+    """WoSIS carbon profiles. Pages are tagged YELLOW (wosis-untiered) at plan
+    time because the license tier rides each profile's datasetCode. The worker
+    MUST call retier_wosis_artifact() on the fetched page before writing: it
+    splits public-tier profiles (GREEN) from restricted-tier (RED, flagged
+    partition, never gold). A page artifact must never reach gold untiered."""
     return [
         IngestItem(
-            source_key="wosis-public",
+            source_key="wosis-untiered",
             remote_url=WOSIS_GRAPHQL,
             filename=f"wosis/wosis_carbon_page{i:04d}.json",
-            license=KNOWN_LICENSES["wosis-public"],
+            license=KNOWN_LICENSES["wosis-untiered"],
             metadata={
                 "page": i,
                 "page_size": page_size,
                 "query": "wosisLatestProfiles layersExist, ORGC/TOTC layers",
-                "license_check": "per-profile datasetCode tier: public->green, restricted->red. "
-                "Restricted profiles re-tagged to wosis-restricted at write time.",
+                "license_check": "REQUIRED: retier_wosis_artifact() per-profile datasetCode "
+                "tier before write. public->wosis-public (green), "
+                "restricted->wosis-restricted (red).",
                 "method_gating": "methodCode preserved per layer; unknown -> provenance_incomplete",
             },
         )
         for i in range(pages)
     ]
+
+
+# WoSIS datasetCodes observed in the restricted tier (ISRIC dashboard).
+# The worker treats any datasetCode NOT on the public list as restricted
+# (fail-closed): unknown tiers quarantine, they don't promote.
+WOSIS_PUBLIC_DATASET_CODES = frozenset(
+    {
+        # Populated at integration time from https://dashboards.isric.org/superset/dashboard/wosis_licenses
+        # Seed entries verified 2026-10-18; the worker refreshes this list per run.
+        "AF-AfSIS-I",
+    }
+)
+
+
+def retier_wosis_artifact(
+    profiles: list[dict],
+    public_codes: frozenset = WOSIS_PUBLIC_DATASET_CODES,
+) -> tuple[list[dict], list[dict]]:
+    """Split a fetched WoSIS page into (public, restricted) profile lists.
+
+    Fail-closed: a profile whose datasetCode is not on the public list lands
+    in the restricted bucket. The worker writes the two buckets as separate
+    bronze artifacts tagged wosis-public (GREEN) and wosis-restricted (RED).
+    """
+    public, restricted = [], []
+    for p in profiles:
+        (public if p.get("datasetCode") in public_codes else restricted).append(p)
+    return public, restricted
 
 
 # ---------------------------------------------------------------- AmeriFlux (account-gated)
@@ -180,7 +211,11 @@ def plan_registry_crosswalk(
 ) -> list[IngestItem]:
     """Puro / Isometric / Carbonfuture public data. YELLOW: silver only until
     independently replicated. Model-only MRV claims with no measurement
-    anchor are excluded from gold by construction."""
+    anchor are excluded from gold by construction.
+
+    STUB (2026-10-18): registry.twistor.co does not exist yet. The fetcher
+    will fail into the run manifest until the crosswalk endpoint is provisioned.
+    Do not treat planned items as fetched."""
     lic = KNOWN_LICENSES["registry-crosswalk"]
     return [
         IngestItem(

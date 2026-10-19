@@ -26,19 +26,26 @@ replacing synthetic seeds with real open data per Diego's TW-610 plan.
 ### Verification
 - 31/31 new tests green; 100/100 with carbon + subseasonal suites
 - ruff check + format clean
-- E2E proveout: real GEFS .idx bytes fetched from live S3
-  (noaa-gefs-retrospective) -> bronze, sha256-hashed, US-PD/green tagged
-- WoSIS GraphQL verified live: real profiles returned from
-  https://graphql.isric.org/wosis/graphql
-- WB2 ERA5 Zarr store verified live in GCS
-- 20CRv3 tarball URL pattern verified against NERSC portal docs
+- Manual spot-checks (2026-10-18, not committed scripts): real GEFS .idx
+  bytes fetched from live S3 (noaa-gefs-retrospective) -> bronze,
+  sha256-hashed, US-PD/green tagged; WoSIS GraphQL returned real profiles;
+  WB2 ERA5 Zarr store reachable in GCS; 20CRv3 tarball URL pattern matches
+  NERSC portal docs. Plausible and URL-exact, but label them honestly:
+  spot-checks, not automated proveout.
+- Registry: 20 sources (7 S2S + 6 crops + 7 carbon), all pinned in tests.
 
 ### License discipline (the money rule)
 Gold admits GREEN only, enforced in code (can_promote_to_gold,
-assert_gold_eligible, gold_gate re-resolves at promotion time) and in the
-migration (CHECK constraint + gold-eligible view). RED sources (S2S NC
-centers, AgroNT weights, WoSIS restricted tier) are excluded from paywalled
-surfaces by construction.
+assert_gold_eligible, gold_gate re-resolves at promotion time, write()
+validates declared licenses against the registry). The migration adds a
+CHECK on the verdict enum plus a `sci_bronze_gold_eligible` view (GREEN
+only) for future minting code to join against.
+
+HONEST SCOPE (Rosa TW-612 round 1): the DB does NOT yet enforce license
+lineage into `sci_dataset_versions` — the paywalled surface served by
+paywall.py has no license FK or check. The enforcement today is
+application-level. Follow-up ticketed: carry license lineage into dataset
+versions (mint-time assertion or version->artifacts join).
 
 ### Account-gated sources (need Justynn to create)
 - ECDS account (S2S database) — free

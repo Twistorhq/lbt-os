@@ -12,6 +12,7 @@ from app.data_layer.science.ingest import licenses as L
 from app.data_layer.science.ingest.bronze import (
     BronzeWriter,
     IngestItem,
+    hash_pii_metadata,
     write_run_manifest,
 )
 
@@ -55,12 +56,17 @@ class TestLicenseVerdicts:
             "20crv3",
             "era5-wb2",
             "s2s-db-ccby",
+            "s2s-db-ccbync",
+            "ai-weather-quest",
+            "wb2-ifs-baseline",
             "g2f",
             "grin-genesys",
             "must-c",
             "hemp-missouri-ncstate",
+            "hemp-uvm-osu-pdf",
             "agront",
             "wosis-public",
+            "wosis-untiered",
             "wosis-restricted",
             "ameriflux",
             "gedi",
@@ -310,6 +316,24 @@ class TestCarbonAdapters:
         items = carbon.plan_wosis(pages=1)
         assert "license_check" in items[0].metadata
 
+    def test_wosis_plan_tags_yellow_not_green(self):
+        # Rosa TW-612 Blocker 1: pages must not be pre-tagged GREEN; the tier
+        # is per-profile and resolved by retier_wosis_artifact().
+        for it in carbon.plan_wosis(pages=2):
+            assert it.license.verdict == "yellow"
+            assert it.source_key == "wosis-untiered"
+            assert not L.can_promote_to_gold(it.license)
+
+    def test_wosis_retier_splits_public_restricted(self):
+        profiles = [
+            {"profileId": 1, "datasetCode": "AF-AfSIS-I"},
+            {"profileId": 2, "datasetCode": "XX-RESTRICTED"},
+            {"profileId": 3},  # no datasetCode: fail-closed -> restricted
+        ]
+        public, restricted = carbon.retier_wosis_artifact(profiles)
+        assert [p["profileId"] for p in public] == [1]
+        assert [p["profileId"] for p in restricted] == [2, 3]
+
     def test_ameriflux_marks_account_required(self):
         items = carbon.plan_ameriflux(["US-Ne1"])
         assert "FLUXDATA account required" in items[0].metadata["note"]
@@ -323,3 +347,128 @@ class TestCarbonAdapters:
         for it in carbon.plan_registry_crosswalk():
             assert it.license.verdict == "yellow"
             assert not L.can_promote_to_gold(it.license)
+
+
+# ---------------------------------------------------------------- Rosa TW-612 round-1 fixes
+
+
+class TestLicenseValidation:
+    def test_write_refuses_license_mismatch(self, tmp_path):
+        db = FakeDB()
+        w = BronzeWriter(
+            str(tmp_path),
+            db,
+            "lab-1",
+            "subseasonal",
+            fetcher=lambda url, dest: open(dest, "wb").write(b"x"),
+        )
+        bad = _item(license=L.KNOWN_LICENSES["agront"])  # RED tag on a GREEN source_key
+        res = w.write(bad)
+        assert res.artifact_id is None
+        assert "mismatch" in res.error
+
+    def test_write_refuses_custom_green_without_justification(self, tmp_path):
+        db = FakeDB()
+        w = BronzeWriter(
+            str(tmp_path),
+            db,
+            "lab-1",
+            "subseasonal",
+            fetcher=lambda url, dest: open(dest, "wb").write(b"x"),
+        )
+        bad = _item(source_key="custom", license=L.KNOWN_LICENSES["gefs-reforecast"])
+        res = w.write(bad)
+        assert res.artifact_id is None
+        assert "justification" in res.error
+
+    def test_write_accepts_custom_green_with_justification(self, tmp_path):
+        db = FakeDB()
+        w = BronzeWriter(
+            str(tmp_path),
+            db,
+            "lab-1",
+            "subseasonal",
+            fetcher=lambda url, dest: open(dest, "wb").write(b"x"),
+        )
+        ok = _item(
+            source_key="custom",
+            license=L.KNOWN_LICENSES["gefs-reforecast"],
+            metadata={
+                "license_justification": "reviewed ToU 2026-10-18, redistribution allowed"
+            },
+        )
+        res = w.write(ok)
+        assert res.artifact_id is not None
+
+    def test_write_refuses_unknown_source_key(self, tmp_path):
+        db = FakeDB()
+        w = BronzeWriter(
+            str(tmp_path),
+            db,
+            "lab-1",
+            "subseasonal",
+            fetcher=lambda url, dest: open(dest, "wb").write(b"x"),
+        )
+        bad = _item(source_key="nope-not-real")
+        res = w.write(bad)
+        assert res.artifact_id is None
+        assert "unknown source_key" in res.error
+
+
+class TestGoldGateNullFailClosed:
+    def test_null_verdict_raises(self, tmp_path):
+        # Pre-license-tagging bronze rows (NULL verdict) fail closed.
+        class NullVerdictDB(FakeDB):
+            def table(self, name):
+                t = super().table(name)
+                orig_execute = t.execute
+
+                def execute():
+                    r = orig_execute()
+                    if name == "sci_bronze_artifacts" and getattr(t, "_single", False):
+                        r.data["license_verdict"] = None
+                    return r
+
+                t.execute = execute
+                return t
+
+        db = NullVerdictDB()
+        w = BronzeWriter(
+            str(tmp_path),
+            db,
+            "lab-1",
+            "subseasonal",
+            fetcher=lambda url, dest: open(dest, "wb").write(b"x"),
+        )
+        res = w.write(_item())
+        with pytest.raises((L.LicenseQuarantineError, ValueError)):
+            w.gold_gate(res.artifact_id)
+
+
+class TestPiiHashing:
+    def test_contact_values_hashed(self):
+        out = hash_pii_metadata(
+            {
+                "contact_email": "person@example.com",
+                "site": "US-Ne1",
+                "phone": "555-0100",
+            }
+        )
+        assert out["contact_email"].startswith("sha256:")
+        assert out["phone"].startswith("sha256:")
+        assert "person@example.com" not in out["contact_email"]
+        assert out["site"] == "US-Ne1"
+
+    def test_write_hashes_contact_metadata(self, tmp_path):
+        db = FakeDB()
+        w = BronzeWriter(
+            str(tmp_path),
+            db,
+            "lab-1",
+            "subseasonal",
+            fetcher=lambda url, dest: open(dest, "wb").write(b"x"),
+        )
+        w.write(_item(metadata={"contact_email": "a@b.c", "note": "plain"}))
+        row = db.rows["sci_bronze_artifacts"][0]
+        assert row["source_metadata"]["contact_email"].startswith("sha256:")
+        assert row["source_metadata"]["note"] == "plain"

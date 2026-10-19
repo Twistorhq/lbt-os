@@ -25,6 +25,12 @@ COMMENT ON COLUMN sci_bronze_artifacts.license_verdict IS
 CREATE INDEX IF NOT EXISTS idx_sci_bronze_license
   ON sci_bronze_artifacts (lane, license_verdict);
 
+-- Idempotency race guard (Rosa TW-612): check-then-insert on
+-- (lane, content_hash) needs a uniqueness guarantee or concurrent
+-- workers double-insert.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_sci_bronze_lane_hash
+  ON sci_bronze_artifacts (lane, content_hash);
+
 -- Gold promotion gate: a per-lane helper view exposing only GREEN artifacts.
 -- Ingestors join silver rows to this view when minting gold snapshots.
 CREATE OR REPLACE VIEW sci_bronze_gold_eligible AS
