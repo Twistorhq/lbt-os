@@ -68,17 +68,32 @@ def hash_pii_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     """Return a copy of metadata with contact-shaped values hashed.
 
     Keys containing email/phone/contact/address/name hints have their values
-    replaced with 'sha256:<digest>'. Everything else passes through verbatim.
+    replaced with 'sha256:<digest>'. Recurses into nested dicts and lists so
+    {'contact': {'email': 'x'}} can't slip through raw. Everything else passes
+    through verbatim.
     """
-    out = {}
-    for key, value in metadata.items():
-        if any(hint in key.lower() for hint in _CONTACT_KEY_HINTS) and isinstance(
-            value, str
-        ):
-            out[key] = "sha256:" + hashlib.sha256(value.encode()).hexdigest()
-        else:
-            out[key] = value
-    return out
+    return _hash_pii_value(metadata)
+
+
+def _hash_pii_value(value: Any) -> Any:
+    """Hash contact-shaped leaf strings. A string value is hashed if and only
+    if its own key is contact-shaped; containers recurse so nested keys are
+    evaluated individually (a 'role' sibling of an 'email' stays plain)."""
+    if isinstance(value, dict):
+        out = {}
+        for k, v in value.items():
+            if _is_contact_key(k) and isinstance(v, str):
+                out[k] = "sha256:" + hashlib.sha256(v.encode()).hexdigest()
+            else:
+                out[k] = _hash_pii_value(v)
+        return out
+    if isinstance(value, (list, tuple)):
+        return [_hash_pii_value(v) for v in value]
+    return value
+
+
+def _is_contact_key(key: str) -> bool:
+    return any(hint in key.lower() for hint in _CONTACT_KEY_HINTS)
 
 
 def _utcnow() -> str:

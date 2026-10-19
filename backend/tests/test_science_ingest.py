@@ -459,6 +459,23 @@ class TestPiiHashing:
         assert "person@example.com" not in out["contact_email"]
         assert out["site"] == "US-Ne1"
 
+    def test_nested_contact_values_hashed(self):
+        # Rosa TW-612 round 2: nested structures must not slip through raw.
+        out = hash_pii_metadata(
+            {
+                "contact": {"email": "real@person.com", "role": "pi"},
+                "maintainers": [{"name": "Jane Doe"}, {"org": "NOAA"}],
+                "site": "US-Ne1",
+            }
+        )
+        assert out["contact"]["email"].startswith("sha256:")
+        assert "real@person.com" not in out["contact"]["email"]
+        assert out["contact"]["role"] == "pi"
+        assert out["maintainers"][0]["name"].startswith("sha256:")
+        assert "Jane Doe" not in out["maintainers"][0]["name"]
+        assert out["maintainers"][1]["org"] == "NOAA"
+        assert out["site"] == "US-Ne1"
+
     def test_write_hashes_contact_metadata(self, tmp_path):
         db = FakeDB()
         w = BronzeWriter(

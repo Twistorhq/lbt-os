@@ -24,7 +24,7 @@ replacing synthetic seeds with real open data per Diego's TW-610 plan.
 - `backend/tests/test_science_ingest.py` — 31 tests
 
 ### Verification
-- 31/31 new tests green; 100/100 with carbon + subseasonal suites
+- 40/40 new tests green; 109/109 with carbon + subseasonal + paywall suites
 - ruff check + format clean
 - Manual spot-checks (2026-10-18, not committed scripts): real GEFS .idx
   bytes fetched from live S3 (noaa-gefs-retrospective) -> bronze,
@@ -32,7 +32,7 @@ replacing synthetic seeds with real open data per Diego's TW-610 plan.
   WB2 ERA5 Zarr store reachable in GCS; 20CRv3 tarball URL pattern matches
   NERSC portal docs. Plausible and URL-exact, but label them honestly:
   spot-checks, not automated proveout.
-- Registry: 20 sources (7 S2S + 6 crops + 7 carbon), all pinned in tests.
+- Registry: 21 sources (7 S2S + 6 crops + 8 carbon), all pinned in tests.
 
 ### License discipline (the money rule)
 Gold admits GREEN only, enforced in code (can_promote_to_gold,

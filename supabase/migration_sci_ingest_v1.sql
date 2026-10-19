@@ -3,10 +3,9 @@
 -- Prepared by Twistor Holdings LLC
 --
 -- The license tag rides every record (Diego TW-610 medallion mapping).
--- Gold admits GREEN licenses only: enforced here with a CHECK constraint
--- so no application bug can sell what the license does not allow.
--- NC / restricted / unknown verdicts are quarantined out of gold by
--- construction.
+-- The migration constrains the verdict enum; application code enforces the
+-- gold promotion gate (see licenses.py). Full license lineage into dataset
+-- versions is a follow-up (TW-614).
 -- =====================================================================
 
 ALTER TABLE sci_bronze_artifacts
