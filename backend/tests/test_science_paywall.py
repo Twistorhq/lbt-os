@@ -240,6 +240,35 @@ def test_neutral_api_toll_converges_to_download_price(monkeypatch):
     assert calls[1]["amount_cents"] == 0
 
 
+def test_neutral_api_toll_capped_per_call(monkeypatch):
+    # Rosa (TW-606 round 2): a stale row_count must never let one API call
+    # exceed the $0.10 hard cap. served=10,000 with row_count=1 would charge
+    # $1,000 without the per-call cap.
+    calls = []
+
+    def fake_record(db, org_id, event_type, quantity=1.0, amount_cents=None,
+                    idempotency_key=None, **kw):
+        calls.append({"event_type": event_type, "amount_cents": amount_cents,
+                      "quantity": quantity})
+        return {"ok": True}
+
+    import app.services.toll_service as toll_service
+
+    monkeypatch.setattr(toll_service, "record_toll_event", fake_record)
+    db = FakeDB({
+        "sci_dataset_versions": [
+            {"id": "ver-1", "lane": "carbon", "price_floor_cents": 1,
+             "row_count": 1,  # stale metadata
+             "released_at": "2026-10-18T00:00:00+00:00"},
+        ],
+        "toll_events": [],
+    })
+    paywall.emit_neutral_data_toll(db, "org-1", "r1", "carbon", 10_000)
+    assert calls[0]["event_type"] == "data.science.api_rows"
+    assert calls[0]["amount_cents"] == 10  # capped, not $1,000
+    assert calls[0]["amount_cents"] <= 10
+
+
 def test_neutral_toll_falls_back_without_version(monkeypatch):
     # no version row -> legacy flat query toll (pre-existing behavior)
     calls = []

@@ -488,7 +488,11 @@ def emit_neutral_data_toll(
             db, version["id"], int(version["row_count"]), version=version
         )
         mult = volume_rate_multiplier(db, org_id)
-        amount = int(round(served * rate * mult))
+        # Rosa (TW-606 round 2): per-call cap. rate = curve_price / row_count
+        # only bounds the charge when served <= row_count (data-dependent, not
+        # structural) -- stale row_count metadata must never resurrect a
+        # >$0.10 charge. An honest full pull = exactly the cap: no-op there.
+        amount = min(int(round(served * rate * mult)), DOWNLOAD_CURVE_CAP_CENTS)
         from app.services import toll_service
 
         return toll_service.record_toll_event(

@@ -26,7 +26,7 @@ calls hard-capped at **$0.10 per download or per API call**, no exceptions.
   (cap, floors, tracking-only tier); DDL unchanged, still not run on live DB.
 - Tests: 127/127 green; `python3 -m ruff check` clean on all touched files.
 
-## Source (original brief)
+## Source (original brief — SUPERSEDED by Revision 3, kept for history)
 
 Ticket TW-606 (reporter: Justynn, 2026-10-18): replace the flat $6.00/$8.50/$22.50
 Excel tiers in the shared science paywall with a dynamic volume curve —
@@ -37,6 +37,10 @@ micro-tolls and curve-priced rate-limit tiers. Two refinements folded in:
 signup/purchase question — student $5.99 entry, researcher $10.99, other $10.99 —
 then identical per-request tolling at the dataset's live curve price.
 Subscription gate stays required on top of per-download fees.
+
+**Revision 3 replaced all of this** (see header): pennies pricing, $0.10
+hard cap, entry fees scratched, floors standard $0.01 / premium $0.05 /
+flagship $0.09.
 
 ## RED / GREEN history
 
@@ -80,15 +84,39 @@ Subscription gate stays required on top of per-download fees.
   emit paths swallow and continue. Degradation direction is undercharge
   (falls to floor on lookup failure).
 
-## Open design point (needs Justynn's call — Rosa Blocker 1)
+## Open design point — RESOLVED (Revision 3, Justynn's call)
 
-The charged Excel download fee is currently the tiered entry fee
+~~The charged Excel download fee is currently the tiered entry fee
 ($5.99/$10.99), while API tolls price off the curve. At d=0 a full API pull
 costs ~1¢ vs a $10.99 download (~1100x gap); at d=100k it's 5999¢ vs $10.99
 (5.5x the other way). Options: (a) download fee = curve price with the
 tiered entry fee charged separately, or (b) keep as-is and correct every
 neutrality claim. Code comments flag this explicitly; docstrings now
-describe actual behavior either way.
+describe actual behavior either way.~~
+
+**Resolved:** downloads now charge the curve price (Option A). Entry fees
+are gone entirely. API-vs-download economic neutrality holds end to end.
+
+## Fix round (Rosa round 1 → round 2)
+
+- **Rosa round 1 blocker — floor bypassed the cap:** `download_price_cents`
+  did `cap = max(floor, cap_cents)`, so a stale floor above the cap lifted
+  it. Fixed: floor is now clamped at the cap
+  (`floor = min(max(1, floor_cents), cap)`). Regression test
+  `test_floor_never_exceeds_cap` (999¢/2999¢ floors → 10¢). Rosa verified
+  with 8 adversarial cases of her own — all ≤ 10¢.
+- **Rosa round 1 major — stale router docstrings:** carbon, subseasonal,
+  crop_climate module + download-endpoint docstrings rewritten to
+  pennies/curve wording (was $6/$8.50/$22.50 and $5.99/$10.99 tiers).
+- **Rosa round 2 blocker — API toll had no per-call cap:** in
+  `emit_neutral_data_toll`, `amount = round(served * rate * mult)` where
+  `rate = curve_price / row_count` only bounds the charge when
+  `served <= row_count` (data-dependent). Rosa proved the breach:
+  served=10,000 with stale row_count=1 → $1,000.00 in one call. Fixed:
+  `amount = min(round(served * rate * mult), DOWNLOAD_CURVE_CAP_CENTS)` —
+  an honest full pull lands exactly on the cap (no-op on the real path).
+  Regression test `test_neutral_api_toll_capped_per_call`.
+- Round 2 green: 129/129 in the four science test files; ruff check clean.
 
 ## Migration
 
