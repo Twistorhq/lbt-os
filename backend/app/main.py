@@ -1,6 +1,7 @@
 """
 LBT OS — FastAPI Application Entry Point
 """
+
 import logging
 import time
 import uuid
@@ -23,6 +24,9 @@ from .data_layer.science.high_tc import router as sci_hightc_router
 from .data_layer.science.pfas import router as sci_pfas_router
 from .data_layer.science.subseasonal import router as sci_subseasonal_router
 from .data_layer.science.turbulence import router as sci_turbulence_router
+from .identity import oauth as identity_oauth
+from .identity import router as identity_router
+from .identity import saml as identity_saml
 from .limiter import limiter
 from .logging_config import configure_logging, request_id_var
 from .routers import (
@@ -119,40 +123,34 @@ async def request_lifecycle(request: Request, call_next) -> Response:
 
 
 # --- Routers ---
-from .identity import (
-    oauth as identity_oauth,
-    router as identity_router,
-    saml as identity_saml,
-)
-
 app.include_router(identity_router, prefix="/api/v1")
 app.include_router(identity_oauth.oauth_router, prefix="/api/v1")
 app.include_router(identity_saml.saml_router, prefix="/api/v1")
-app.include_router(admin.router,                   prefix="/api/v1")
-app.include_router(bi.router,                      prefix="/api/v1")
-app.include_router(calls.router,                   prefix="/api/v1")
-app.include_router(organizations.router,           prefix="/api/v1")
-app.include_router(leads.router,                   prefix="/api/v1")
-app.include_router(customers.router,               prefix="/api/v1")
-app.include_router(sales.router,                   prefix="/api/v1")
-app.include_router(expenses.router,                prefix="/api/v1")
-app.include_router(metrics.router,                 prefix="/api/v1")
-app.include_router(audit.router,                   prefix="/api/v1")
-app.include_router(integrations.router,            prefix="/api/v1")
-app.include_router(stripe_webhooks.router,         prefix="/api/stripe")
-app.include_router(strategy.router,                prefix="/api/v1")
-app.include_router(messages.router,                prefix="/api/v1")
-app.include_router(revenue_intelligence.router,    prefix="/api/v1")
-app.include_router(leak_engine.router,              prefix="/api/v1")
-app.include_router(tradeview.router,                prefix="/api/v1")
-app.include_router(visitor_events.router,          prefix="/api/v1")
+app.include_router(admin.router, prefix="/api/v1")
+app.include_router(bi.router, prefix="/api/v1")
+app.include_router(calls.router, prefix="/api/v1")
+app.include_router(organizations.router, prefix="/api/v1")
+app.include_router(leads.router, prefix="/api/v1")
+app.include_router(customers.router, prefix="/api/v1")
+app.include_router(sales.router, prefix="/api/v1")
+app.include_router(expenses.router, prefix="/api/v1")
+app.include_router(metrics.router, prefix="/api/v1")
+app.include_router(audit.router, prefix="/api/v1")
+app.include_router(integrations.router, prefix="/api/v1")
+app.include_router(stripe_webhooks.router, prefix="/api/stripe")
+app.include_router(strategy.router, prefix="/api/v1")
+app.include_router(messages.router, prefix="/api/v1")
+app.include_router(revenue_intelligence.router, prefix="/api/v1")
+app.include_router(leak_engine.router, prefix="/api/v1")
+app.include_router(tradeview.router, prefix="/api/v1")
+app.include_router(visitor_events.router, prefix="/api/v1")
 
 # TW-593 science data layer V1 — six lanes, each router carries its own
 # /data/v1/science/{lane} prefix except turbulence (mounted with prefix here).
 app.include_router(sci_electro_router.router)
 app.include_router(sci_subseasonal_router.router)
 app.include_router(sci_carbon_router.router)
-app.include_router(sci_turbulence_router.router,   prefix="/data/v1/science/turbulence")
+app.include_router(sci_turbulence_router.router, prefix="/data/v1/science/turbulence")
 app.include_router(sci_pfas_router.router)
 app.include_router(sci_crop_router.router)
 app.include_router(sci_hightc_router.router)
