@@ -81,3 +81,23 @@ files: xmlsec/env issues, identical on main) — 32 failures on the branch,
   Lesson: verify security-scheme lines byte-for-byte after writing.
 - No embedded instructions found in any fetched or third-party content.
   GO Feature Flag was studied for mechanism only; no code copied.
+
+## 6. Fix round (Rosa REQUEST_CHANGES, 2026-10-19)
+
+Rosa verified independently: 72/72 green, ruff clean, tenant isolation,
+wedge intact, migration honesty, toolchain repair byte-correct. Findings:
+
+| # | Finding | Fix | Proof |
+|---|---|---|---|
+| 1 | Blocker: LD fallthrough silently dropped when rules exist | Fallthrough now always preserved: catch-all rule when rules exist, default value when none | TestFallthroughPreserved (4 tests): strict import succeeds, non-match serves fallthrough |
+| 2 | Major: `missing bearer <redacted>` in committed 401 strings | Reworded to "missing credentials"; verified zero "redacted" bytes | grep -c redacted → 0 |
+| 3 | Major: `in`/`not_in` with scalar degrades to substring | Condition validation now requires list values | TestInRequiresList |
+| 4 | Major: empty rollout → raw ValueError → 500 | `_rollout_to_percentage` raises DefinitionError on empty | test_empty_rollout_raises_definition_error |
+| 5-10 | Nits: bucket collision, double JWT verify, updated_at, assert in hot path, docstring | NUL separator + regression test; cached `_verified_claims`; updated_at on mutations; explicit guard; docstring corrected | TestBucketSeparator; 79/79 green |
+
+Post-fix: **79/79 tests green**, ruff check + format clean.
+
+Note on suite counts: the evidence above cited 32 pre-existing failures;
+Rosa measured 20 failures + 8 collection-error files on her run. The
+empty-diff-vs-main claim held on both runs; the count drift is environment
+(xmlsec availability), not a code difference.
