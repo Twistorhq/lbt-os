@@ -210,9 +210,7 @@ def evaluate_gate(
     overall = rates_for(attempts, threshold)
     failures: list[str] = []
     insufficient: list[str] = []
-    missing = [
-        name for name in dict.fromkeys(expected_groups) if name not in groups
-    ]
+    missing = [name for name in dict.fromkeys(expected_groups) if name not in groups]
 
     if not attempts:
         insufficient.append("no attempts supplied")
@@ -241,13 +239,11 @@ def evaluate_gate(
             )
         if rs.fmr is not None and rs.fmr > criteria.fmr_max:
             failures.append(
-                f"group {name}: fmr {rs.fmr:.6f} exceeds ceiling "
-                f"{criteria.fmr_max}"
+                f"group {name}: fmr {rs.fmr:.6f} exceeds ceiling {criteria.fmr_max}"
             )
         if rs.fnmr is not None and rs.fnmr > criteria.fnmr_max:
             failures.append(
-                f"group {name}: fnmr {rs.fnmr:.4f} exceeds ceiling "
-                f"{criteria.fnmr_max}"
+                f"group {name}: fnmr {rs.fnmr:.4f} exceeds ceiling {criteria.fnmr_max}"
             )
 
     for name in missing:
@@ -263,8 +259,7 @@ def evaluate_gate(
     gap = max_gap(groups, "fnmr")
     if gap is not None and gap > criteria.fnmr_gap_max:
         failures.append(
-            f"demographic fnmr gap {gap:.4f} exceeds ceiling "
-            f"{criteria.fnmr_gap_max}"
+            f"demographic fnmr gap {gap:.4f} exceeds ceiling {criteria.fnmr_gap_max}"
         )
 
     if failures:

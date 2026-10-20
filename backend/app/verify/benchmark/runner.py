@@ -79,9 +79,7 @@ def run_benchmark(
     reported INSUFFICIENT_DATA by name, never silently dropped.
     """
     attempts = list(attempts)
-    gate = evaluate_gate(
-        attempts, threshold, criteria, expected_groups=expected_groups
-    )
+    gate = evaluate_gate(attempts, threshold, criteria, expected_groups=expected_groups)
     overall = rates_for(attempts, threshold)
     groups = per_group(attempts, threshold)
 

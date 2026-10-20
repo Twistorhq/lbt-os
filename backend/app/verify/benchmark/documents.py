@@ -30,9 +30,7 @@ def _char_value(ch: str) -> int:
 
 def mrz_check_digit(field: str) -> int:
     """ICAO 9303 check digit for an MRZ field (weights 7, 3, 1 repeating)."""
-    total = sum(
-        _char_value(ch) * _WEIGHTS[i % 3] for i, ch in enumerate(field.upper())
-    )
+    total = sum(_char_value(ch) * _WEIGHTS[i % 3] for i, ch in enumerate(field.upper()))
     return total % 10
 
 
@@ -49,9 +47,7 @@ def mrz_field_valid(field_with_digit: str) -> bool:
         return False
 
 
-def field_accuracy(
-    predicted: dict[str, str], gold: dict[str, str]
-) -> dict[str, bool]:
+def field_accuracy(predicted: dict[str, str], gold: dict[str, str]) -> dict[str, bool]:
     """Exact-match accuracy per gold field. A missing prediction is wrong.
 
     Comparison is exact (case-sensitive): callers normalize case and

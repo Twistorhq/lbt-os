@@ -40,8 +40,13 @@ def impostor(group: str, *scores: float) -> list[ScoredAttempt]:
     return [ScoredAttempt(group=group, genuine=False, score=s) for s in scores]
 
 
-def bulk(group: str, n_genuine_ok: int, n_genuine_bad: int,
-         n_impostor_ok: int, n_impostor_bad: int) -> list[ScoredAttempt]:
+def bulk(
+    group: str,
+    n_genuine_ok: int,
+    n_genuine_bad: int,
+    n_impostor_ok: int,
+    n_impostor_bad: int,
+) -> list[ScoredAttempt]:
     """Attempts with exact known outcomes at THRESHOLD."""
     out = []
     out += genuine(group, *([0.90] * n_genuine_ok))
@@ -69,8 +74,7 @@ def test_rates_exact_counts():
 
 
 def test_score_equal_to_threshold_is_an_accept():
-    rates = rates_for(genuine("ama", THRESHOLD) + impostor("ama", THRESHOLD),
-                      THRESHOLD)
+    rates = rates_for(genuine("ama", THRESHOLD) + impostor("ama", THRESHOLD), THRESHOLD)
     assert rates.false_non_matches == 0
     assert rates.false_matches == 1
 
@@ -91,8 +95,7 @@ def test_per_group_breakdown():
 
 
 def test_max_gap_uses_groups_with_data_only():
-    groups = per_group(bulk("ama", 9, 1, 10, 0) + bulk("kofi", 8, 2, 10, 0),
-                       THRESHOLD)
+    groups = per_group(bulk("ama", 9, 1, 10, 0) + bulk("kofi", 8, 2, 10, 0), THRESHOLD)
     assert max_gap(groups, "fnmr") == pytest.approx(0.10)
     assert max_gap(groups, "fmr") == pytest.approx(0.0)
 
@@ -102,8 +105,10 @@ def test_max_gap_uses_groups_with_data_only():
 
 def test_liveness_rates_apcer_bpcer():
     presentations = (
-        [("attack", False)] * 9 + [("attack", True)]  # 1 of 10 attacks accepted
-        + [("bonafide", True)] * 19 + [("bonafide", False)]  # 1 of 20 rejected
+        [("attack", False)] * 9
+        + [("attack", True)]  # 1 of 10 attacks accepted
+        + [("bonafide", True)] * 19
+        + [("bonafide", False)]  # 1 of 20 rejected
     )
     rates = liveness_rates(presentations)
     assert rates.apcer == pytest.approx(0.10)
@@ -342,9 +347,7 @@ def test_max_gap_skips_unmeasured_groups():
 
 
 def test_max_gap_with_one_measured_group_is_none():
-    groups = per_group(
-        bulk("ama", 9, 1, 10, 0) + impostor("kofi", 0.1, 0.2), THRESHOLD
-    )
+    groups = per_group(bulk("ama", 9, 1, 10, 0) + impostor("kofi", 0.1, 0.2), THRESHOLD)
     assert max_gap(groups, "fnmr") is None
 
 

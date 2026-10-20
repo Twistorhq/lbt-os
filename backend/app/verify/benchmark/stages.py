@@ -65,7 +65,10 @@ class Stage:
     def probe(self) -> StageStatus:
         if self.module and _import(self.module) is None:
             return StageStatus(
-                self.name, self.component, self.license, False,
+                self.name,
+                self.component,
+                self.license,
+                False,
                 f"python module {self.module!r} not installed "
                 f"(see requirements-benchmark.txt)",
             )
@@ -230,9 +233,7 @@ class LandmarkStage(Stage):
             result = mesh.process(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
         if not result.multi_face_landmarks:
             return []
-        return [
-            (lm.x, lm.y, lm.z) for lm in result.multi_face_landmarks[0].landmark
-        ]
+        return [(lm.x, lm.y, lm.z) for lm in result.multi_face_landmarks[0].landmark]
 
 
 class FaceMatchStage(Stage):

@@ -26,12 +26,16 @@ def _td3_line2() -> str:
     doc = "P12345678"
     dob, expiry, personal = "520727", "301231", "A12345<<<<<<<<"
     line = (
-        doc + str(mrz_check_digit(doc))
+        doc
+        + str(mrz_check_digit(doc))
         + "UTO"
-        + dob + str(mrz_check_digit(dob))
+        + dob
+        + str(mrz_check_digit(dob))
         + "M"
-        + expiry + str(mrz_check_digit(expiry))
-        + personal + str(mrz_check_digit(personal))
+        + expiry
+        + str(mrz_check_digit(expiry))
+        + personal
+        + str(mrz_check_digit(personal))
     )
     composite_src = line[0:10] + line[13:20] + line[21:28] + line[28:43]
     return line + str(mrz_check_digit(composite_src))
