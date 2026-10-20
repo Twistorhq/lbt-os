@@ -26,6 +26,7 @@ def stats(**over) -> MemberStats:
         would_meet_again_positive=0,
         hosted_clean=0,
         best_series_streak=0,
+        distinct_vouches=0,
         tenure_days=0,
         substantiated_reports=0,
         identity_strikes=0,
@@ -64,7 +65,8 @@ class TestStandingTiers:
         s = stats(completed_nights=5, no_shows=2)  # 5/7 = 0.714
         assert compute_standing(s).tier == "verified"
 
-    def test_fixture_needs_streak(self):
+    def test_fixture_needs_corroboration(self):
+        # Neither path satisfied: streak 3 of 4, no vouches.
         s = stats(completed_nights=20, no_shows=3, best_series_streak=3)
         assert compute_standing(s).tier == "regular"
         s = stats(completed_nights=20, no_shows=3, best_series_streak=4)
@@ -116,6 +118,33 @@ class TestStandingTiers:
             tenure_days=90,
         )
         assert compute_standing(s).tier == "pillar"
+
+
+class TestFixtureVouchPath:
+    """Spec Section 7.5 + reward catalog: Fixture's corroboration
+    condition is a 4-instance series streak OR vouches from 3 distinct
+    verified members after shared check-ins. Vouches corroborate
+    only; they never substitute for the nights or the show rate."""
+
+    def test_vouch_only_path_qualifies(self):
+        s = stats(
+            completed_nights=20, no_shows=3, best_series_streak=0,
+            distinct_vouches=3,
+        )
+        assert compute_standing(s).tier == "fixture"
+
+    def test_two_vouches_are_not_enough(self):
+        s = stats(completed_nights=20, no_shows=3, distinct_vouches=2)
+        assert compute_standing(s).tier == "regular"
+
+    def test_vouches_do_not_substitute_for_nights(self):
+        s = stats(completed_nights=19, no_shows=0, distinct_vouches=9)
+        assert compute_standing(s).tier == "regular"
+
+    def test_vouches_do_not_substitute_for_show_rate(self):
+        # 20/25 = 0.80, below the Fixture 85% bar.
+        s = stats(completed_nights=20, no_shows=5, distinct_vouches=3)
+        assert compute_standing(s).tier == "regular"
 
 
 class TestDormancyDecay:

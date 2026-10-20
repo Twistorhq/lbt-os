@@ -111,23 +111,77 @@ class TestEventCreate:
             models.EventCreate(**kw)
 
 
-class TestCheckinNoCoordinates:
-    def test_verdict_only_ok(self):
-        c = models.CheckinCreate(event_id=uuid4(), proof_type="geo_soft")
-        assert c.proof_type == "geo_soft"
+class TestCheckinContract:
+    """Spec Section 7.1: what crosses the wire is a verdict, an
+    accuracy bucket, and a timestamp — never coordinates. Validation
+    is conditional on the proof type: geo_soft carries the verdict
+    payload, qr_strong carries the scanned token, host_confirm
+    carries nothing the client asserts."""
+
+    def _geo(self, **over):
+        kw = {
+            "event_id": uuid4(),
+            "proof_type": "geo_soft",
+            "within_geofence": True,
+            "accuracy_bucket": "fine",
+            "observed_at": NOW,
+        }
+        kw.update(over)
+        return kw
+
+    def test_geo_verdict_full_payload_ok(self):
+        c = models.CheckinCreate(**self._geo())
+        assert c.within_geofence is True
+        assert c.accuracy_bucket == "fine"
+        assert c.observed_at == NOW
+
+    def test_geo_verdict_requires_bucket_and_timestamp(self):
+        with pytest.raises(ValidationError):
+            models.CheckinCreate(event_id=uuid4(), proof_type="geo_soft")
+        with pytest.raises(ValidationError):
+            models.CheckinCreate(**self._geo(observed_at=None))
+        with pytest.raises(ValidationError):
+            models.CheckinCreate(**self._geo(accuracy_bucket=None))
 
     def test_coordinates_refused_loudly(self):
         with pytest.raises(ValidationError):
             models.CheckinCreate(
+                **self._geo(latitude=39.7392, longitude=-104.9903)
+            )
+
+    def test_qr_strong_requires_token(self):
+        with pytest.raises(ValidationError):
+            models.CheckinCreate(event_id=uuid4(), proof_type="qr_strong")
+        c = models.CheckinCreate(
+            event_id=uuid4(), proof_type="qr_strong", qr_token="venue-qr-7f3a"
+        )
+        assert c.qr_token == "venue-qr-7f3a"
+
+    def test_qr_strong_refuses_geo_fields(self):
+        with pytest.raises(ValidationError):
+            models.CheckinCreate(
                 event_id=uuid4(),
-                proof_type="geo_soft",
-                latitude=39.7392,
-                longitude=-104.9903,
+                proof_type="qr_strong",
+                qr_token="venue-qr-7f3a",
+                within_geofence=True,
+            )
+
+    def test_host_confirm_carries_no_client_assertion(self):
+        c = models.CheckinCreate(event_id=uuid4(), proof_type="host_confirm")
+        assert c.within_geofence is None and c.qr_token is None
+        with pytest.raises(ValidationError):
+            models.CheckinCreate(
+                event_id=uuid4(), proof_type="host_confirm", within_geofence=True
             )
 
     def test_unknown_proof_type_refused(self):
         with pytest.raises(ValidationError):
             models.CheckinCreate(event_id=uuid4(), proof_type="selfie")
+
+    def test_accuracy_buckets_match_geo_module(self):
+        from app.social import geo
+
+        assert set(models.ACCURACY_BUCKETS) == set(geo.ACCURACY_BUCKETS)
 
 
 class TestRsvpAndDecision:

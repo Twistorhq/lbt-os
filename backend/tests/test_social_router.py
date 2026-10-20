@@ -113,3 +113,51 @@ class TestAuthRequired:
     def test_no_token_is_401(self, anon_client):
         resp = anon_client.get("/api/v1/social/profiles/me")
         assert resp.status_code == 401
+
+
+class TestReadsCarryTheViewer:
+    """Rosa m1: band, audience, and block checks are viewer-relative,
+    so get_group / get_event must hand the service layer the caller's
+    subject from the verified token, never discard it."""
+
+    VIEWER = uuid4()
+
+    def _client_with_recorders(self, monkeypatch):
+        calls = {}
+
+        def recorder(name):
+            def _rec(db, viewer_user_id, target_id):
+                calls[name] = (viewer_user_id, target_id)
+                raise NotImplementedError("Phase 4 (tasks.md items 15-18)")
+
+            return _rec
+
+        monkeypatch.setattr(
+            social_router.service, "get_group", recorder("get_group")
+        )
+        monkeypatch.setattr(
+            social_router.service, "get_event", recorder("get_event")
+        )
+        app = FastAPI()
+        app.state.limiter = limiter
+        app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+        app.include_router(social_router.router, prefix="/api/v1")
+        app.dependency_overrides[get_db] = lambda: MagicMock()
+        app.dependency_overrides[social_router._verified_claims] = lambda: {
+            "sub": str(self.VIEWER)
+        }
+        return TestClient(app, raise_server_exceptions=False), calls
+
+    def test_get_group_passes_viewer_subject(self, monkeypatch):
+        client, calls = self._client_with_recorders(monkeypatch)
+        group_id = uuid4()
+        resp = client.get(f"/api/v1/social/groups/{group_id}")
+        assert resp.status_code == 501  # still an honest skeleton stub
+        assert calls["get_group"] == (self.VIEWER, group_id)
+
+    def test_get_event_passes_viewer_subject(self, monkeypatch):
+        client, calls = self._client_with_recorders(monkeypatch)
+        event_id = uuid4()
+        resp = client.get(f"/api/v1/social/events/{event_id}")
+        assert resp.status_code == 501
+        assert calls["get_event"] == (self.VIEWER, event_id)

@@ -48,6 +48,8 @@ VFY_TABLES = [
     "vfy_signals",
     "vfy_identity_anchors",
     "vfy_age_attestations",
+    "vfy_verification_states",
+    "vfy_retention_actions",
 ]
 
 RSN_TABLES = [
@@ -111,7 +113,7 @@ class TestFilesAndTables:
             assert f"CREATE TABLE IF NOT EXISTS {t} (" in social_sql, t
 
     def test_table_count(self, verify_sql, social_sql):
-        assert len(re.findall(r"CREATE TABLE IF NOT EXISTS vfy_", verify_sql)) == 8
+        assert len(re.findall(r"CREATE TABLE IF NOT EXISTS vfy_", verify_sql)) == 10
         assert len(re.findall(r"CREATE TABLE IF NOT EXISTS rsn_", social_sql)) == 36
 
     def test_no_bare_create_table(self, verify_sql, social_sql):
@@ -282,3 +284,127 @@ class TestSpecInvariants:
     def test_down_sections_present(self, verify_sql, social_sql):
         for sql in (verify_sql, social_sql):
             assert "DOWN section" in sql
+
+
+class TestRetentionMachinery:
+    """Rosa M1: the TW-654 retention rule must be executable and
+    provable from schema state, not reconstructed from outcomes."""
+
+    def test_retention_actions_carry_the_legal_record(self, verify_sql):
+        block = _table_block(verify_sql, "vfy_retention_actions")
+        for col in (
+            "biometric_id",
+            "document_id",
+            "trigger",
+            "determined_at",
+            "due_at",
+            "extended_due_at",
+            "executed_at",
+            "hold",
+            "hold_reason",
+            "notice_sent_at",
+            "tier_dropped_at",
+        ):
+            assert col in block, col
+        # A hold without a recorded reason is not a legal record.
+        assert "hold_reason IS NOT NULL" in block
+        # Every action names at least one subject row.
+        assert "biometric_id IS NOT NULL OR document_id IS NOT NULL" in block
+
+    def test_verification_state_can_drop(self, verify_sql):
+        block = _table_block(verify_sql, "vfy_verification_states")
+        for status in ("unverified", "verified", "dropped", "revoked", "surrendered"):
+            assert f"'{status}'" in block, status
+        for col in ("current_tier", "verified_at", "last_interaction_at",
+                    "dropped_at", "drop_reason"):
+            assert col in block, col
+        # Tier and status cannot disagree: verified iff a tier is held.
+        assert "(status = 'verified') = (current_tier > 0)" in block
+
+    def test_attestation_can_be_superseded(self, verify_sql):
+        block = _table_block(verify_sql, "vfy_age_attestations")
+        assert "superseded_at" in block
+
+    def test_document_payload_tombstone(self, verify_sql):
+        block = _table_block(verify_sql, "vfy_documents")
+        # Once cleared, the payload is gone: the stamp cannot coexist
+        # with a live payload.
+        assert (
+            "match_payload_cleared_at IS NULL OR match_payload_encrypted IS NULL"
+            in block
+        )
+
+    def test_biometric_template_tombstone(self, verify_sql):
+        block = _table_block(verify_sql, "vfy_biometrics")
+        # A destroyed template is the empty bytea tombstone, and the
+        # destruction stamp and trigger are set together or not at all.
+        assert "template_encrypted = ''::bytea" in block
+        assert "(destroyed_at IS NULL) = (destruction_trigger IS NULL)" in block
+
+    def test_no_cascade_anywhere_in_verify(self, verify_sql):
+        # The vfy delete graph is explicit-order only: the retention
+        # job (item 10a) deletes or archives in legal order; an
+        # account delete must never vaporize the Section 6.3 record.
+        assert "ON DELETE CASCADE" not in verify_sql
+
+
+class TestDobHashSchoolId:
+    """Rosa m2: a school ID may carry no birthdate (spec Section 4)."""
+
+    def test_dob_hash_nullable_but_required_for_government_docs(self, verify_sql):
+        block = _table_block(verify_sql, "vfy_documents")
+        assert "dob_hash TEXT NOT NULL" not in block
+        assert "document_type = 'school_id'" in block
+        assert "dob_hash IS NOT NULL" in block
+
+
+class TestConsentBinding:
+    """Rosa m4: a biometric row can never borrow another member's
+    consent, and the consent class must match the document class."""
+
+    def test_consents_have_unique_id_user_pair(self, verify_sql):
+        block = _table_block(verify_sql, "vfy_consents")
+        assert "UNIQUE (id, user_id)" in block
+
+    def test_biometric_consent_fk_is_composite(self, verify_sql):
+        block = _table_block(verify_sql, "vfy_biometrics")
+        assert (
+            "FOREIGN KEY (consent_id, user_id) REFERENCES vfy_consents(id, user_id)"
+            in block
+        )
+
+    def test_consent_type_match_enforced_in_ddl(self, verify_sql):
+        assert "vfy_assert_consent_type_match" in verify_sql
+        assert "CONSTRAINT TRIGGER" in verify_sql
+        assert "school_id_biometric_capture" in verify_sql
+
+
+class TestSeriesLocationSingleLink:
+    """Rosa M2: exactly one source of truth for a series' usual
+    location. venue_ref (spec Section 4) is the link; the locations
+    table carries no back-pointer that could disagree with it."""
+
+    def test_locations_have_no_series_backpointer(self, social_sql):
+        block = _table_block(social_sql, "rsn_event_locations")
+        assert "series_id" not in block
+        assert "event_id UUID UNIQUE" in block
+
+    def test_series_venue_ref_is_the_link(self, social_sql):
+        block = _table_block(social_sql, "rsn_event_series")
+        assert "venue_ref" in block
+        assert "fk_rsn_event_series_venue_ref" in social_sql
+
+    def test_series_location_is_one_to_one(self, social_sql):
+        # One usual-location row serves one series: two series never
+        # share (and silently co-edit) a single address record.
+        assert "idx_rsn_event_series_venue_ref_unique" in social_sql
+        assert "WHERE venue_ref IS NOT NULL" in social_sql
+
+
+class TestCollectibleReflessUniqueness:
+    """Rosa m5: Postgres unique constraints treat NULLs as distinct,
+    so ref-less collectible rules need a partial unique index."""
+
+    def test_partial_unique_index_for_refless_rules(self, social_sql):
+        assert "idx_rsn_collectibles_refless_unique" in social_sql
+        assert "WHERE ref_id IS NULL" in social_sql
