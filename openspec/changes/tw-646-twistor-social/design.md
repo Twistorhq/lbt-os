@@ -3,9 +3,15 @@
 # TW-646: Twistor Social: design
 
 Sources: TW-646 architecture spec (cited as "spec S5.2" style below), TW-647
-Door Pass spec, reward catalog. Where this design and a source spec disagree,
-the source spec wins and the disagreement is a review finding, not a license
-to improvise.
+Door Pass spec, reward catalog. Precedence, DECISIONS FIRST: Justynn's
+recorded 2026-10-20 decisions, as carried in this package's
+`.openspec.yaml` (`x-decisions_2026_10_20`) and the TW-646 ticket record,
+override the source specs wherever they conflict. After the decisions,
+the source specs govern; after the specs, this design. A disagreement
+found anywhere in that chain is a review finding, not a license to
+improvise. The edits owed to the source specs themselves so they stop
+disagreeing with the decisions on paper are listed as an explicit task
+(tasks.md item 43a).
 
 ## Module layout (lbt-os backend, existing Notify/Telemetry pattern)
 
@@ -106,6 +112,20 @@ registry's public face.
   same query layer as S5.9: a close-friends-scoped item is absent, not
   greyed, for everyone outside the list. Audience scoping composes with
   age-band filtering; neither substitutes for the other.
+- **RSVP approval sub-state (data-model delta to spec S4 `rsn_rsvps`;
+  this package owns adding it, per TW-652 pattern 09 Section D).** The
+  spec's RSVP states (going, waitlist, declined, no_show) have no state
+  for a host's individual approval, and the home reveal tier below
+  rests on exactly that approval, so: `rsn_rsvps` gains a `requested`
+  status (pending host decision) with host decision fields
+  (`host_decided_by`, `host_decided_at`). The home-event flow is:
+  guest RSVP enters `requested`; the host approves (state becomes
+  going, a host-approved confirmed guest) or declines (state becomes
+  declined). Companion rule (Sofia pattern 09): the host's close
+  friends are confirmed on RSVP and never enter `requested`; everyone
+  else passes through request, then host approval, before any home
+  reveal eligibility exists. The schema task (tasks.md item 13) and the
+  RSVP task (item 16) carry this delta.
 - **Home hosting (decided 2026-10-20; overrides the S9/S12
   public-venue-only assumption):** events may be hosted at a member's
   home. The home address lives only in `rsn_event_locations` (bronze)
@@ -113,13 +133,27 @@ registry's public face.
   on the public index, the directory previews, or any anonymous surface,
   and list payloads show neighborhood only, to eligible viewers only.
   The exact-address reveal tier for a home event is the strictest in the
-  product: the host's close friends plus host-approved confirmed guests
-  (an RSVP the host has individually approved), each inside the existing
-  reveal window, every reveal logged in `rsn_location_reveals` exactly
-  as for venue events. The full safety check-in loop (geo verdict, QR,
-  encounter confirms, welfare, write-ups) applies to home events
-  unchanged; a home is a venue for loop purposes, with the address
-  treated at the highest sensitivity the model has.
+  product: the host's close friends plus host-approved confirmed guests.
+  **Home reveal window: 3 hours** (adopted from TW-652 pattern 09):
+  the window opens 3 hours before event start and closes at event end.
+  The reasoning is stated so it survives contact with a future editor:
+  a home address is the most sensitive location class in the product,
+  so it gets the tightest reveal window in the system; spec S8's
+  48-hour window governs venue events and does not carry to homes. The
+  home reveal condition set is explicit, and narrower than S8's: the
+  viewer (a) is the host's close friend or a host-approved confirmed
+  guest (RSVP sub-state above), (b) is inside the 3-hour home window,
+  (c) holds a current age-band attestation and is band-eligible for
+  the event (S5.9), (d) is T2 verified (no reveal of any kind exists
+  below the verified floor), (e) has a trust band above restricted,
+  (f) has no ban or block conflict with the host in either direction,
+  and (g) is inside the event's audience scope (the home-event
+  translation of S8's group-membership condition). Every reveal is
+  logged in `rsn_location_reveals` exactly as for venue events. The
+  full safety check-in loop (geo verdict, QR, encounter confirms,
+  welfare, write-ups) applies to home events unchanged; a home is a
+  venue for loop purposes, with the address treated at the highest
+  sensitivity the model has.
 - **Check-in loop (S7):** on-device geofence verdict (no coordinates cross
   the wire, no coordinate column exists), venue QR strong proof, encounter
   confirms, welfare check with the help sheet and silent alert, structured
@@ -187,7 +221,7 @@ registry's public face.
     with a mandatory reason, written to the audit log; the ambassador's
     open cases reassign automatically. Ambassador status suspends
     automatically, pending staff review, when the member's standing tier
-    drops below Pillar, their safety band leaves good standing, or any
+    drops below Pillar, their safety band drops below good standing, or any
     report against them is substantiated; a suspended ambassador sees
     nothing and queues nothing. Breach of the confidentiality agreement
     is a severe-path conduct case (S6.6): the role's value is that the
@@ -260,7 +294,11 @@ surface, and they refine spec S7.5/S8 where they differ:
 - **Age band is a color chip.** Profiles carry the band as a chip, never
   a birthdate: 21 plus is a green chip, 18 to 20 is a black chip, and
   the teen band (phase 2) is flagged with the word "teen". The chip
-  states the band the door check proved and nothing finer.
+  states the band the door check proved and nothing finer. The chip is
+  a door fact and is NOT toggleable: the decided chip rule wins over
+  spec S8's band-display toggle. S8's member display toggle survives
+  scoped to standing display only: a member may hide their standing
+  tier, and that choice reaches nothing else.
 
 ## Retention change list (queued from TW-654, for Rosa to verify)
 
@@ -275,16 +313,34 @@ retention code exists:
   individual's last interaction with the business, subject to the
   exceptions counsel confirms (incident response, legal hold, and the
   statute's own carve-outs).
-- **Corrected rule.** Biometric identifiers (face templates, and door
-  photos under TW-647 S6.3) are destroyed at the earlier of the S6.3
-  schedule or 24 months after the member's last interaction (dormancy
-  destruction), unless a counsel-confirmed exception holds the record,
-  and any hold is itself logged. Non-biometric audit records (signal
-  trails, verdicts, the identity anchor hash) follow S6.3 unchanged:
-  the law governs the biometric, not the fact that a verdict happened.
-  The destruction job is a retention task in Phase 2 (tasks.md item
-  10a), and the published retention schedule (S5.7) is updated to state
-  the 24-month rule before any production capture.
+- **Corrected rule (Angela's TW-654 rule in full, S1.2 and S1.4).**
+  Biometric identifiers (face templates, and door photos under TW-647
+  S6.3) are destroyed at the EARLIEST of three triggers: (a) the
+  original purpose is satisfied, which includes the S6.3 schedule
+  events (account closure, tier surrender, verification revocation);
+  (b) 24 months after the member's last interaction with the business
+  (the HB 24-1130 dormancy edge); or (c) within 45 days after storage
+  is determined no longer necessary (extendable by 45 days for
+  complexity, following an annual necessity review). The only holds
+  against a fired trigger are counsel-confirmed exceptions (incident
+  response, legal hold, the statute's own carve-outs), and any hold is
+  itself logged. BIPA's 3-year outer edge is looser; Colorado's 24
+  months governs. Non-biometric audit records (signal trails, verdicts,
+  the identity anchor hash) follow S6.3 unchanged: the law governs the
+  biometric, not the fact that a verdict happened.
+- **Dormancy consequence (TW-654 S1.4 item 2).** When trigger (b)
+  destroys a dormant member's template, the account consequence fires
+  with it: the member's tier drops to unverified, with notice (Notify,
+  both locales, before the destruction date where the clock allows),
+  write scopes are withdrawn to the ghost-town posture, and
+  re-verification is available whenever the member returns. No account
+  ever asserts T2 standing with no live template behind it: without
+  this consequence the destruction job silently degrades the S6.7
+  liveness re-challenge and duplicate search while the account still
+  claims verified. The destruction job and the consequence are one
+  task (tasks.md item 10a). The published retention schedule (S5.7) is
+  updated to state the full rule, all three triggers and the
+  consequence, before any production capture.
 
 ## Decisions that gate specific phases (not this package)
 
@@ -299,10 +355,14 @@ From spec S12, routed, none silently assumed:
   waits; display defaults are set (display rules above). Still open:
   organizer price points (gates public launch, not the build).
 - Angela via TW-654: BIPA consent and retention (gates production capture),
-  callout line (gates copy), law-enforcement process wording (gates the
-  runbook), meetup liability posture (gates launch), door photo consent
-  (gates TW-653 step 3), liquor-law position (gates venue sales claims and
-  the pilot), scan retention schedule, venue contract reliance terms.
+  callout line (gates member-facing copy), law-enforcement process wording
+  (gates the disclosure runbook), meetup liability posture (TW-654 D6
+  terms allocation and D7 insurance conversation; gates public launch),
+  home-event copy gates (gate the first home event, which can occur in
+  soft launch), door photo consent (gates TW-653 step 3), liquor-law
+  position (gates venue sales claims and the pilot), scan retention
+  schedule, venue contract reliance terms. One gate, one wording: the
+  proposal's launch gates carry the same items in the same words.
 - Phase 2 only: minors package, guardian consent, biometrics on minors,
   school registry sourcing (spec S12 Angela items 4 and 8).
 

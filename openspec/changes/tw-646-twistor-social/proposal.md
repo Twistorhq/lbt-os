@@ -99,14 +99,22 @@ Phase 2 (designed, not in this build): teen tier and school-ID verification
    benchmark harness runs on synthetic and properly consented or public test
    data only, so the gate never blocks measurement, only production capture.
    Door photo capture (TW-647 Section 6.3) carries its own separate consent
-   gate. Liquor-law, callout-line, law-enforcement-process, and liability
-   items gate the copy and the venue pilot, per TW-647 Section 9.
+   gate. The remaining TW-654 items gate as Angela's package states them,
+   in the same words as design.md: the liquor-law position gates venue
+   sales claims and the venue pilot; the callout line gates member-facing
+   copy; law-enforcement process wording gates the disclosure runbook;
+   the meetup liability posture (TW-654 D6, terms allocation adopted;
+   D7, insurance conversation held) gates the public launch; and the
+   home-event copy gates gate the first home event, which can occur in
+   soft launch.
 4. **Density gates** (spec Section 9): soft launch at 500 T2-verified
    members and 10 seeded groups (public venues plus close-friends-scoped
    home events, per the home-hosting decision); public Denver launch at
    2,500 verified-active members, soft-launch weekly fill rate at or
    above 70 percent, the ambassador program recruited and vetted so the
-   review SLA is staffed, benchmark gate passed.
+   review SLA is staffed, benchmark gate passed, and Angela's launch
+   items cleared (TW-654 D6 terms allocation adopted, D7 insurance
+   conversation held), matching tasks.md item 41.
 
 ## Out of scope
 
