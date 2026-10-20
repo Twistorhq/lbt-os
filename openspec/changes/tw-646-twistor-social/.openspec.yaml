@@ -1,0 +1,33 @@
+# TW-646 Twistor Social + TW-647 Door Pass
+# The full Social build: verification engine, social graph, safety system,
+# events data layer, organizer billing, member surfaces, venue credential.
+# No spec corpus exists in openspec/specs/ yet, so there is no baseline to
+# delta against. Requirements live in proposal.md and design.md, sourced
+# from the Rosa-reviewable architecture specs in twistor-lab/specs/.
+schema: spec-driven
+created: 2026-10-20
+goal: Build Twistor Social ("The Real Social App") per TW-646 architecture spec, with the TW-647 Door Pass as its venue companion
+x-source_specs:
+  - twistor-lab/specs/TW-646-real-social-network-architecture.md
+  - twistor-lab/specs/TW-647-door-pass-architecture.md
+  - twistor-lab/brand/twistor-social-reward-catalog.md
+x-tickets:
+  parent: TW-646
+  this_change: TW-648
+  benchmark_harness: TW-649
+  schema_skeletons: TW-650
+  events_ingest: TW-651
+  member_surfaces: TW-652
+  door_pass_impl: TW-653
+  legal_gates: TW-654
+affected_areas:
+  - backend/app/verify/
+  - backend/app/social/
+  - backend/app/door/
+  - supabase/ (vfy_, rsn_, evt_, dps_ migrations)
+  - frontend/ (member PWA + operator consoles, Sofia lane TW-652)
+x-launch_gates:
+  - verification benchmark gate (spec 5.3/5.5): per-demographic-group FMR/FNMR measured on our own stack before T2 opens; failure routes to remediation or to Justynn's vendor-fallback decision (spec 12 Q3)
+  - Angela consent gate: no production face capture of any kind until BIPA-class consent and retention language is signed in writing (TW-654)
+  - Rosa review: this package is reviewed before any implementation code merges; each phase lands as its own reviewed change
+skip_specs: true
