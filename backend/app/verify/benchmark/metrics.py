@@ -159,6 +159,19 @@ class GateCriteria:
     final numbers are set with the measured report in front of Rosa
     and Justynn before T2 opens. Raising a sample floor is always a
     tightening; the gate never passes on silence.
+
+    One interaction that session must face in writing: the FMR
+    ceiling and the impostor floor fight each other. At the planning
+    floor of 5,000 impostor attempts per group, a single false match
+    yields FMR 2e-4, already above the 1e-4 ceiling, so at floor
+    sample sizes the ceiling effectively demands zero false matches.
+    And 5,000 attempts cannot statistically resolve a 1e-4 rate at
+    all: zero false matches in 5,000 trials bounds the true FMR only
+    to roughly 6e-4 at 95 percent confidence. Resolving 1e-4 takes on
+    the order of 30,000 or more impostor attempts per group with zero
+    events, and more to measure it with margin. The session must
+    either raise the impostor floors or set the ceiling at what
+    floor-size samples can resolve; the code takes no side.
     """
 
     fmr_max: float = 1e-4

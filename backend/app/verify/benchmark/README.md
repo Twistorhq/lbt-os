@@ -31,13 +31,31 @@ gap is addressed. Measured, not assumed.
 - Minimum samples per group: 300 genuine / 5,000 impostor attempts
   (planning values). Below the floor the verdict is
   **INSUFFICIENT_DATA**, never a silent pass.
+- Expected-group coverage: gate-bearing datasets declare the
+  demographic groups a run must cover (registry.py
+  `expected_groups`). A run missing an expected group reports
+  **INSUFFICIENT_DATA** for that group by name; the gate never
+  passes on just the groups that happened to show up.
 - A measured failure outranks insufficient data: a breach we can see
   is a breach.
 
 Final numbers are set with the measured report in front of Rosa and
-Justynn before T2 opens. The vendor fallback, if the gate ever fails
-and cannot be remediated, is Justynn's decision (TW-646 Section 5.5),
-never an automatic purchase.
+Justynn before T2 opens. There is no vendor fallback (decided
+2026-10-20, TW-646 Section 12 Q3): if the gate fails, T2 does not
+open until the FOSS engine passes on its own. No paid check, no
+fallback path, no bridge, automatic or otherwise.
+
+One constraint on those final numbers, recorded now so the
+criteria-setting session does not discover it mid-meeting: the FMR
+ceiling and the impostor floor interact. At the planning floor of
+5,000 impostor attempts per group, a single false match yields FMR
+2e-4, already above the 1e-4 ceiling, so at floor sample sizes the
+ceiling effectively demands zero false matches. And 5,000 attempts
+cannot statistically resolve a 1e-4 rate: zero false matches in
+5,000 trials bounds the true FMR only to roughly 6e-4 at 95 percent
+confidence. The session has to choose: impostor floors on the order
+of 30,000 or more per group, or a ceiling that floor-size samples
+can actually resolve.
 
 ## Run it
 
