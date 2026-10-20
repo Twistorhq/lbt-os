@@ -91,9 +91,7 @@ class TestEventCreate:
 
     def test_end_before_start_refused(self):
         with pytest.raises(ValidationError):
-            models.EventCreate(
-                **self._kwargs(ends_at=NOW - timedelta(hours=1))
-            )
+            models.EventCreate(**self._kwargs(ends_at=NOW - timedelta(hours=1)))
 
     def test_capacity_must_be_positive(self):
         with pytest.raises(ValidationError):
@@ -189,6 +187,4 @@ class TestTrustEvent:
         )
         assert ev.event_type == "identity_strike"
         with pytest.raises(ValidationError):
-            models.TrustEventIn(
-                user_id=uuid4(), event_type="good_vibes", weight=1
-            )
+            models.TrustEventIn(user_id=uuid4(), event_type="good_vibes", weight=1)

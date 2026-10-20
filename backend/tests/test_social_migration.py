@@ -166,9 +166,7 @@ class TestPiiDoctrineInDdl:
             assert token not in block, token
         assert "proof_type" in block
 
-    def test_biometrics_template_is_encrypted_bytea_with_consent(
-        self, verify_sql
-    ):
+    def test_biometrics_template_is_encrypted_bytea_with_consent(self, verify_sql):
         block = _table_block(verify_sql, "vfy_biometrics")
         assert "template_encrypted BYTEA" in block
         assert "consent_id" in block
@@ -219,9 +217,7 @@ class TestFixRoundDeltas:
 
 
 class TestSpecInvariants:
-    @pytest.mark.parametrize(
-        "table", ["rsn_groups", "rsn_events", "rsn_event_series"]
-    )
+    @pytest.mark.parametrize("table", ["rsn_groups", "rsn_events", "rsn_event_series"])
     def test_min_age_band_mandatory(self, social_sql, table):
         block = _table_block(social_sql, table)
         assert re.search(r"min_age_band .*NOT NULL", block), table

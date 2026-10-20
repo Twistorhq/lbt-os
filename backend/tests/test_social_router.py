@@ -6,6 +6,7 @@ endpoints answer an honest 501 until their build phase lands — a
 skeleton must never pretend to work.
 """
 
+from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
@@ -14,51 +15,57 @@ from fastapi.testclient import TestClient
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
+from app.database import get_db
 from app.limiter import limiter
 from app.social import router as social_router
 
 
-@pytest.fixture()
-def client():
+def _build_app(*, authenticated: bool) -> FastAPI:
     app = FastAPI()
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
     app.include_router(social_router.router, prefix="/api/v1")
-    app.dependency_overrides[social_router._verified_claims] = lambda: {
-        "sub": str(uuid4())
-    }
-    return TestClient(app)
+    # The service layer is stubbed in this phase, so the DB handle is
+    # never used; a mock keeps the tests off the real Supabase client
+    # (same pattern as the Telemetry router tests).
+    app.dependency_overrides[get_db] = lambda: MagicMock()
+    if authenticated:
+        app.dependency_overrides[social_router._verified_claims] = lambda: {
+            "sub": str(uuid4())
+        }
+    return app
+
+
+@pytest.fixture()
+def client():
+    return TestClient(_build_app(authenticated=True))
 
 
 @pytest.fixture()
 def anon_client():
-    app = FastAPI()
-    app.state.limiter = limiter
-    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-    app.include_router(social_router.router, prefix="/api/v1")
-    return TestClient(app)
+    return TestClient(_build_app(authenticated=False))
 
 
 EXPECTED_ROUTES = {
-    ("GET", "/api/v1/social/profiles/me"),
-    ("PUT", "/api/v1/social/profiles/me"),
-    ("POST", "/api/v1/social/groups"),
-    ("GET", "/api/v1/social/groups/{group_id}"),
-    ("POST", "/api/v1/social/events"),
-    ("GET", "/api/v1/social/events/{event_id}"),
-    ("POST", "/api/v1/social/events/{event_id}/rsvps"),
-    ("POST", "/api/v1/social/rsvps/{rsvp_id}/decision"),
-    ("POST", "/api/v1/social/events/{event_id}/reveal"),
-    ("POST", "/api/v1/social/events/{event_id}/checkins"),
-    ("POST", "/api/v1/social/reports"),
+    ("GET", "/social/profiles/me"),
+    ("PUT", "/social/profiles/me"),
+    ("POST", "/social/groups"),
+    ("GET", "/social/groups/{group_id}"),
+    ("POST", "/social/events"),
+    ("GET", "/social/events/{event_id}"),
+    ("POST", "/social/events/{event_id}/rsvps"),
+    ("POST", "/social/rsvps/{rsvp_id}/decision"),
+    ("POST", "/social/events/{event_id}/reveal"),
+    ("POST", "/social/events/{event_id}/checkins"),
+    ("POST", "/social/reports"),
 }
 
 
 class TestRoutesRegistered:
-    def test_all_skeleton_routes_exist(self, client):
+    def test_all_skeleton_routes_exist(self):
         found = {
             (m, r.path)
-            for r in client.app.routes
+            for r in social_router.router.routes
             if getattr(r, "methods", None)
             for m in r.methods
         }

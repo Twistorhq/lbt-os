@@ -133,8 +133,10 @@ class TestDormancyDecay:
 
     def test_decay_never_touches_band(self):
         s = stats(completed_nights=20, no_shows=0, best_series_streak=4)
-        result = compute_standing(s, dormant_days=150)
-        assert result.band == "good_standing"
+        decayed = compute_standing(s, dormant_days=150)
+        fresh = compute_standing(s)
+        assert decayed.tier != fresh.tier  # the tier stepped down
+        assert decayed.band == fresh.band == "trusted"  # the band did not
 
 
 class TestBand:
@@ -154,8 +156,9 @@ class TestBand:
         assert compute_band(stats(substantiated_reports=2)) == "restricted"
 
     def test_standing_suspended_while_watch_or_restricted(self):
-        s = stats(completed_nights=20, no_shows=0, best_series_streak=4,
-                  identity_strikes=1)
+        s = stats(
+            completed_nights=20, no_shows=0, best_series_streak=4, identity_strikes=1
+        )
         result = compute_standing(s)
         assert result.tier == "fixture"  # computed and retained
         assert result.suspended is True  # but not displayable/entitling
