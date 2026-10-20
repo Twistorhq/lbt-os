@@ -24,10 +24,11 @@ import logging
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 
 from ....database import get_db
 from ....services import toll_service
+from .. import paywall
 from ..auth import enforce_lab_binding, require_science_key
 from . import models, schemas, seed
 
@@ -93,6 +94,7 @@ def _latest_version(db) -> dict[str, Any]:
 
 @router.get("/datasets", response_model=schemas.DatasetListOut)
 def list_datasets(
+    response: Response = None,
     db=Depends(get_db),
     x_request_id: Annotated[str | None, Header()] = None,
 ):
@@ -106,14 +108,17 @@ def list_datasets(
         .data
         or []
     )
-    return schemas.DatasetListOut(
+    request_id = _request_id(x_request_id)
+    result = schemas.DatasetListOut(
         datasets=[schemas.DatasetVersionOut(**r) for r in rows]
     )
+    return paywall.finalize(result, db, _TOLL_ORG, request_id, response)
 
 
 @router.get("/datasets/{version}", response_model=schemas.DatasetVersionOut)
 def get_dataset_version(
     version: str,
+    response: Response = None,
     db=Depends(get_db),
     x_request_id: Annotated[str | None, Header()] = None,
 ):
@@ -129,11 +134,14 @@ def get_dataset_version(
     )
     if not row:
         raise HTTPException(status_code=404, detail=f"dataset version {version} not found")
-    return schemas.DatasetVersionOut(**row)
+    request_id = _request_id(x_request_id)
+    result = schemas.DatasetVersionOut(**row)
+    return paywall.finalize(result, db, _TOLL_ORG, request_id, response)
 
 
 @router.get("/query", response_model=schemas.QueryResponse)
 def query_gold(
+    response: Response = None,
     compound: Annotated[str | None, Query()] = None,
     destruction_method: Annotated[str | None, Query()] = None,
     min_destruction_pct: Annotated[float | None, Query(ge=0, le=100)] = None,
@@ -177,7 +185,7 @@ def query_gold(
     reproduced = sum(
         (r.get("attestation_summary") or {}).get("reproduced", 0) for r in rows
     )
-    return schemas.QueryResponse(
+    result = schemas.QueryResponse(
         as_of=f"{version['dataset_name']} {version['semver']}",
         dataset_name=version["dataset_name"],
         semver=version["semver"],
@@ -191,10 +199,12 @@ def query_gold(
         row_count=len(rows),
         truncated=truncated,
     )
+    return paywall.finalize(result, db, _TOLL_ORG, request_id, response)
 
 
 @router.get("/benchmarks", response_model=schemas.BenchmarkListOut)
 def list_benchmarks(
+    response: Response = None,
     db=Depends(get_db),
     x_request_id: Annotated[str | None, Header()] = None,
 ):
@@ -233,12 +243,15 @@ def list_benchmarks(
                 description=seed.PFAS_METHOD_BENCHMARK["description"],
             )
         )
-    return schemas.BenchmarkListOut(benchmarks=benchmarks)
+    result = schemas.BenchmarkListOut(benchmarks=benchmarks)
+    return paywall.finalize(result, db, _TOLL_ORG, _request_id(x_request_id),
+                            response)
 
 
 @router.post("/ingest", response_model=schemas.IngestResponse, status_code=202)
 def ingest_batch(
     payload: schemas.IngestRequest,
+    response: Response = None,
     db=Depends(get_db),
     x_request_id: Annotated[str | None, Header()] = None,
     x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
@@ -267,17 +280,19 @@ def ingest_batch(
         request_id=request_id,
         quantity=float(len(records)),
     )
-    return schemas.IngestResponse(
+    result = schemas.IngestResponse(
         accepted=accepted,
         dead_letters=len(dead_letters),
         dead_letter_details=dead_letters,
         dataset_version_pending=True,
     )
+    return paywall.finalize(result, db, _TOLL_ORG, request_id, response)
 
 
 @router.get("/corrections", response_model=schemas.CorrectionListOut)
 def correction_feed(
     version: Annotated[str, Query()] = "1.0.0",
+    response: Response = None,
     db=Depends(get_db),
     x_request_id: Annotated[str | None, Header()] = None,
 ):
@@ -304,8 +319,10 @@ def correction_feed(
         .data
         or []
     )
-    return schemas.CorrectionListOut(
+    result = schemas.CorrectionListOut(
         dataset_name=version_row["dataset_name"],
         semver=version_row["semver"],
         corrections=[schemas.CorrectionOut(**r) for r in rows],
     )
+    return paywall.finalize(result, db, _TOLL_ORG, _request_id(x_request_id),
+                            response)

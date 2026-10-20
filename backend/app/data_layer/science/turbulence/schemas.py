@@ -109,6 +109,11 @@ class QueryResponse(BaseModel):
     rows: list[dict[str, Any]]
     row_count: int
     dead_letters: list[dict[str, Any]] = Field(default_factory=list)
+    usage: dict[str, Any] | None = Field(
+        default=None,
+        description="TW-607 EOM usage block: records served, toll charged this "
+        "call (ledger-read), running period total, rate-limit tier.",
+    )
 
 
 class DatasetVersionOut(BaseModel):
@@ -122,6 +127,11 @@ class DatasetVersionOut(BaseModel):
     supersedes_id: str | None = None
     released_at: str | None = None
     release_notes: str = ""
+    usage: dict[str, Any] | None = Field(
+        default=None,
+        description="TW-607 EOM usage block: records served, toll charged this "
+        "call (ledger-read), running period total, rate-limit tier.",
+    )
 
 
 class BenchmarkOut(BaseModel):
@@ -137,3 +147,8 @@ class IngestResponse(BaseModel):
     quarantined: int = 0  # unsigned lab payloads — never promoted
     dead_letters: list[dict[str, Any]]
     batch_id: str
+    usage: dict[str, Any] | None = Field(
+        default=None,
+        description="TW-607 EOM usage block: records served, toll charged this "
+        "call (ledger-read), running period total, rate-limit tier.",
+    )

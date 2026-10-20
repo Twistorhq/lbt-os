@@ -13,11 +13,12 @@ import logging
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 
 from ....auth import AuthContext, get_auth
 from ....database import get_db
 from ....services.toll_service import record_toll_event
+from .. import paywall
 from ..auth import enforce_lab_binding, require_science_key
 from .schemas import (
     BenchmarkOut,
@@ -77,18 +78,21 @@ def _rows(db, table: str) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 @router.get("/datasets", response_model=list[DatasetVersionOut])
-def list_datasets(auth: Annotated[AuthContext, Depends(get_auth)]):
+def list_datasets(auth: Annotated[AuthContext, Depends(get_auth)],
+                 response: Response = None):
     request_id = _request_id()
     db = get_db()
     rows = [r for r in _rows(db, _VERSIONS_TABLE) if r.get("lane") == LANE]
     _emit_toll(auth.org_id, "data.science.query", request_id)
-    return [DatasetVersionOut(**{
+    result = [DatasetVersionOut(**{
         "id": r["id"], "dataset_name": r["dataset_name"], "semver": r["semver"],
         "row_count": r["row_count"], "content_root_hash": r["content_root_hash"],
         "benchmark_pin": r.get("benchmark_pin"), "doi": r.get("doi"),
         "supersedes_id": r.get("supersedes_id"),
         "released_at": r.get("released_at"), "release_notes": r.get("release_notes", ""),
     }) for r in rows]
+    # JSON array: usage rides the X-Twistor-* headers (finalize handles lists).
+    return paywall.finalize(result, db, auth.org_id, request_id, response)
 
 
 # ---------------------------------------------------------------------------
@@ -96,7 +100,8 @@ def list_datasets(auth: Annotated[AuthContext, Depends(get_auth)]):
 # ---------------------------------------------------------------------------
 
 @router.get("/datasets/{version}", response_model=DatasetVersionOut)
-def get_dataset(version: str, auth: Annotated[AuthContext, Depends(get_auth)]):
+def get_dataset(version: str, auth: Annotated[AuthContext, Depends(get_auth)],
+                response: Response = None):
     request_id = _request_id()
     db = get_db()
     rows = [r for r in _rows(db, _VERSIONS_TABLE)
@@ -106,13 +111,14 @@ def get_dataset(version: str, auth: Annotated[AuthContext, Depends(get_auth)]):
         raise HTTPException(status_code=404,
                             detail=f"no {LANE} dataset version {version!r}")
     r = rows[0]
-    return DatasetVersionOut(**{
+    result = DatasetVersionOut(**{
         "id": r["id"], "dataset_name": r["dataset_name"], "semver": r["semver"],
         "row_count": r["row_count"], "content_root_hash": r["content_root_hash"],
         "benchmark_pin": r.get("benchmark_pin"), "doi": r.get("doi"),
         "supersedes_id": r.get("supersedes_id"),
         "released_at": r.get("released_at"), "release_notes": r.get("release_notes", ""),
     })
+    return paywall.finalize(result, db, auth.org_id, request_id, response)
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +128,7 @@ def get_dataset(version: str, auth: Annotated[AuthContext, Depends(get_auth)]):
 @router.get("/query", response_model=QueryResponse)
 def query_measurements(
     auth: Annotated[AuthContext, Depends(get_auth)],
+    response: Response = None,
     case_name: str | None = Query(default=None),
     reynolds_min: float | None = Query(default=None, gt=0),
     reynolds_max: float | None = Query(default=None, gt=0),
@@ -162,7 +169,7 @@ def query_measurements(
         _emit_toll(auth.org_id, "data.science.bulk", request_id,
                    quantity=len(rows) / 1000.0)
 
-    return QueryResponse(
+    result = QueryResponse(
         as_of={"dataset_name": latest["dataset_name"] if latest else "unversioned",
                "semver": latest["semver"] if latest else "0.0.0"},
         provenance=ProvenanceSummary(
@@ -173,6 +180,7 @@ def query_measurements(
         rows=rows,
         row_count=len(rows),
     )
+    return paywall.finalize(result, db, auth.org_id, request_id, response)
 
 
 # ---------------------------------------------------------------------------
@@ -180,7 +188,8 @@ def query_measurements(
 # ---------------------------------------------------------------------------
 
 @router.get("/benchmarks", response_model=list[BenchmarkOut])
-def list_benchmarks(auth: Annotated[AuthContext, Depends(get_auth)]):
+def list_benchmarks(auth: Annotated[AuthContext, Depends(get_auth)],
+                    response: Response = None):
     request_id = _request_id()
     db = get_db()
     benches = [r for r in _rows(db, _BENCH_TABLE) if r.get("lane") == LANE]
@@ -200,7 +209,8 @@ def list_benchmarks(auth: Annotated[AuthContext, Depends(get_auth)]):
                          for r in board],
         ))
     _emit_toll(auth.org_id, "data.science.benchmark", request_id)
-    return out
+    # JSON array: usage rides the X-Twistor-* headers.
+    return paywall.finalize(out, db, auth.org_id, request_id, response)
 
 
 # ---------------------------------------------------------------------------
@@ -211,6 +221,7 @@ def list_benchmarks(auth: Annotated[AuthContext, Depends(get_auth)]):
 @router.post("/ingest", response_model=IngestResponse)
 def ingest_batch(batch: IngestBatch,
                  auth: Annotated[AuthContext, Depends(get_auth)],
+                 response: Response = None,
                  x_api_key: str | None = Header(default=None, alias="X-API-Key")):
     request_id = _request_id()
     db = get_db()
@@ -256,9 +267,10 @@ def ingest_batch(batch: IngestBatch,
                         extra={"index": i, "error": str(exc)})
     _emit_toll(auth.org_id, "data.science.ingest", request_id,
                quantity=float(accepted))
-    return IngestResponse(accepted=accepted, quarantined=quarantined,
+    result = IngestResponse(accepted=accepted, quarantined=quarantined,
                           dead_letters=dead_letters,
                           batch_id=f"sci:{request_id}")
+    return paywall.finalize(result, db, auth.org_id, request_id, response)
 
 
 def _verify_lab(db: Any, lab_id: str) -> dict[str, Any]:

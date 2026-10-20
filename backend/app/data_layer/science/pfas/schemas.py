@@ -83,11 +83,21 @@ class DatasetVersionOut(BaseModel):
     supersedes_id: str | None = None
     released_at: datetime
     release_notes: str
+    usage: dict[str, Any] | None = Field(
+        default=None,
+        description="TW-607 EOM usage block: records served, toll charged this "
+        "call (ledger-read), running period total, rate-limit tier.",
+    )
 
 
 class DatasetListOut(BaseModel):
     lane: str = "pfas"
     datasets: list[DatasetVersionOut]
+    usage: dict[str, Any] | None = Field(
+        default=None,
+        description="TW-607 EOM usage block: records served, toll charged this "
+        "call (ledger-read), running period total, rate-limit tier.",
+    )
 
 
 class AttestationSummary(BaseModel):
@@ -121,7 +131,11 @@ class QueryResponse(BaseModel):
     rows: list[GoldRowOut]
     row_count: int
     truncated: bool = False
-
+    usage: dict[str, Any] | None = Field(
+        default=None,
+        description="TW-607 EOM usage block: records served, toll charged this "
+        "call (ledger-read), running period total, rate-limit tier.",
+    )
 
 class BenchmarkOut(BaseModel):
     name: str
@@ -135,6 +149,11 @@ class BenchmarkOut(BaseModel):
 class BenchmarkListOut(BaseModel):
     lane: str = "pfas"
     benchmarks: list[BenchmarkOut]
+    usage: dict[str, Any] | None = Field(
+        default=None,
+        description="TW-607 EOM usage block: records served, toll charged this "
+        "call (ledger-read), running period total, rate-limit tier.",
+    )
 
 
 class CorrectionOut(BaseModel):
@@ -150,6 +169,11 @@ class CorrectionListOut(BaseModel):
     dataset_name: str
     semver: str
     corrections: list[CorrectionOut]
+    usage: dict[str, Any] | None = Field(
+        default=None,
+        description="TW-607 EOM usage block: records served, toll charged this "
+        "call (ledger-read), running period total, rate-limit tier.",
+    )
 
 
 class IngestRequest(BaseModel):
@@ -165,3 +189,8 @@ class IngestResponse(BaseModel):
     dead_letters: int
     dead_letter_details: list[dict[str, Any]] = []
     dataset_version_pending: bool = True
+    usage: dict[str, Any] | None = Field(
+        default=None,
+        description="TW-607 EOM usage block: records served, toll charged this "
+        "call (ledger-read), running period total, rate-limit tier.",
+    )

@@ -131,6 +131,11 @@ class IngestResponse(BaseModel):
         default_factory=list,
         description="Per-record failures; one bad record never kills the run",
     )
+    usage: dict[str, Any] | None = Field(
+        default=None,
+        description="TW-607 EOM usage block: records served, toll charged this "
+        "call (ledger-read), running period total, rate-limit tier.",
+    )
 
 
 class ProvenanceRead(BaseModel):
@@ -152,3 +157,8 @@ class Envelope(BaseModel):
     )
     synthetic: bool
     data: Any
+    usage: dict[str, Any] | None = Field(
+        default=None,
+        description="TW-607 EOM usage block: records served, toll charged this "
+        "call (ledger-read), running period total, rate-limit tier.",
+    )

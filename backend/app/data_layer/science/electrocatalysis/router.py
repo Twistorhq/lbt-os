@@ -5,8 +5,9 @@ import logging
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 
+from .. import paywall
 from ..auth import enforce_lab_binding, require_science_key
 from . import schemas
 
@@ -161,6 +162,7 @@ def _envelope(db: Any, rows: list[dict[str, Any]], version: dict[str, Any] | Non
 
 @router.get("/datasets")
 def list_datasets(
+    response: Response = None,
     db: Any = Depends(get_db),
     x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ) -> dict[str, Any]:
@@ -174,17 +176,19 @@ def list_datasets(
     )
     versions = getattr(res, "data", []) or []
     emit_toll(db, event_type="data.science.query", request_id=request_id)
-    return {
+    result = {
         "as_of": _latest_version(db),
         "provenance": {"lab_count": 0, "attestation_summary": {}, "calibration_count": 0},
         "synthetic": True,  # V1: synthetic seeds only
         "versions": [schemas.DatasetVersionOut(**v).model_dump(mode="json") for v in versions],
     }
+    return paywall.finalize(result, db, None, request_id, response)
 
 
 @router.get("/datasets/{version}")
 def get_dataset(
     version: str,
+    response: Response = None,
     db: Any = Depends(get_db),
     x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ) -> dict[str, Any]:
@@ -202,13 +206,14 @@ def get_dataset(
         raise HTTPException(status_code=404, detail=f"dataset version {version!r} not found")
     emit_toll(db, event_type="data.science.query", request_id=request_id)
     v = rows[0]
-    return {
+    result = {
         "as_of": v,
         "provenance": {"lab_count": 0, "attestation_summary": {}, "calibration_count": 0},
         "synthetic": True,
         "merkle_root": v.get("content_root_hash"),
         "row_count": v.get("row_count"),
     }
+    return paywall.finalize(result, db, None, request_id, response)
 
 
 # ---------------------------------------------------------------------------
@@ -217,6 +222,7 @@ def get_dataset(
 
 @router.get("/query")
 def query_gold(
+    response: Response = None,
     composition: str | None = Query(default=None),
     surface_facet: str | None = Query(default=None),
     adsorbate: str | None = Query(default=None),
@@ -263,7 +269,7 @@ def query_gold(
         )
         for r in rows
     ]
-    return payload
+    return paywall.finalize(payload, db, None, request_id, response)
 
 
 # ---------------------------------------------------------------------------
@@ -272,6 +278,7 @@ def query_gold(
 
 @router.get("/benchmarks")
 def list_benchmarks(
+    response: Response = None,
     status: str | None = Query(default=None, pattern="^(open|closed)$"),
     db: Any = Depends(get_db),
     x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
@@ -302,12 +309,13 @@ def list_benchmarks(
         )
 
     emit_toll(db, event_type="data.science.query", request_id=request_id)
-    return {
+    result = {
         "as_of": _latest_version(db),
         "provenance": {"lab_count": 0, "attestation_summary": {}, "calibration_count": 0},
         "synthetic": True,
         "benchmarks": out,
     }
+    return paywall.finalize(result, db, None, request_id, response)
 
 
 # ---------------------------------------------------------------------------
@@ -327,6 +335,7 @@ def _verify_lab(db: Any, lab_id: str) -> dict[str, Any]:
 @router.post("/ingest", status_code=202)
 def ingest_batch(
     batch: schemas.IngestBatchIn,
+    response: Response = None,
     db: Any = Depends(get_db),
     x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
@@ -389,13 +398,14 @@ def ingest_batch(
         request_id=request_id,
         quantity=accepted,
     )
-    return schemas.IngestResultOut(
+    result = schemas.IngestResultOut(
         accepted=accepted,
         quarantined=quarantined,
         dead_letters=dead_letters,
         batch_id=f"sci-batch-{request_id}",
         receipt_hash=receipt_hash,
     ).model_dump(mode="json")
+    return paywall.finalize(result, db, None, request_id, response)
 
 
 # ---------------------------------------------------------------------------
@@ -404,6 +414,7 @@ def ingest_batch(
 
 @router.get("/corrections")
 def list_corrections(
+    response: Response = None,
     dataset_version_id: str | None = Query(default=None),
     db: Any = Depends(get_db),
     x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
@@ -419,7 +430,7 @@ def list_corrections(
         q = q.eq("new_dataset_version_id", dataset_version_id)
     corrections = getattr(q.order("corrected_at", desc=True).execute(), "data", []) or []
     emit_toll(db, event_type="data.science.query", request_id=request_id)
-    return {
+    result = {
         "as_of": _latest_version(db),
         "provenance": {"lab_count": 0, "attestation_summary": {}, "calibration_count": 0},
         "synthetic": True,
@@ -427,3 +438,4 @@ def list_corrections(
             schemas.CorrectionOut(**c).model_dump(mode="json") for c in corrections
         ],
     }
+    return paywall.finalize(result, db, None, request_id, response)
