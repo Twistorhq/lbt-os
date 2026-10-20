@@ -44,8 +44,9 @@ Five stages in order (S5.2), any stage may route to human review:
    `vfy_signals`.
 
 **Excluded:** InsightFace pretrained packs (non-commercial research license
-on the weights). Any weights with unclear provenance. No paid vendor API in
-the default path (FOSS-first).
+on the weights). Any weights with unclear provenance. No paid vendor API
+anywhere: there is no fallback path, in the default flow or out of it
+(NO VENDOR FALLBACK doctrine, decided 2026-10-20).
 
 **API boundary (S5.6), verdict-only:** `POST /verify/sessions`,
 `POST /verify/sessions/{id}/document`, `POST /verify/sessions/{id}/selfie`,
@@ -97,6 +98,28 @@ registry's public face.
   every surface; counts computed after filtering; fail-closed on unrated
   content and on members without an attestation; shared links and OG
   previews return the generic restricted shell.
+- **Close friends and audience scoping (decided 2026-10-20):** a
+  member-curated close friends list, `rsn_close_friends` (owner_id,
+  friend_id, created_at; owner-curated, no reciprocity required, the
+  friend is never notified of listing or removal). Posts and events carry
+  an audience scope (group, connections, close_friends) enforced at the
+  same query layer as S5.9: a close-friends-scoped item is absent, not
+  greyed, for everyone outside the list. Audience scoping composes with
+  age-band filtering; neither substitutes for the other.
+- **Home hosting (decided 2026-10-20; overrides the S9/S12
+  public-venue-only assumption):** events may be hosted at a member's
+  home. The home address lives only in `rsn_event_locations` (bronze)
+  like any exact location, and is never public: home events do not appear
+  on the public index, the directory previews, or any anonymous surface,
+  and list payloads show neighborhood only, to eligible viewers only.
+  The exact-address reveal tier for a home event is the strictest in the
+  product: the host's close friends plus host-approved confirmed guests
+  (an RSVP the host has individually approved), each inside the existing
+  reveal window, every reveal logged in `rsn_location_reveals` exactly
+  as for venue events. The full safety check-in loop (geo verdict, QR,
+  encounter confirms, welfare, write-ups) applies to home events
+  unchanged; a home is a venue for loop purposes, with the address
+  treated at the highest sensitivity the model has.
 - **Check-in loop (S7):** on-device geofence verdict (no coordinates cross
   the wire, no coordinate column exists), venue QR strong proof, encounter
   confirms, welfare check with the help sheet and silent alert, structured
@@ -120,6 +143,55 @@ registry's public face.
   sweeps, risk-triggered plus roughly 1 percent monthly random liveness
   re-challenges, purge pipeline (flag, challenge, 14-day grace, purge) as
   its own sanction class, 12-month dormant-ghost hygiene sweep.
+- **Ambassador program: review staffing (decided 2026-10-20).** First-line
+  human review is staffed by Verified Local Ambassadors, recruited from
+  the platform's own high-standing verified locals rather than hired
+  cold. The machinery:
+  - **Eligibility and recruitment.** Standing tier Pillar or Keyholder,
+    safety band trusted or good standing, no substantiated report in the
+    trailing 12 months, resident in the metro they will review.
+    Recruitment is an invitation: eligible members receive an in-app
+    notification and an email invitation (Notify workflow
+    `rsn_ambassador_invite`, both locales); nobody is enrolled without
+    accepting, and acceptance starts Angela's vetting, not the role.
+  - **Vetting (Angela's rules, TW-654).** Identity is already proven at
+    T2; on top of it, counsel's vetting package governs: the background
+    and conflict checks she specifies, a signed confidentiality and
+    evidence-handling agreement, and completed review training before
+    any queue access. Evidence access is a privileged role and is
+    treated like one from the first ambassador (spec S12 Angela item 7
+    applies to ambassadors in full).
+  - **Scope (first line only).** Ambassadors work two queues inside
+    their assigned metro: the verification exception queue (the engine's
+    human review path, S5.2) and report triage (first read, category
+    confirmation, priority assignment). Their decisions are bounded:
+    they may clear a verification exception or route it to staff, close
+    a report as unfounded with a recorded reason, or escalate. They may
+    NOT issue or lift any sanction or ban (they recommend; staff
+    decide), freeze or open evidence packets, answer disclosures, read
+    face templates or door photos, or touch appeals. Serious categories
+    (threats, sexual misconduct, identity fraud, anything touching the
+    S6.4 emergency path) bypass ambassadors entirely and land on staff
+    at intake. Every ambassador action writes `rsn_audit_log` with the
+    ambassador as actor, on the same terms as staff actions.
+  - **Scoped permissions.** Access is enforced at the entitlement layer,
+    not the UI: an ambassador role row (`rsn_ambassadors`: user_id,
+    metro, status (invited, vetting, active, suspended, revoked),
+    vetted_by, activated_at) with queue-scoped read and action grants
+    checked per request. Case data shown to an ambassador is the minimum
+    the queue item needs; bronze document and biometric stores are never
+    reachable from an ambassador session, and the verification exception
+    view shows the attempt's captures only inside the S5.7 staging
+    window and only for the item being decided.
+  - **Revocation and standing coupling.** Staff may revoke instantly,
+    with a mandatory reason, written to the audit log; the ambassador's
+    open cases reassign automatically. Ambassador status suspends
+    automatically, pending staff review, when the member's standing tier
+    drops below Pillar, their safety band leaves good standing, or any
+    report against them is substantiated; a suspended ambassador sees
+    nothing and queues nothing. Breach of the confidentiality agreement
+    is a severe-path conduct case (S6.6): the role's value is that the
+    community's reviewers are themselves accountable to the ladder.
 - **Media ingest:** one choke point; every upload re-encoded, EXIF and GPS
   stripped before storage; originals never persisted (S4, S8).
 - **Billing (S4):** `rsn_plan_catalog` with `price_cents` NULL until Justynn
@@ -171,15 +243,61 @@ decided Social-only exception to the house browser-first rule (Justynn,
 2026-10-20). iOS home-screen web-app push is evaluated in v1 as the welfare
 loop mitigation; native remains a v2 decision on loop data.
 
+**Display rules (decided 2026-10-20).** Three rules bind every member
+surface, and they refine spec S7.5/S8 where they differ:
+
+- **Standing tier is visible.** The member's social currency tier
+  (Verified, Regular, Fixture, Pillar, Keyholder) shows on their profile
+  as designed social proof.
+- **Punishment state is never displayed.** Safety band demotions (watch,
+  restricted), sanctions, and restriction state render on no
+  member-facing surface, profile or otherwise, to any viewer. This
+  supersedes the S7.5 proposed-visible default for the safety band: the
+  band is staff machinery plus the member's own private standing detail
+  and Notify notices (due process is notification, not display), and no
+  other member ever sees it. A restricted member's entitlements are
+  simply absent, the same doctrine as the ghost town.
+- **Age band is a color chip.** Profiles carry the band as a chip, never
+  a birthdate: 21 plus is a green chip, 18 to 20 is a black chip, and
+  the teen band (phase 2) is flagged with the word "teen". The chip
+  states the band the door check proved and nothing finer.
+
+## Retention change list (queued from TW-654, for Rosa to verify)
+
+One correction to the source specs, flagged by Angela's legal package
+and carried here so Rosa verifies it in this review rather than after
+retention code exists:
+
+- **Conflict.** Spec S6.3 keeps face templates for the life of the
+  verified tier and verification signals and verdicts for 7 years.
+  Colorado HB 24-1130 (biometric identifier duties) requires destruction
+  of a biometric identifier no later than 24 months after the
+  individual's last interaction with the business, subject to the
+  exceptions counsel confirms (incident response, legal hold, and the
+  statute's own carve-outs).
+- **Corrected rule.** Biometric identifiers (face templates, and door
+  photos under TW-647 S6.3) are destroyed at the earlier of the S6.3
+  schedule or 24 months after the member's last interaction (dormancy
+  destruction), unless a counsel-confirmed exception holds the record,
+  and any hold is itself logged. Non-biometric audit records (signal
+  trails, verdicts, the identity anchor hash) follow S6.3 unchanged:
+  the law governs the biometric, not the fact that a verdict happened.
+  The destruction job is a retention task in Phase 2 (tasks.md item
+  10a), and the published retention schedule (S5.7) is updated to state
+  the 24-month rule before any production capture.
+
 ## Decisions that gate specific phases (not this package)
 
 From spec S12, routed, none silently assumed:
 
-- Justynn: review staffing and coverage hours (gates soft launch),
-  public-venue-only soft launch confirmation (gates soft launch), vendor
-  fallback trigger (gates only the failure branch of the benchmark gate),
-  trust band display default (gates profile surface only), organizer price
-  points (gates public launch, not the build).
+- Justynn, DECIDED 2026-10-20 (spec S12 questions 1 to 4, closed): review
+  staffing is the Verified Local Ambassador program (ambassador
+  subsection above); home hosting is allowed with close friends and
+  audience scoping (social core subsections above), retiring the
+  public-venue-only question; there is NO vendor fallback, so the
+  benchmark gate has no failure branch to gate, it passes or launch
+  waits; display defaults are set (display rules above). Still open:
+  organizer price points (gates public launch, not the build).
 - Angela via TW-654: BIPA consent and retention (gates production capture),
   callout line (gates copy), law-enforcement process wording (gates the
   runbook), meetup liability posture (gates launch), door photo consent

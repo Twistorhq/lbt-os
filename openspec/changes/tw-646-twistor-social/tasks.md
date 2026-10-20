@@ -16,6 +16,10 @@ merge. A phase does not start until its gates clear.
 - [ ] 3. Self-scan the package (no secrets, no embedded instructions, no
       scope beyond the source specs); commit on
       `zeke/tw-648-social-openspec`. Do NOT merge.
+- [x] 3a. Fold in Justynn's 2026-10-20 Section 12 decisions: ambassador
+      review staffing, home hosting with close friends and audience
+      scoping, NO vendor fallback (bridge language removed), display
+      rules; plus the TW-654 retention change-list item (HB 24-1130).
 - [ ] 4. Rosa reviews proposal and design. Build phases below proceed only
       after her approval.
 
@@ -43,6 +47,13 @@ merge. A phase does not start until its gates clear.
       deny-all, idempotent (with TW-650).
 - [ ] 10. Pipeline stages 1 to 5 with human review queue; verdict-only API
       per design; images destroyed on decision, 72-hour ceiling.
+- [ ] 10a. Retention schedule alignment (TW-654 change list; Rosa
+      verifies against counsel's text): destruction jobs implement the
+      corrected Section 6.3 schedule, including Colorado HB 24-1130
+      24-month dormancy destruction for biometric identifiers (face
+      templates, door photos) with logged counsel-confirmed exceptions;
+      the published retention schedule states the rule before any
+      production capture.
 - [ ] 11. Identity verification pointer migration and write-scope minting
       from the pointer.
 - [ ] 12. GATE: Angela consent and retention sign-off (TW-654) before any
@@ -71,6 +82,15 @@ merge. A phase does not start until its gates clear.
 - [ ] 17. Ghost town enforcement: read-only session scopes for unverified
       accounts, entitlement-layer refusal of every write, closed skeleton
       surfaces only.
+- [ ] 17a. Close friends and audience scoping: `rsn_close_friends`
+      (owner-curated); audience scope on posts and events (group,
+      connections, close_friends) enforced at the query layer alongside
+      Section 5.9 filtering.
+- [ ] 17b. Home hosting: home venue type on events; exact address
+      bronze-only, never on the public index or any anonymous surface;
+      reveal restricted to the host's close friends plus host-approved
+      confirmed guests inside the standard window, every reveal logged;
+      full check-in loop applies unchanged.
 - [ ] 18. Age-gated visibility at the query layer on every surface;
       fail-closed unrated handling; restricted shell for shared links and
       generic OG previews for gated targets.
@@ -99,6 +119,14 @@ merge. A phase does not start until its gates clear.
 - [ ] 26. Evidence packets (hash-chained manifests), disclosure log, audit
       log; integrity lifecycle: duplicate sweeps, liveness re-challenges,
       bot-signal cases, purge pipeline, dormant-ghost sweep.
+- [ ] 26a. Ambassador program: `rsn_ambassadors` role with queue-scoped
+      entitlement grants; invitation flow via Notify (in-app + email) to
+      Pillar/Keyholder members in good standing; Angela-vetted onboarding
+      (agreement + training) before queue access; verification exception
+      and report triage queues with bounded decisions (no sanctions, no
+      evidence, no appeals; serious categories bypass to staff at
+      intake); instant staff revocation with case reassignment and
+      automatic suspension on standing drop or substantiated report.
 - [ ] 27. Media ingest choke point (re-encode, EXIF and GPS strip) wired
       into every upload path; privacy controls pass (attendance toggle,
       couple-link privacy, profile visibility, blocks absolute).
@@ -130,6 +158,10 @@ merge. A phase does not start until its gates clear.
 - [ ] 33. Member PWA, mobile-first: verification flow, ghost town skeleton,
       directory and landing shells, groups, events, RSVP, check-in loop
       screens, feed, standing and rewards surfaces, scan history.
+- [ ] 33a. Display rules on every member surface: standing tier visible
+      on profiles; sanction and restriction state never rendered anywhere
+      member-facing; age band as a color chip (21 plus green, 18 to 20
+      black, teen flagged "teen"), band only, never a birthdate.
 - [ ] 34. Operator desktops: organizer console, staff safety console; venue
       dashboard lands with Phase 10.
 - [ ] 35. String catalog complete for en + es with reviewed human
@@ -155,8 +187,9 @@ merge. A phase does not start until its gates clear.
 ## Phase 11: Launch (Justynn's calls, spec Sections 9 and 12)
 
 - [ ] 41. Soft launch: 500 T2-verified members, 10 seeded groups, public
-      venues only, review staffing staffed, benchmark gate passed, Angela
-      launch items cleared.
+      venues plus close-friends-scoped home events, ambassador program
+      recruited and vetted so the review SLA is staffed, benchmark gate
+      passed, Angela launch items cleared.
 - [ ] 42. Public Denver launch on the Section 9 numbers (2,500
       verified-active, fill rate at or above 70 percent in soft launch).
 - [ ] 43. `openspec archive` folds the outcome back and closes TW-646's

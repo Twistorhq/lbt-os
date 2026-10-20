@@ -27,7 +27,13 @@ affected_areas:
   - supabase/ (vfy_, rsn_, evt_, dps_ migrations)
   - frontend/ (member PWA + operator consoles, Sofia lane TW-652)
 x-launch_gates:
-  - verification benchmark gate (spec 5.3/5.5): per-demographic-group FMR/FNMR measured on our own stack before T2 opens; failure routes to remediation or to Justynn's vendor-fallback decision (spec 12 Q3)
+  - verification benchmark gate (spec 5.3/5.5), per-demographic-group FMR/FNMR measured on our own stack before T2 opens; failure routes to remediation and re-measurement only. NO VENDOR FALLBACK, ever (decided 2026-10-20); the engine passes its benchmark on its own or the launch waits
   - Angela consent gate: no production face capture of any kind until BIPA-class consent and retention language is signed in writing (TW-654)
   - Rosa review: this package is reviewed before any implementation code merges; each phase lands as its own reviewed change
+x-decisions_2026_10_20:
+  - review staffing is a Verified Local Ambassador program (Pillar/Keyholder locals, first-line review, staff escalation, Angela-vetted scoped permissions)
+  - home hosting is allowed (close friends list, per-post/per-event audience scoping, exact home address restricted to close friends plus host-approved confirmed guests)
+  - no vendor fallback, ever; the engine passes its benchmark on its own or launch waits
+  - display rules; standing tier visible, sanction and restriction state never displayed, age band as color chip (21+ green, 18-20 black, teen flagged "teen")
+  - spec 6.3 retention conflict fix from TW-654 (Colorado HB 24-1130, 24-month dormancy destruction of biometric identifiers), carried in design.md for Rosa to verify
 skip_specs: true

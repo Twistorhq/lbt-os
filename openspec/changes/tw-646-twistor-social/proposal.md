@@ -37,7 +37,12 @@ Section 13 and gated as listed under Launch gates. The package covers:
 3. **Social core**: groups, events, series, RSVP with standing-tier waves,
    tiered location reveal with logging, couple links, blocks, ghost town
    enforcement at the token and entitlement layer (spec Sections 4, 5.1,
-   5.9, 5.11, 7.7).
+   5.9, 5.11, 7.7). **Home hosting is in scope** (decided 2026-10-20,
+   overriding the spec Sections 9/12 public-venue-only assumption):
+   a member-curated close friends list, per-post and per-event audience
+   scoping, and home events whose exact address is restricted to the
+   host's close friends plus host-approved confirmed guests, with the
+   full check-in loop and reveal logging applied unchanged.
 4. **Safety check-in loop and trust**: geo arrival (on-device verdict), venue
    QR strong check-in, encounter confirms, welfare check, post-event
    write-ups, trust ledger and bands, social currency tiers, guest passes,
@@ -45,7 +50,11 @@ Section 13 and gated as listed under Launch gates. The package covers:
 5. **Safety system**: reports, staff console, sanctions ladder, appeals,
    identity-anchored bans, evidence packets, disclosure log, audit log,
    account integrity lifecycle with the due-process purge pipeline (spec
-   Sections 6.1 to 6.7).
+   Sections 6.1 to 6.7). Review staffing is the **Verified Local
+   Ambassador program** (decided 2026-10-20): first-line review by
+   vetted Pillar and Keyholder locals under scoped permissions, with
+   serious incidents escalating to staff (design.md carries the role,
+   scopes, and revocation).
 6. **Events data layer** (spec Section 10): `evt_` schema, ICS poller, API
    client, organizer import, fingerprint dedupe, fail-closed provenance
    gate, public Denver index, claim-a-listing (TW-651).
@@ -55,10 +64,19 @@ Section 13 and gated as listed under Launch gates. The package covers:
 8. **Member and operator surfaces** (spec Sections 1, 11): mobile-first PWA
    for member flows; desktop operator layers (organizer console, venue
    dashboard, staff safety console); English and Spanish at launch, human
-   translated (TW-652, Sofia).
+   translated (TW-652, Sofia). Display rules (decided 2026-10-20):
+   standing tier is visible on profiles; punishment and restriction
+   state is never displayed; age band renders as a color chip (21 plus
+   green, 18 to 20 black, teen flagged "teen").
 9. **Door Pass** (TW-647): device keys, minting, nonce registry, verify
    endpoint with three result states, door photo behind its legal gate,
    venue domain (`dps_`), signage kit, scan tolls (TW-653).
+10. **Retention schedule conflict fix** (queued from TW-654, Angela):
+    the spec Section 6.3 retention table conflicts with Colorado
+    HB 24-1130 for biometric identifiers (destruction no later than 24
+    months after the member's last interaction). The corrected rule is
+    carried in design.md's change list; Rosa verifies it against
+    counsel's text before the Phase 2 build writes any retention job.
 
 Phase 2 (designed, not in this build): teen tier and school-ID verification
 (spec Sections 5.10, 5.12), native apps, push beyond the v1 evaluation.
@@ -71,9 +89,10 @@ Phase 2 (designed, not in this build): teen tier and school-ID verification
    measured on our own stack and **broken out by demographic group**, written
    into a launch evidence report. Planning target: false-match rate at or
    below 1 in 10,000; any group materially worse blocks the T2 launch until
-   threshold policy, model swap, or review-path design closes the gap. If
-   remediation stalls, the vendor-fallback decision is Justynn's (spec
-   Section 12, question 3), made with the benchmark numbers in front of him.
+   threshold policy, model swap, or review-path design closes the gap and a
+   re-measurement passes. **NO VENDOR FALLBACK, ever** (decided 2026-10-20):
+   there is no paid bridge and no interim vendor check. The engine passes
+   its benchmark on its own, or the launch waits.
 3. **Angela consent gate** (TW-654; spec Sections 5.7, 12): the engine
    captures **no production face, ever**, until Angela signs the BIPA-class
    consent flow and the retention and destruction schedule in writing. The
@@ -83,9 +102,11 @@ Phase 2 (designed, not in this build): teen tier and school-ID verification
    gate. Liquor-law, callout-line, law-enforcement-process, and liability
    items gate the copy and the venue pilot, per TW-647 Section 9.
 4. **Density gates** (spec Section 9): soft launch at 500 T2-verified
-   members and 10 seeded public-venue groups; public Denver launch at 2,500
-   verified-active members, soft-launch weekly fill rate at or above 70
-   percent, review SLA staffed, benchmark gate passed.
+   members and 10 seeded groups (public venues plus close-friends-scoped
+   home events, per the home-hosting decision); public Denver launch at
+   2,500 verified-active members, soft-launch weekly fill rate at or
+   above 70 percent, the ambassador program recruited and vetted so the
+   review SLA is staffed, benchmark gate passed.
 
 ## Out of scope
 
@@ -96,8 +117,9 @@ Phase 2 (designed, not in this build): teen tier and school-ID verification
 - Native mobile apps, wallet passes (TW-647 v2 candidate), marketplace,
   ticketing, attendee payments, dating features, algorithmic ranking,
   machine-learned trust model: all out per spec Section 11.
-- Paid verification vendors in the default path (FOSS-first standing rule).
-  Vendor fallback exists only as Justynn's gated decision above.
+- Paid verification vendors in any path. NO VENDOR FALLBACK (decided
+  2026-10-20): the engine passes its benchmark on its own or the launch
+  waits; there is no bridge, interim or otherwise.
 - Setting organizer prices (Justynn's launch decision; primitives ship
   price-free).
 
@@ -108,5 +130,8 @@ Phase 2 (designed, not in this build): teen tier and school-ID verification
   change conventions, and traces every build phase to its spec section and
   companion ticket.
 - Launch gates are stated as blocking conditions, not aspirations.
+- The spec Section 6.3 retention conflict (Colorado HB 24-1130) is
+  carried in design.md as a change-list item with the corrected rule
+  stated, for Rosa's verification against TW-654.
 - Rosa reviews and approves the package; the build tickets proceed in the
   Section 13 sequence only after that approval.
