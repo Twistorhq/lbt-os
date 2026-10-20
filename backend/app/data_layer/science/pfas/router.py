@@ -98,6 +98,7 @@ def list_datasets(
     db=Depends(get_db),
     x_request_id: Annotated[str | None, Header()] = None,
 ):
+    paywall.enforce_rate_limit(db, _TOLL_ORG)  # TW-608: 429 shutoff
     """List released PFAS dataset versions, newest first."""
     rows = (
         db.table(models.VERSIONS_TABLE)
@@ -122,6 +123,7 @@ def get_dataset_version(
     db=Depends(get_db),
     x_request_id: Annotated[str | None, Header()] = None,
 ):
+    paywall.enforce_rate_limit(db, _TOLL_ORG)  # TW-608: 429 shutoff
     """Snapshot metadata for one semver, including the merkle root."""
     row = (
         db.table(models.VERSIONS_TABLE)
@@ -151,6 +153,7 @@ def query_gold(
     db=Depends(get_db),
     x_request_id: Annotated[str | None, Header()] = None,
 ):
+    paywall.enforce_rate_limit(db, _TOLL_ORG)  # TW-608: 429 shutoff
     """Query the gold snapshot. Filters: compound, destruction_method,
     min_destruction_pct, synthetic. Set bulk=true for full export (tolls
     per 1k rows under data.science.bulk)."""
@@ -208,6 +211,7 @@ def list_benchmarks(
     db=Depends(get_db),
     x_request_id: Annotated[str | None, Header()] = None,
 ):
+    paywall.enforce_rate_limit(db, _TOLL_ORG)  # TW-608: 429 shutoff
     """Open benchmarks for the lane. V1 ships the method-comparison concept;
     rows from the shared sci_benchmarks table attach once seeded."""
     benchmarks: list[schemas.BenchmarkOut] = []
@@ -256,6 +260,7 @@ def ingest_batch(
     x_request_id: Annotated[str | None, Header()] = None,
     x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
 ):
+    paywall.enforce_rate_limit(db, _TOLL_ORG)  # TW-608: 429 shutoff
     """Signed lab ingestion. Per-record isolation: invalid records land in
     dead letters, valid ones insert. Accepted rows await the next dataset
     version cut before they appear in gold."""
@@ -296,6 +301,7 @@ def correction_feed(
     db=Depends(get_db),
     x_request_id: Annotated[str | None, Header()] = None,
 ):
+    paywall.enforce_rate_limit(db, _TOLL_ORG)  # TW-608: 429 shutoff
     """Correction feed for one dataset version: errata that superseded rows
     carried by that version. History is never rewritten."""
     version_row = (

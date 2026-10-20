@@ -608,3 +608,50 @@ def send_identity_sso_invite(*, to: str, org_name: str, link_url: str) -> None:
         subject=f"Join {org_name} on Twistor",
         html=identity_sso_invite_html(org_name=org_name, link_url=link_url),
     )
+
+
+def send_rate_limit_warning(
+    *,
+    to: str,
+    org_name: str,
+    tier: str,
+    rpm: int,
+    used: int,
+    warn_pct: int,
+) -> None:
+    """Rate-limit courtesy warning (TW-608): the org is near its per-minute
+    API limit. Sent BEFORE any shutoff, so no customer is ever surprised.
+    At 100% the API pauses with a 429; Twistor never charges overage fees.
+    """
+    body = f"""
+      <h1 style="margin:0 0 4px;font-size:22px;font-weight:700;color:#0f172a;letter-spacing:-0.4px;">
+        Heads up: {warn_pct}% of your API rate limit used
+      </h1>
+      <p style="margin:0 0 24px;font-size:14px;color:#64748b;">{org_name} · Twistor data API</p>
+
+      <p style="margin:0 0 12px;font-size:14px;color:#0f172a;line-height:1.6;">
+        You have used <strong>{used} of {rpm} requests per minute</strong>
+        on the <strong>{tier}</strong> tier.
+      </p>
+      <p style="margin:0 0 12px;font-size:14px;color:#475569;line-height:1.6;">
+        When usage reaches 100%, requests pause with a 429 response until the
+        window resets. Nothing is served past the limit and nothing extra is
+        charged. Twistor never bills overage fees.
+      </p>
+      <p style="margin:0;font-size:14px;color:#475569;line-height:1.6;">
+        To raise your ceiling, upgrade your rate-limit tier. Your live usage
+        is always visible in the X-Twistor-Usage response headers.
+      </p>
+    """
+
+    _send(
+        to=to,
+        subject=f"Rate limit warning: {used}/{rpm} requests per minute used · {org_name}",
+        html=_base(
+            title="Rate Limit Warning",
+            preheader=f"{org_name}: {used} of {rpm} requests per minute used. Service pauses at 100%, no overage fees.",
+            body_html=body,
+            cta_url=f"{settings.frontend_url}/app",
+            cta_label="Open dashboard →",
+        ),
+    )

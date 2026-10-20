@@ -109,8 +109,8 @@ def _emit_neutral_toll(
 
 
 def _gate(db: Any, org_id: str) -> str:
-    """Paywall: every read needs an active Twistor subscription (402 otherwise)."""
-    return paywall.require_active_subscription(db, org_id)
+    """Paywall: active subscription (402) + rate limit (429, TW-608)."""
+    return paywall.gate(db, org_id)
 
 
 def _rows(resp: Any) -> list[dict[str, Any]]:

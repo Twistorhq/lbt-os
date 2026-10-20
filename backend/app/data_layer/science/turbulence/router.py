@@ -82,6 +82,7 @@ def list_datasets(auth: Annotated[AuthContext, Depends(get_auth)],
                  response: Response = None):
     request_id = _request_id()
     db = get_db()
+    paywall.enforce_rate_limit(db, auth.org_id)  # TW-608: 429 shutoff
     rows = [r for r in _rows(db, _VERSIONS_TABLE) if r.get("lane") == LANE]
     _emit_toll(auth.org_id, "data.science.query", request_id)
     result = [DatasetVersionOut(**{
@@ -104,6 +105,7 @@ def get_dataset(version: str, auth: Annotated[AuthContext, Depends(get_auth)],
                 response: Response = None):
     request_id = _request_id()
     db = get_db()
+    paywall.enforce_rate_limit(db, auth.org_id)  # TW-608: 429 shutoff
     rows = [r for r in _rows(db, _VERSIONS_TABLE)
             if r.get("lane") == LANE and r.get("semver") == version]
     _emit_toll(auth.org_id, "data.science.query", request_id)
@@ -142,6 +144,7 @@ def query_measurements(
                            reynolds_max=reynolds_max, closure_model=closure_model,
                            solver=solver, synthetic=synthetic, limit=limit)
     db = get_db()
+    paywall.enforce_rate_limit(db, auth.org_id)  # TW-608: 429 shutoff
     rows = _rows(db, _MEAS_TABLE)
     if filters.case_name:
         rows = [r for r in rows if r.get("case_name") == filters.case_name]
@@ -192,6 +195,7 @@ def list_benchmarks(auth: Annotated[AuthContext, Depends(get_auth)],
                     response: Response = None):
     request_id = _request_id()
     db = get_db()
+    paywall.enforce_rate_limit(db, auth.org_id)  # TW-608: 429 shutoff
     benches = [r for r in _rows(db, _BENCH_TABLE) if r.get("lane") == LANE]
     runs = _rows(db, _BENCH_RUNS_TABLE)
     out = []
@@ -225,6 +229,7 @@ def ingest_batch(batch: IngestBatch,
                  x_api_key: str | None = Header(default=None, alias="X-API-Key")):
     request_id = _request_id()
     db = get_db()
+    paywall.enforce_rate_limit(db, auth.org_id)  # TW-608: 429 shutoff
     key = require_science_key(x_api_key, db, "turbulence")
     enforce_lab_binding(key, [rec.lab_id for rec in batch.records])
     accepted = 0

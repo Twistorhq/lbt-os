@@ -570,6 +570,203 @@ def org_rate_limit_tier(db: Any, org_id: str | None) -> str:
         return DEFAULT_RATE_LIMIT_TIER
 
 
+# --------------------------------------- rate-limit enforcement (TW-608)
+# No-surprise-overcharges rule: warn at 80% of the per-minute limit
+# (configurable), SHUT OFF at 100%. The shutoff is enforcement: 429,
+# nothing served, nothing charged. The warning is courtesy: email plus
+# the TW-607 usage block/headers, so programmatic clients see it coming.
+# Degradation = serve (fail-open): a broken counter must never block a
+# paying customer, and an uncounted request is simply one we do not bill
+# against the limit. There are no overage fees in this system: the limit
+# is a wall, not a meter.
+RATE_LIMIT_WARN_RATIO = 0.80  # warn when usage reaches 80% of the limit
+RATE_LIMIT_WINDOW_SECONDS = 60  # rolling window for the per-minute limit
+RATE_LIMIT_WARN_COOLDOWN_SECONDS = 900  # one warning email per org per 15 min
+
+# org_id -> datetime of last warning email (process-local dedupe; a second
+# worker may rarely double-send inside the cooldown -- acceptable for V1,
+# and the email itself is idempotent courtesy, never a charge).
+_rate_warn_sent: dict[str, datetime] = {}
+
+
+def rate_limit_usage(db: Any, org_id: str | None) -> dict[str, Any]:
+    """Requests served vs the org's per-minute rate limit, trailing window.
+
+    Counts data.science.* toll events for the org in the rolling window;
+    the toll ledger is the source of truth, so counted requests are exactly
+    the requests we billed. Fail-soft: on any lookup failure returns a
+    zero-usage status so the caller serves (fail-open, TW-208).
+    """
+    tier = org_rate_limit_tier(db, org_id)
+    rpm = int(RATE_LIMIT_TIERS.get(tier, {}).get("rpm") or 60)
+    status: dict[str, Any] = {
+        "tier": tier,
+        "rpm": rpm,
+        "used": 0,
+        "ratio": 0.0,
+        "warn": False,
+        "over": False,
+        "reset_after": RATE_LIMIT_WINDOW_SECONDS,
+    }
+    if not org_id or org_id in _UNSCOPED_ORGS:
+        return status
+    try:
+        since = (
+            datetime.now(timezone.utc) - timedelta(seconds=RATE_LIMIT_WINDOW_SECONDS)
+        ).isoformat()
+        resp = (
+            db.table("toll_events")
+            .select("event_type,occurred_at")
+            .eq("org_id", org_id)
+            .gte("occurred_at", since)
+            .execute()
+        )
+        rows = getattr(resp, "data", None) or []
+        now = datetime.now(timezone.utc)
+        oldest: datetime | None = None
+        used = 0
+        for r in rows:
+            if not str(r.get("event_type") or "").startswith(SCIENCE_EVENT_PREFIX):
+                continue
+            used += 1
+            try:
+                ts = datetime.fromisoformat(str(r.get("occurred_at")))
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                if oldest is None or ts < oldest:
+                    oldest = ts
+            except Exception:
+                pass
+        ratio = (used / rpm) if rpm else 0.0
+        reset_after = RATE_LIMIT_WINDOW_SECONDS
+        if oldest is not None:
+            reset_after = max(
+                0,
+                int(RATE_LIMIT_WINDOW_SECONDS - (now - oldest).total_seconds()),
+            )
+        status.update(
+            {
+                "used": used,
+                "ratio": ratio,
+                "warn": ratio >= RATE_LIMIT_WARN_RATIO,
+                "over": ratio >= 1.0,
+                "reset_after": reset_after,
+            }
+        )
+        return status
+    except Exception as exc:  # TW-208: counter down -> serve, log, move on
+        log.warning("rate-limit usage lookup failed for org %s: %s", org_id, exc)
+        return status
+
+
+def _org_contact_email(db: Any, org_id: str | None) -> str | None:
+    """Best-effort billing contact email for the org.
+
+    Reads organizations.billing_email when the column exists; None when
+    unknown. The in-band warning (usage block/headers) always fires; the
+    email is the courtesy channel that activates once the column is
+    populated.
+    """
+    if not org_id or org_id in _UNSCOPED_ORGS:
+        return None
+    try:
+        resp = (
+            db.table("organizations").select("billing_email").eq("id", org_id).execute()
+        )
+        rows = getattr(resp, "data", None) or []
+        if rows:
+            email = (rows[0].get("billing_email") or "").strip()
+            return email or None
+    except Exception as exc:  # TW-208: column missing or lookup down
+        log.debug("billing email lookup failed for org %s: %s", org_id, exc)
+    return None
+
+
+def maybe_send_rate_limit_warning(
+    db: Any,
+    org_id: str | None,
+    usage: dict[str, Any] | None = None,
+) -> bool:
+    """Send the 80% courtesy email if due. Cooldown-deduped per org.
+
+    Returns True when the warning state is active (email sent or already
+    sent inside the cooldown), False otherwise. Never raises.
+    """
+    try:
+        usage = usage if usage is not None else rate_limit_usage(db, org_id)
+        if not usage.get("warn") or usage.get("over"):
+            return bool(usage.get("warn"))
+        key = org_id or ""
+        now = datetime.now(timezone.utc)
+        last = _rate_warn_sent.get(key)
+        if last and (now - last).total_seconds() < RATE_LIMIT_WARN_COOLDOWN_SECONDS:
+            return True
+        to = _org_contact_email(db, org_id)
+        if not to:
+            log.debug(
+                "rate-limit warning for org %s: no billing email on file; "
+                "in-band warning only",
+                org_id,
+            )
+            return True
+        from app.services import email as _email_svc  # lazy: avoid import cycles
+
+        _email_svc.send_rate_limit_warning(
+            to=to,
+            org_name=org_id or "your organization",
+            tier=str(usage.get("tier")),
+            rpm=int(usage.get("rpm") or 0),
+            used=int(usage.get("used") or 0),
+            warn_pct=int(RATE_LIMIT_WARN_RATIO * 100),
+        )
+        _rate_warn_sent[key] = now
+        return True
+    except Exception as exc:  # TW-208: warning delivery never breaks serving
+        log.warning("rate-limit warning failed for org %s: %s", org_id, exc)
+        return False
+
+
+def enforce_rate_limit(db: Any, org_id: str | None) -> dict[str, Any]:
+    """Pre-serve rate-limit gate (TW-608). Call before serving any science
+    request.
+
+    At 100% of the per-minute limit: raises 429. Nothing is served and --
+    critically -- no toll is emitted, so a rejected request can never
+    produce a charge. Below the limit: triggers the 80% courtesy warning
+    when crossed and returns the usage status. Fail-open on lookup
+    failure (TW-208).
+    """
+    usage = rate_limit_usage(db, org_id)
+    if usage.get("over"):
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"Rate limit reached ({usage['used']}/{usage['rpm']} "
+                "requests per minute on your tier). Requests are paused "
+                "until the window resets. Nothing was served and nothing "
+                "was charged. Twistor never bills overage fees."
+            ),
+            headers={
+                "Retry-After": str(int(usage.get("reset_after") or 60)),
+                "X-Twistor-RateLimit-Limit": str(usage.get("rpm")),
+                "X-Twistor-RateLimit-Used": str(usage.get("used")),
+                "X-Twistor-RateLimit-Reset": str(int(usage.get("reset_after") or 60)),
+            },
+        )
+    maybe_send_rate_limit_warning(db, org_id, usage)
+    return usage
+
+
+def gate(db: Any, org_id: str | None) -> str:
+    """Combined science gate: subscription (402) + rate limit (429).
+
+    Drop-in for router _gate helpers. Returns the org_id on success.
+    """
+    require_active_subscription(db, org_id)
+    enforce_rate_limit(db, org_id)
+    return org_id or ""
+
+
 # ------------------------------------------- usage metering (TW-607)
 # Claude Code end-of-message style: every science API response carries a
 # usage block so the researcher sees exactly what each transaction consumed
@@ -650,11 +847,10 @@ def build_usage_block(
     """
     toll_rows = lookup_request_tolls(db, request_id)
     toll_cents = sum(int(r.get("amount_cents") or 0) for r in toll_rows)
-    period_total_cents = (
-        trailing_science_spend_cents(db, org_id) if org_id else 0
-    )
+    period_total_cents = trailing_science_spend_cents(db, org_id) if org_id else 0
     tier = org_rate_limit_tier(db, org_id)
     rpm = int(RATE_LIMIT_TIERS.get(tier, {}).get("rpm") or 60)
+    rl = rate_limit_usage(db, org_id)
     return {
         "records": max(0, int(records)),
         "toll_cents": toll_cents,
@@ -664,6 +860,8 @@ def build_usage_block(
         "period_total": _dollars(period_total_cents),
         "rate_limit_tier": tier,
         "rate_limit_rpm": rpm,
+        "rate_limit_used": int(rl.get("used") or 0),
+        "rate_limit_warning": bool(rl.get("warn")),
     }
 
 
@@ -715,6 +913,11 @@ def set_usage_headers(response: Any, usage: dict[str, Any]) -> None:
             },
             separators=(",", ":"),
         )
+        # TW-608: in-band rate-limit warning for programmatic clients.
+        headers["X-Twistor-RateLimit-Limit"] = str(usage.get("rate_limit_rpm", 0))
+        headers["X-Twistor-RateLimit-Used"] = str(usage.get("rate_limit_used", 0))
+        if usage.get("rate_limit_warning"):
+            headers["X-Twistor-RateLimit-Warning"] = "1"
     except Exception as exc:  # TW-208: header stamping never breaks serving
         log.warning("usage header stamp failed: %s", exc)
 
@@ -757,6 +960,7 @@ def finalize(
     if response is not None:
         set_usage_headers(response, usage)
     return result
+
 
 # ------------------------------------------------------------------ Excel
 def build_excel_bytes(
