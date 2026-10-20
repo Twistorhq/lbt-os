@@ -89,6 +89,12 @@ do not enter this pipeline, even as a benchmark reference.
 ## Smoke report
 
 `examples/smoke-report.json` is a committed example of the report
-shape, produced from 240 synthetic attempts (seed 7). At smoke scale
-the gate verdict is INSUFFICIENT_DATA by design: the sample floors
-are not met, and the harness says so instead of passing quietly.
+shape, produced from 240 synthetic attempts (seed 7): overall FMR
+0.0083, FNMR 0.0, verdict **FAIL** with INSUFFICIENT_DATA also
+flagged. Both halves of that verdict are the harness working as
+designed: the sample floors are nowhere near met (120 attempts per
+class against floors of 300 genuine / 5,000 impostor per group), and
+one synthetic impostor in one group still crossed the threshold,
+which is a measured FMR-ceiling breach, and a measured failure
+outranks insufficient data (Section: the gate, above). Smoke numbers
+are never gate evidence.
