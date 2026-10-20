@@ -66,17 +66,28 @@ def agreement_rate(
     barcode: list[dict[str, str]],
     fields: list[str],
 ) -> dict[str, Optional[float]]:
-    """Per-field share of paired documents whose front and barcode agree.
+    """Per-field share of evidenced pairs whose front and barcode agree.
 
-    Pairs are positional (the same document read two ways). A field
-    with no pairs is None (unmeasured), never zero.
+    Pairs are positional (the same document read two ways). A pair is
+    evidence for a field only when at least one side carries it: a
+    pair missing the field on both sides says nothing and does not
+    count toward the rate. Agreement requires equal present values,
+    so a value present on one side only is a disagreement. A field
+    with no evidenced pairs is None (unmeasured), never 1.0 on no
+    evidence.
     """
     pairs = list(zip(front, barcode))
     rates: dict[str, Optional[float]] = {}
     for name in fields:
-        if not pairs:
-            rates[name] = None
-            continue
-        agree = sum(1 for f, b in pairs if f.get(name) == b.get(name))
-        rates[name] = agree / len(pairs)
+        evidenced = 0
+        agree = 0
+        for f, b in pairs:
+            front_value = f.get(name)
+            barcode_value = b.get(name)
+            if front_value is None and barcode_value is None:
+                continue
+            evidenced += 1
+            if front_value == barcode_value:
+                agree += 1
+        rates[name] = (agree / evidenced) if evidenced else None
     return rates

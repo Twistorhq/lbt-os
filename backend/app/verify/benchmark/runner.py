@@ -65,6 +65,7 @@ def run_benchmark(
     threshold: float,
     criteria: GateCriteria = GateCriteria(),
     liveness: Optional[Iterable[tuple[str, bool]]] = None,
+    expected_groups: Iterable[str] = (),
 ) -> dict:
     """Apply the launch gate and render the serializable report.
 
@@ -72,22 +73,32 @@ def run_benchmark(
     overall accuracy, FMR/FNMR overall and broken out by demographic
     group, the demographic FNMR gap, and the gate verdict with its
     reasons. INSUFFICIENT_DATA is a verdict, not an absence of one.
+
+    `expected_groups` carries the coverage set the run's dataset
+    declares in registry.py; an expected group with no attempts is
+    reported INSUFFICIENT_DATA by name, never silently dropped.
     """
     attempts = list(attempts)
-    gate = evaluate_gate(attempts, threshold, criteria)
+    gate = evaluate_gate(
+        attempts, threshold, criteria, expected_groups=expected_groups
+    )
     overall = rates_for(attempts, threshold)
     groups = per_group(attempts, threshold)
+
+    gate_section: dict = {
+        "status": gate.status.value,
+        "failures": gate.failures,
+        "insufficient": gate.insufficient,
+        "criteria": asdict(criteria),
+    }
+    if expected_groups:
+        gate_section["expected_groups"] = sorted(set(expected_groups))
 
     report: dict = {
         "threshold": threshold,
         "overall": overall.as_dict(),
         "groups": {name: rs.as_dict() for name, rs in groups.items()},
-        "gate": {
-            "status": gate.status.value,
-            "failures": gate.failures,
-            "insufficient": gate.insufficient,
-            "criteria": asdict(criteria),
-        },
+        "gate": gate_section,
     }
     if liveness is not None:
         rates = liveness_rates(liveness)

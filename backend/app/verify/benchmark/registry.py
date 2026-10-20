@@ -9,6 +9,10 @@ does not run. Rules, per the TW-649 brief and TW-646 Section 5.3:
 - No scraped faces. No production data. Nothing a member ever sent us.
 - A dataset's demographic group labels come from the dataset itself;
   the harness reports groups, it never invents or infers them.
+- Gate-bearing entries declare `expected_groups`: the demographic
+  groups a run of that dataset is expected to cover. A run missing
+  an expected group reports INSUFFICIENT_DATA for it (see
+  metrics.evaluate_gate); an absent group never reads as a pass.
 """
 
 from __future__ import annotations
@@ -25,6 +29,10 @@ class Dataset:
     consent_basis: str
     status: str  # "available" | "registered" | "planned"
     notes: str = ""
+    # Demographic groups a run of this dataset must cover; the gate
+    # reports each absent one as INSUFFICIENT_DATA. Empty for entries
+    # that cannot feed the per-group gate.
+    expected_groups: tuple[str, ...] = ()
 
 
 DATASETS: tuple[Dataset, ...] = (
@@ -64,7 +72,13 @@ DATASETS: tuple[Dataset, ...] = (
         notes=(
             "The set the real launch gate runs on (TW-646 Section 5.3). "
             "BLOCKER: collection cannot start until Angela's consent "
-            "package is approved and Justynn signs off (TW-654 D1-D3)."
+            "package is approved and Justynn signs off (TW-654 D1-D3). "
+            "expected_groups is recorded here from the collection "
+            "protocol's coverage strata before the first gate run "
+            "(labels are self-described, so the set cannot be fixed "
+            "until the protocol exists); a gate run passes that set "
+            "to the gate, and any expected group absent from the run "
+            "is INSUFFICIENT_DATA, never silent."
         ),
     ),
     Dataset(
@@ -106,7 +120,19 @@ DATASETS: tuple[Dataset, ...] = (
         notes=(
             "Candidate for the per-group FNMR/FMR breakout before the "
             "volunteer set exists. Web-photo domain, not ID photos: "
-            "results bound expectations, they do not clear the gate."
+            "results bound expectations, they do not clear the gate. "
+            "expected_groups declares the race labels FairFace itself "
+            "publishes; a breakout run missing any of them reports "
+            "INSUFFICIENT_DATA for that group."
+        ),
+        expected_groups=(
+            "White",
+            "Black",
+            "Indian",
+            "East Asian",
+            "Southeast Asian",
+            "Middle Eastern",
+            "Latino_Hispanic",
         ),
     ),
 )

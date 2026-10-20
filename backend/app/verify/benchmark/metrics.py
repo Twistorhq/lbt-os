@@ -181,16 +181,32 @@ def evaluate_gate(
     attempts: Iterable[ScoredAttempt],
     threshold: float,
     criteria: GateCriteria = GateCriteria(),
+    expected_groups: Iterable[str] = (),
 ) -> GateReport:
-    """Evaluate the launch gate over scored attempts at a threshold."""
+    """Evaluate the launch gate over scored attempts at a threshold.
+
+    `expected_groups` names the demographic groups a run is expected
+    to cover (declared per gate-bearing dataset in registry.py). An
+    expected group with no attempts at all is INSUFFICIENT_DATA for
+    that group: the per-group floors below stop a present group from
+    passing by silence, and this closes the same hole one level up,
+    at the dataset. A measured failure still outranks it.
+    """
     attempts = list(attempts)
     groups = per_group(attempts, threshold)
     overall = rates_for(attempts, threshold)
     failures: list[str] = []
     insufficient: list[str] = []
+    missing = [
+        name for name in dict.fromkeys(expected_groups) if name not in groups
+    ]
 
     if not attempts:
         insufficient.append("no attempts supplied")
+        for name in missing:
+            insufficient.append(
+                f"group {name}: no attempts (expected group absent from run)"
+            )
         return GateReport(
             status=GateStatus.INSUFFICIENT_DATA,
             failures=failures,
@@ -220,6 +236,11 @@ def evaluate_gate(
                 f"group {name}: fnmr {rs.fnmr:.4f} exceeds ceiling "
                 f"{criteria.fnmr_max}"
             )
+
+    for name in missing:
+        insufficient.append(
+            f"group {name}: no attempts (expected group absent from run)"
+        )
 
     if overall.fmr is not None and overall.fmr > criteria.fmr_max:
         failures.append(
