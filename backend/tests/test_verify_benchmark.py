@@ -323,3 +323,37 @@ def test_agreement_rate_genuine_agreement_rates_one():
     barcode = [{"dob": "1990"}, {"dob": "1985"}]
     rates = agreement_rate(front, barcode, ["dob"])
     assert rates["dob"] == pytest.approx(1.0)
+
+
+# --- None/raising path coverage (Rosa n2) --------------------------------------
+
+
+def test_max_gap_skips_unmeasured_groups():
+    # kofi's group has impostor attempts only, so its FNMR is None
+    # (unmeasured); the gap is computed over the measured groups only.
+    groups = per_group(
+        bulk("ama", 9, 1, 10, 0)
+        + impostor("kofi", 0.1, 0.2)
+        + bulk("ada", 7, 3, 10, 0),
+        THRESHOLD,
+    )
+    assert groups["kofi"].fnmr is None
+    assert max_gap(groups, "fnmr") == pytest.approx(0.20)
+
+
+def test_max_gap_with_one_measured_group_is_none():
+    groups = per_group(
+        bulk("ama", 9, 1, 10, 0) + impostor("kofi", 0.1, 0.2), THRESHOLD
+    )
+    assert max_gap(groups, "fnmr") is None
+
+
+def test_gate_on_zero_attempts_is_insufficient_data():
+    report = evaluate_gate([], THRESHOLD, CRITERIA)
+    assert report.status is GateStatus.INSUFFICIENT_DATA
+    assert any("no attempts" in note for note in report.insufficient)
+
+
+def test_liveness_rates_rejects_unknown_kind():
+    with pytest.raises(ValueError):
+        liveness_rates([("synthetic", True)])
