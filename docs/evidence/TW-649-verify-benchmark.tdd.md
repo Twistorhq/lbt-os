@@ -106,3 +106,85 @@ coverage percentage is claimed. Named gaps instead:
 No embedded instructions, override phrases, or untrusted plan content
 were encountered in the brief, the spec excerpts, or the repo files
 used. Nothing was rejected; the checklist was run.
+
+## 6. Fix round: Rosa REQUEST CHANGES (review of 47c37d4)
+
+Rosa's verdict: 1 major (M1), 3 minors (m1-m3), 3 nits (n1-n3; n3 is
+a real-run wiring item, explicitly out of this round's scope).
+Checkpoints on this branch: RED `6822404`, GREEN `c4e964a`, n2
+coverage `aa87e32`, docs `ef451af`, format `442ede6`.
+
+**M1: expected-group coverage.** `Dataset` gains `expected_groups`;
+`evaluate_gate` and `run_benchmark` accept the set and report every
+expected group with no attempts as INSUFFICIENT_DATA by name, in the
+empty-run path as well. A run missing an entire expected demographic
+group can no longer PASS on the groups present; a measured failure
+in a present group still outranks the insufficiency (FAIL wins, the
+absent group is still named). FairFace declares the race labels it
+itself publishes. RED: 5 tests failed at `6822404` (gate coverage x3,
+runner, registry contract). GREEN: all pass at `c4e964a`. One
+judgment call, flagged for Rosa: the consented-volunteer entry's
+labels are self-described and its collection protocol does not exist
+yet (blocked on TW-654 D1-D3), so its `expected_groups` is recorded
+from the protocol's strata before the first gate run rather than
+invented now; the registry notes say so in writing, and the gate
+machinery enforces whatever set the run declares.
+
+**m1: agreement_rate evidence semantics.** A pair counts toward a
+field only when at least one side carries it; agreement requires
+equal present values (one-side-only is a disagreement); a field with
+no evidenced pairs is None, never 1.0 on no evidence. RED: 2 tests
+failed at `6822404` (both-missing field rated 1.0; partially missing
+field counted both-missing pairs as agreements). GREEN at `c4e964a`.
+
+**m2: README doctrine.** The struck spec 5.5 vendor-fallback sentence
+is replaced with the decided doctrine (2026-10-20, Section 12 Q3):
+NO VENDOR FALLBACK, no paid check, no bridge; if the gate fails, T2
+waits until the FOSS engine passes on its own. A grep over the
+harness docs found no other phrasing reviving the fallback.
+
+**m3: criteria/floor interaction documented**, in the `GateCriteria`
+docstring and the README gate section: at the 5,000-impostor floor,
+one false match is FMR 2e-4, above the 1e-4 ceiling, and 5,000
+attempts cannot statistically resolve 1e-4 (zero events bounds the
+true rate only to roughly 6e-4 at 95 percent confidence). Criteria
+values unchanged; the Rosa/Justynn session owns the choice between
+roughly 30,000+ impostor floors and a resolvable ceiling.
+
+**n1: format.** `ruff format` applied to the five files Rosa named
+plus runner.py, where the M1 edit itself introduced a one-line
+reformat; the whole harness directory and both test files now pass
+`ruff format --check`, and `ruff check` is clean (local ruff 0.16.7;
+CI pins 0.16.8).
+
+**n2: None/raising path coverage.** Four tests added: `max_gap`
+skips an unmeasured (None) group, `max_gap` over a single measured
+group is None, `evaluate_gate` on zero attempts is
+INSUFFICIENT_DATA, `liveness_rates` raises ValueError on an unknown
+presentation kind. These pin behavior Rosa verified by reading, so
+they passed on first run; they are coverage, not RED/GREEN.
+
+**Fix-round suite results (fresh).** Harness:
+`python3 -m pytest tests/test_verify_benchmark.py tests/test_verify_benchmark_stages.py -q`
+**37 passed** (was 25). Full backend:
+`python3 -m pytest -q --continue-on-collection-errors` **844 passed,
+20 failed, 7 collection errors**: 844 is exactly the prior 832 plus
+the 12 new harness tests, and the 20 failures are the identical
+pre-existing set (test_bi_whitelabel 8, test_missed_call 11,
+test_pilot_blockers 1) from the base-commit control in Section 2.
+The 7 collection errors remain the xmlsec/lxml environment defect.
+Smoke report: regenerated with `--seed 7` after all changes and
+diffed against the committed example: byte-exact (the default run
+declares no expected groups, so the report shape is unchanged).
+Zero em/en dashes in the fix-round diff (grep over added lines).
+
+| # | What is guaranteed | Test file or command | Type | Result | Evidence |
+|---|---|---|---|---|---|
+| 13 | Absent expected group is INSUFFICIENT_DATA by name, never PASS | tests/test_verify_benchmark.py | RED | PASS (37/37 suite) | RED 6822404 -> GREEN c4e964a |
+| 14 | Missing expected group does not mask a measured FAIL | tests/test_verify_benchmark.py | RED | PASS | same |
+| 15 | All expected groups present: gate can PASS; runner reports the gap | tests/test_verify_benchmark.py | RED | PASS | same |
+| 16 | Gate-bearing registry declarations: FairFace labels declared, LFW none | tests/test_verify_benchmark.py | RED | PASS | same |
+| 17 | agreement_rate: both-missing is None; only evidenced pairs count | tests/test_verify_benchmark.py | RED | PASS | same |
+| 18 | max_gap None-skip, zero-attempts gate, liveness unknown kind raise | tests/test_verify_benchmark.py | unit | PASS | commit aa87e32 |
+| 19 | No new full-suite failures from the fix round | full suite vs Section 2 control | integration | PASS | 844/20/7, identical failure files |
+| 20 | Harness branch is ruff format-clean and check-clean | ruff format --check; ruff check | CI | PASS | commit 442ede6 |
