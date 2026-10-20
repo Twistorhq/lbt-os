@@ -26,7 +26,7 @@ from app.verify.benchmark.metrics import (
     per_group,
     rates_for,
 )
-from app.verify.benchmark.registry import DATASETS
+from app.verify.benchmark.registry import DATASETS, get
 from app.verify.benchmark.runner import run_benchmark, synthetic_attempts
 
 THRESHOLD = 0.55
@@ -233,3 +233,93 @@ def test_run_benchmark_returns_a_serializable_report():
     assert report["threshold"] == THRESHOLD
     assert report["gate"]["status"] in {"pass", "fail", "insufficient_data"}
     assert "groups" in report and "overall" in report
+
+
+# --- expected-group coverage (TW-649 fix round, Rosa M1) ---------------------
+
+
+def test_gate_missing_expected_group_is_insufficient_never_pass():
+    # Both present groups pass cleanly at the floors; a third expected
+    # group is absent from the run entirely. Silence is not a pass.
+    attempts = bulk("ama", 19, 1, 200, 0) + bulk("kofi", 18, 2, 200, 0)
+    report = evaluate_gate(
+        attempts, THRESHOLD, CRITERIA, expected_groups=("ama", "kofi", "ada")
+    )
+    assert report.status is GateStatus.INSUFFICIENT_DATA
+    assert any("ada" in note for note in report.insufficient)
+
+
+def test_gate_missing_expected_group_does_not_mask_a_measured_failure():
+    # A present group breaches the FMR ceiling while an expected group
+    # is absent: the measured failure rules (FAIL outranks insufficient).
+    attempts = bulk("ama", 20, 0, 90, 10)  # 10 percent false matches
+    report = evaluate_gate(
+        attempts, THRESHOLD, CRITERIA, expected_groups=("ama", "ada")
+    )
+    assert report.status is GateStatus.FAIL
+    assert any("ada" in note for note in report.insufficient)
+
+
+def test_gate_with_all_expected_groups_present_can_pass():
+    attempts = bulk("ama", 19, 1, 200, 0) + bulk("kofi", 18, 2, 200, 0)
+    report = evaluate_gate(
+        attempts, THRESHOLD, CRITERIA, expected_groups=("ama", "kofi")
+    )
+    assert report.status is GateStatus.PASS
+
+
+def test_run_benchmark_flags_a_missing_expected_group():
+    attempts = bulk("ama", 19, 1, 200, 0) + bulk("kofi", 18, 2, 200, 0)
+    report = run_benchmark(
+        attempts, THRESHOLD, CRITERIA, expected_groups=("ama", "kofi", "ada")
+    )
+    assert report["gate"]["status"] == "insufficient_data"
+    assert any("ada" in note for note in report["gate"]["insufficient"])
+
+
+def test_registry_expected_groups_contract():
+    for entry in DATASETS:
+        labels = entry.expected_groups
+        assert len(labels) == len(set(labels)), f"{entry.id}: duplicate labels"
+        assert all(label.strip() for label in labels), f"{entry.id}: blank label"
+    # FairFace feeds the per-group breakout: the group labels it
+    # publishes are declared, so a run missing one cannot pass by
+    # silence.
+    assert get("fairface").expected_groups
+    # LFW carries no group labels the harness may use; it declares
+    # none and cannot feed the per-group gate.
+    assert get("lfw").expected_groups == ()
+
+
+# --- front-to-barcode agreement evidence rules (Rosa m1) -----------------------
+
+
+def test_agreement_rate_both_sides_missing_is_unmeasured():
+    # Neither read carries "dob" anywhere: no evidence, so the field
+    # is None (unmeasured), never 1.0 on silence.
+    front = [{"surname": "A"}, {"surname": "B"}]
+    barcode = [{"surname": "A"}, {"surname": "B"}]
+    rates = agreement_rate(front, barcode, ["surname", "dob"])
+    assert rates["surname"] == pytest.approx(1.0)
+    assert rates["dob"] is None
+
+
+def test_agreement_rate_counts_only_evidenced_pairs():
+    # Pair 1: "dob" missing on both sides (not evidence).
+    # Pair 2: "dob" on the front only (evidence, and a disagreement).
+    # Pair 3: "dob" on both sides, equal (evidence, agreement).
+    front = [
+        {"surname": "A"},
+        {"surname": "B", "dob": "1990"},
+        {"surname": "C", "dob": "1985"},
+    ]
+    barcode = [{"surname": "A"}, {"surname": "B"}, {"surname": "C", "dob": "1985"}]
+    rates = agreement_rate(front, barcode, ["dob"])
+    assert rates["dob"] == pytest.approx(0.5)
+
+
+def test_agreement_rate_genuine_agreement_rates_one():
+    front = [{"dob": "1990"}, {"dob": "1985"}]
+    barcode = [{"dob": "1990"}, {"dob": "1985"}]
+    rates = agreement_rate(front, barcode, ["dob"])
+    assert rates["dob"] == pytest.approx(1.0)
