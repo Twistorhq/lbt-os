@@ -569,10 +569,13 @@ class TestDirectoryVisibility:
         assert "hid" in member_slugs
 
     def test_ghost_directory_is_preview_skeleton_only(self, db, host, group):
+        # The skeleton serves public age_16_plus groups only (5.11):
+        # the 18+ fixture group and the 21+ group are both absent.
+        all_ages = make_group(db, host, min_age_band="age_16_plus", slug="allages")
         make_group(db, host, min_age_band="age_21_plus", slug="g21b")
         ghost = add_member(db, tier=None, trust_row=False)
         cards = service.list_groups(db, ghost, now=NOW)
-        assert {c["slug"] for c in cards} == {group["slug"]}
+        assert {c["slug"] for c in cards} == {all_ages["slug"]}
         card = cards[0]
         assert "description" not in card
         assert "created_by" not in card
@@ -610,14 +613,21 @@ class TestGetGroup:
         with pytest.raises(service.NotFoundError):
             service.get_group(db, outsider, private["id"], now=NOW)
 
-    def test_ghost_gets_landing_shell_without_host_identity(self, db, host, group):
-        event = make_event(db, host, group)
+    def test_ghost_gets_landing_shell_without_host_identity(self, db, host):
+        all_ages = make_group(db, host, min_age_band="age_16_plus", slug="shells")
+        event = make_event(db, host, all_ages, min_age_band="age_16_plus")
         ghost = add_member(db, tier=None, trust_row=False)
-        shell = service.get_group(db, ghost, group["id"], now=NOW)
+        shell = service.get_group(db, ghost, all_ages["id"], now=NOW)
         assert shell["shell"] == "preview"
         assert "created_by" not in shell
         assert shell["next_gathering"]["starts_at"] is not None
         assert shell["next_gathering"]["title"] == event["title"]
+
+    def test_ghost_shell_refuses_above_lowest_band(self, db, host, group):
+        # The 18+ fixture group has no ghost shell at all (5.11).
+        ghost = add_member(db, tier=None, trust_row=False)
+        with pytest.raises(service.NotFoundError):
+            service.get_group(db, ghost, group["id"], now=NOW)
 
 
 # ---------------------------------------------------------------------------
