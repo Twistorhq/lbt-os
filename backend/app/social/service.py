@@ -460,8 +460,12 @@ def _group_visible_to_member(db, ctx: MemberContext, group: dict) -> bool:
     if _blocked_between(db, ctx.user_id, group["created_by"]):
         return False
     if group["visibility"] == "hidden":
+        # A hidden group exists only for its active members. A
+        # pending (invited) requester holds no visibility until the
+        # owner or an admin approves (Rosa M2): the directory,
+        # detail, and hosting paths all read through this gate.
         membership = _membership(db, group["id"], ctx.user_id)
-        if membership is None or membership.get("status") in ("removed", "left"):
+        if membership is None or membership.get("status") != "active":
             return False
     return True
 
@@ -620,8 +624,11 @@ def join_group(db, user_id: UUID, group_id: UUID, *, now=None) -> dict:
         if existing.get("status") == "removed":
             raise ForbiddenError("removed members cannot rejoin")
         # status "left": fall through and re-join on the same row.
-    pending = (
-        group["visibility"] == "private" or group["meetup_min_tier"] == "host_approved"
+    # Private and hidden groups land joins as pending requests the
+    # owner or an admin decides (hidden: Rosa M2, decided by Justynn
+    # 2026-10-20; the id is a request, not an invitation).
+    pending = group["visibility"] in ("private", "hidden") or (
+        group["meetup_min_tier"] == "host_approved"
     )
     status = "invited" if pending else "active"
     now = _resolve_now(now)
