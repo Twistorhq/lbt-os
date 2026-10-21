@@ -44,9 +44,11 @@ merge. A phase does not start until its gates clear.
 
 ## Phase 2: Verification engine build (ticket on Rosa's approval of Phase 0)
 
-- [ ] 9. `vfy_` migrations (sessions, documents, biometrics, signals,
+- [x] 9. `vfy_` migrations (sessions, documents, biometrics, signals,
       identity anchors, age attestations, consents, engine versions), RLS
-      deny-all, idempotent (with TW-650).
+      deny-all, idempotent (with TW-650). Done 2026-10-20:
+      supabase/migration_verify_v1.sql, 8 tables; evidence in
+      docs/evidence/TW-650-social-schema.tdd.md.
 - [ ] 10. Pipeline stages 1 to 5 with human review queue; verdict-only API
       per design; images destroyed on decision, 72-hour ceiling.
 - [ ] 10a. Retention schedule alignment (TW-654 change list in full;
@@ -72,7 +74,7 @@ merge. A phase does not start until its gates clear.
 
 ## Phase 3: Schema and service skeletons (TW-650, Dre)
 
-- [ ] 13. `rsn_` migrations per spec Section 4 (profiles, couple links,
+- [x] 13. `rsn_` migrations per spec Section 4 (profiles, couple links,
       groups, memberships, blocks, events, locations, series, RSVPs, guest
       passes, reveals, check-ins, encounter confirms, welfare checks,
       reviews, trusted contacts, trust ledger and scores, collectible rules
@@ -83,9 +85,14 @@ merge. A phase does not start until its gates clear.
       schema without them: `rsn_close_friends` (item 17a),
       `rsn_ambassadors` (item 26a), the audience-scope columns on posts
       and events (item 17a), and the `rsn_rsvps` requested sub-state
-      with host decision fields (item 16).
-- [ ] 14. `backend/app/social/` skeletons (models, service, router, safety,
+      with host decision fields (item 16). Done 2026-10-20:
+      supabase/migration_social_v1.sql, 36 tables; evidence in
+      docs/evidence/TW-650-social-schema.tdd.md.
+- [x] 14. `backend/app/social/` skeletons (models, service, router, safety,
       trust, sessions, geo) with fail-loud Pydantic models and rate limits.
+      Done 2026-10-20 (TW-650): endpoints answer an honest 501 until
+      their build phase lands; trust/geo/safety pure functions are
+      implemented and unit-tested, not stubbed.
 
 ## Phase 4: Social core features (per spec Section 13 step 4)
 
