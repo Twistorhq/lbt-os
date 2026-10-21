@@ -345,8 +345,7 @@ def _blocked_between(db, a, b) -> bool:
     if _fetch_one(db, "rsn_blocks", blocker_id=str(a), blocked_id=str(b)):
         return True
     return (
-        _fetch_one(db, "rsn_blocks", blocker_id=str(b), blocked_id=str(a))
-        is not None
+        _fetch_one(db, "rsn_blocks", blocker_id=str(b), blocked_id=str(a)) is not None
     )
 
 
@@ -621,7 +620,9 @@ def join_group(db, user_id: UUID, group_id: UUID, *, now=None) -> dict:
         if existing.get("status") == "removed":
             raise ForbiddenError("removed members cannot rejoin")
         # status "left": fall through and re-join on the same row.
-    pending = group["visibility"] == "private" or group["meetup_min_tier"] == "host_approved"
+    pending = (
+        group["visibility"] == "private" or group["meetup_min_tier"] == "host_approved"
+    )
     status = "invited" if pending else "active"
     now = _resolve_now(now)
     if existing is not None:
@@ -758,14 +759,14 @@ def _can_view_event(db, ctx: MemberContext, event: dict, group: dict) -> bool:
     if _is_close_friend(db, event["host_user_id"], ctx.user_id):
         return True
     partners = _couple_partner_ids(db, ctx.user_id)
-    return bool(partners & (set(_active_member_ids(db, group["id"])) | {event["host_user_id"]}))
+    return bool(
+        partners & (set(_active_member_ids(db, group["id"])) | {event["host_user_id"]})
+    )
 
 
 def _event_out(db, event: dict, group: dict, ctx: MemberContext) -> dict:
     location = _event_location_row(db, event["id"])
-    viewer_rsvp = _fetch_one(
-        db, "rsn_rsvps", event_id=event["id"], user_id=ctx.user_id
-    )
+    viewer_rsvp = _fetch_one(db, "rsn_rsvps", event_id=event["id"], user_id=ctx.user_id)
     out = {
         "id": event["id"],
         "group_id": event["group_id"],
@@ -1016,9 +1017,10 @@ def get_series(db, viewer_user_id: UUID, series_id: UUID, *, now=None) -> dict:
         raise NotFoundError()
     if group["visibility"] in ("private", "hidden"):
         membership = _membership(db, group["id"], ctx.user_id)
-        if not (
-            membership is not None and membership.get("status") == "active"
-        ) and ctx.user_id != series["host_user_id"]:
+        if (
+            not (membership is not None and membership.get("status") == "active")
+            and ctx.user_id != series["host_user_id"]
+        ):
             raise NotFoundError()
     return _series_out(db, series)
 
@@ -1057,7 +1059,9 @@ def set_series_location(
             "rsn_event_locations",
             {"id": str(uuid4()), "event_id": None, "created_at": now, **fields},
         )
-        _update_by_id(db, "rsn_event_series", series["id"], {"venue_ref": template["id"]})
+        _update_by_id(
+            db, "rsn_event_series", series["id"], {"venue_ref": template["id"]}
+        )
     for instance in _fetch(db, "rsn_events", series_id=series["id"]):
         if _event_location_row(db, instance["id"]) is None:
             _insert(
@@ -1235,9 +1239,7 @@ def request_rsvp(db, user_id: UUID, payload: models.RsvpCreate, *, now=None) -> 
     starts = _parse_ts(event.get("starts_at"))
     if starts is not None and starts <= now:
         raise ConflictError("event has already started")
-    existing = _fetch_one(
-        db, "rsn_rsvps", event_id=event["id"], user_id=ctx.user_id
-    )
+    existing = _fetch_one(db, "rsn_rsvps", event_id=event["id"], user_id=ctx.user_id)
     if existing is not None:
         if existing.get("status") in ("going", "waitlist", "requested"):
             return _rsvp_out(existing)
@@ -1250,12 +1252,12 @@ def request_rsvp(db, user_id: UUID, payload: models.RsvpCreate, *, now=None) -> 
             or anchor["event_id"] != event["id"]
             or anchor["user_id"] == ctx.user_id
         ):
-            raise ConflictError("plus_one_of_rsvp_id must name another member's RSVP on this event")
+            raise ConflictError(
+                "plus_one_of_rsvp_id must name another member's RSVP on this event"
+            )
         plus_one_of = anchor["id"]
     if payload.couple_link_id is None:
-        row = _create_rsvp_row(
-            db, event, ctx.user_id, now, plus_one_of=plus_one_of
-        )
+        row = _create_rsvp_row(db, event, ctx.user_id, now, plus_one_of=plus_one_of)
         return _rsvp_out(row)
     # A couple RSVP is two first-class rows (spec Section 4), and it
     # is atomic here: both partners must independently pass every
@@ -1266,7 +1268,9 @@ def request_rsvp(db, user_id: UUID, payload: models.RsvpCreate, *, now=None) -> 
     if ctx.user_id not in (link["user_low_id"], link["user_high_id"]):
         raise ForbiddenError("only a partner on the couple link RSVPs as a pair")
     partner_id = (
-        link["user_high_id"] if link["user_low_id"] == ctx.user_id else link["user_low_id"]
+        link["user_high_id"]
+        if link["user_low_id"] == ctx.user_id
+        else link["user_low_id"]
     )
     partner_ctx = get_member_context(db, partner_id)
     if not partner_ctx.can_write or partner_ctx.band_rank == 0:
@@ -1411,7 +1415,9 @@ def reveal_event_location(db, user_id: UUID, event_id: UUID, *, now=None) -> dic
     now = _resolve_now(now)
     starts = _parse_ts(event.get("starts_at"))
     ends = _parse_ts(event.get("ends_at"))
-    window = HOME_REVEAL_WINDOW if event["venue_type"] == "home" else VENUE_REVEAL_WINDOW
+    window = (
+        HOME_REVEAL_WINDOW if event["venue_type"] == "home" else VENUE_REVEAL_WINDOW
+    )
     if starts is None or now < starts - window or (ends is not None and now > ends):
         raise ForbiddenError("location is not available")
     if ctx.user_id != event["host_user_id"]:
@@ -1422,14 +1428,14 @@ def reveal_event_location(db, user_id: UUID, event_id: UUID, *, now=None) -> dic
             raise ForbiddenError("location is not available")
         if ctx.trust_band == "restricted":
             raise ForbiddenError("location is not available")
-        rsvp = _fetch_one(
-            db, "rsn_rsvps", event_id=event["id"], user_id=ctx.user_id
-        )
+        rsvp = _fetch_one(db, "rsn_rsvps", event_id=event["id"], user_id=ctx.user_id)
         if rsvp is None or rsvp.get("status") != "going":
             raise ForbiddenError("location is not available")
         host_decided = rsvp.get("host_decided_by") is not None
         close_friend = _is_close_friend(db, event["host_user_id"], ctx.user_id)
-        if event["min_tier_view"] == "host_approved" and not (host_decided or close_friend):
+        if event["min_tier_view"] == "host_approved" and not (
+            host_decided or close_friend
+        ):
             raise ForbiddenError("location is not available")
         if event["venue_type"] == "home" and not (host_decided or close_friend):
             # A home address reaches only the host's close friends

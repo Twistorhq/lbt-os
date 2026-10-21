@@ -129,9 +129,7 @@ class TestSkeletonHonesty:
         def _refuse(db, user_id, event_id):
             raise social_router.service.NotFoundError()
 
-        monkeypatch.setattr(
-            social_router.service, "reveal_event_location", _refuse
-        )
+        monkeypatch.setattr(social_router.service, "reveal_event_location", _refuse)
         app = _build_app(authenticated=True)
         resp = TestClient(app, raise_server_exceptions=False).post(
             f"/api/v1/social/events/{uuid4()}/reveal"

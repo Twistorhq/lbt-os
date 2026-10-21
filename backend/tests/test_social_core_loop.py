@@ -132,9 +132,7 @@ class _Query:
             return _Result(changed)
         if self._mode == "delete":
             ids = {r["id"] for r in self._rows}
-            self._db.tables[self._table] = [
-                r for r in store if r.get("id") not in ids
-            ]
+            self._db.tables[self._table] = [r for r in store if r.get("id") not in ids]
             return _Result([])
         return _Result([dict(r) for r in self._rows])
 
@@ -528,9 +526,7 @@ class TestGroupJoin:
             models.MembershipDecision(decision="decline"),
             now=NOW,
         )
-        rows = [
-            r for r in db.rows("rsn_group_memberships") if r["user_id"] == member
-        ]
+        rows = [r for r in db.rows("rsn_group_memberships") if r["user_id"] == member]
         assert rows == []
 
     def test_join_is_idempotent_for_active_member(self, db, group):
@@ -542,9 +538,7 @@ class TestGroupJoin:
     def test_removed_member_cannot_rejoin(self, db, host, group):
         member = add_member(db)
         join(db, group, member)
-        row = [
-            r for r in db.rows("rsn_group_memberships") if r["user_id"] == member
-        ][0]
+        row = [r for r in db.rows("rsn_group_memberships") if r["user_id"] == member][0]
         row["status"] = "removed"
         with pytest.raises(service.ForbiddenError):
             join(db, group, member)
@@ -821,9 +815,7 @@ class TestEventPayloadHygiene:
         home = make_event(db, host, group, venue_type="home")
         set_location(db, host, home, address="742 Evergreen Terrace, Denver, CO")
         friend = add_member(db)
-        db.seed(
-            "rsn_close_friends", {"owner_id": host, "friend_id": friend}
-        )
+        db.seed("rsn_close_friends", {"owner_id": host, "friend_id": friend})
         join(db, group, friend)
         detail = service.get_event(db, friend, home["id"], now=NOW)
         assert "venue_name" not in detail
@@ -925,9 +917,7 @@ class TestSeries:
         )
         assert created["created"] >= 1
         located = [
-            r
-            for r in db.rows("rsn_event_locations")
-            if r.get("event_id") is not None
+            r for r in db.rows("rsn_event_locations") if r.get("event_id") is not None
         ]
         assert located and all(
             r["street_address"] == "55 League Way, Denver, CO" for r in located
@@ -936,9 +926,7 @@ class TestSeries:
     def test_series_detail_invisible_to_under_band_viewer(self, db):
         fixture_host = add_member(db, standing="fixture")
         grp = make_group(db, fixture_host, min_age_band="age_21_plus")
-        series = make_series(
-            db, fixture_host, grp, default_min_age_band="age_21_plus"
-        )
+        series = make_series(db, fixture_host, grp, default_min_age_band="age_21_plus")
         young = add_member(db, band="age_18_20")
         with pytest.raises(service.NotFoundError):
             service.get_series(db, young, series["id"], now=NOW)
@@ -1096,9 +1084,7 @@ class TestHomeRsvpApproval:
 
 
 class TestWaitlistPromotion:
-    def test_withdraw_promotes_in_band_order_not_arrival_order(
-        self, db, host, group
-    ):
+    def test_withdraw_promotes_in_band_order_not_arrival_order(self, db, host, group):
         event = make_event(db, host, group, capacity=1)
         holder = add_member(db)
         early_watch = add_member(db, trust_band="watch")
@@ -1108,13 +1094,9 @@ class TestWaitlistPromotion:
         rsvp(db, holder, event)
         assert rsvp(db, early_watch, event)["status"] == "waitlist"
         assert rsvp(db, later_trusted, event)["status"] == "waitlist"
-        holder_row = [
-            r for r in db.rows("rsn_rsvps") if r["user_id"] == holder
-        ][0]
+        holder_row = [r for r in db.rows("rsn_rsvps") if r["user_id"] == holder][0]
         service.withdraw_rsvp(db, holder, holder_row["id"], now=NOW)
-        promoted = [
-            r for r in db.rows("rsn_rsvps") if r["user_id"] == later_trusted
-        ][0]
+        promoted = [r for r in db.rows("rsn_rsvps") if r["user_id"] == later_trusted][0]
         still_waiting = [
             r for r in db.rows("rsn_rsvps") if r["user_id"] == early_watch
         ][0]
@@ -1171,9 +1153,7 @@ class TestCoupleRsvp:
 class TestReveal:
     @pytest.fixture()
     def venue_event(self, db, host, group):
-        event = make_event(
-            db, host, group, starts_at=NOW + timedelta(days=2)
-        )
+        event = make_event(db, host, group, starts_at=NOW + timedelta(days=2))
         set_location(db, host, event)
         return event
 
@@ -1183,7 +1163,9 @@ class TestReveal:
         rsvp(db, member, event)
         return member
 
-    def test_reveal_inside_48h_window_logs_and_returns(self, db, host, group, venue_event):
+    def test_reveal_inside_48h_window_logs_and_returns(
+        self, db, host, group, venue_event
+    ):
         member = self._going_member(db, group, venue_event)
         out = service.reveal_event_location(
             db, member, venue_event["id"], now=NOW + timedelta(hours=1)
@@ -1247,9 +1229,7 @@ class TestReveal:
                 db, restricted, venue_event["id"], now=NOW + timedelta(hours=1)
             )
 
-    def test_host_approved_view_tier_needs_a_host_decision(
-        self, db, host, group
-    ):
+    def test_host_approved_view_tier_needs_a_host_decision(self, db, host, group):
         event = make_event(
             db,
             host,
@@ -1420,9 +1400,7 @@ def _http_client(db: FakeDb, user_id: str) -> TestClient:
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
     app.include_router(social_router.router, prefix="/api/v1")
     app.dependency_overrides[get_db] = lambda: db
-    app.dependency_overrides[social_router._verified_claims] = lambda: {
-        "sub": user_id
-    }
+    app.dependency_overrides[social_router._verified_claims] = lambda: {"sub": user_id}
     return TestClient(app, raise_server_exceptions=False)
 
 
@@ -1479,9 +1457,7 @@ class TestRouterCoreLoop:
     def test_reveal_over_http_logs_and_returns(self, db, host, group, monkeypatch):
         # The router calls the service on the real clock; pin the
         # service clock inside the 48h venue window for this test.
-        monkeypatch.setattr(
-            service, "_utcnow", lambda: NOW + timedelta(hours=1)
-        )
+        monkeypatch.setattr(service, "_utcnow", lambda: NOW + timedelta(hours=1))
         event = make_event(db, host, group, starts_at=NOW + timedelta(days=2))
         set_location(db, host, event)
         member = add_member(db)
