@@ -118,7 +118,9 @@ class IngestPipeline:
         report.fetched = len(events)
 
         outcomes, merge_skipped = run_isolated(
-            events, lambda e: self._merge_item(source, e, now)
+            events,
+            lambda e: self._merge_item(source, e, now),
+            preview=_event_key_preview,
         )
         for skipped_item in merge_skipped:
             dlq.collect(
@@ -181,11 +183,19 @@ class IngestPipeline:
         return report
 
     def _parse_feed(self, source: SourceConfig, raw: str, now: datetime):
-        """Parse with per-item isolation. Returns (events, skipped)."""
+        """Parse with per-item isolation. Returns (events, skipped).
+
+        Skipped items are previewed by key only (Rosa m3): a preview
+        is persisted on the dead-letter row and the run detail, and
+        the platform default preview carries item content, which
+        spec 10.6 forbids persisting even in an ops table.
+        """
         if source.connector == "ics_generic":
             blocks = ics.split_vevents(raw)
             results, skipped = run_isolated(
-                blocks, lambda b: ics.parse_vevent(b, source, now)
+                blocks,
+                lambda b: ics.parse_vevent(b, source, now),
+                preview=_ics_key_preview,
             )
             return [e for batch in results for e in batch], skipped
         module = _JSON_CONNECTORS.get(source.connector)
@@ -194,7 +204,9 @@ class IngestPipeline:
         payload = json.loads(raw)
         items = module.feed_items(payload)
         results, skipped = run_isolated(
-            items, lambda item: module.convert_item(item, source, now)
+            items,
+            lambda item: module.convert_item(item, source, now),
+            preview=_feed_key_preview,
         )
         return [e for batch in results for e in batch], skipped
 
@@ -264,8 +276,13 @@ class IngestPipeline:
             return "created", became_cancelled
 
         outcome = "updated"
-        listing.fingerprint = fingerprint
         if self._should_take_facts(listing, source):
+            # The fingerprint is the listing's identity (the tombstone
+            # doctrine treats it as such), so it moves only with the
+            # facts it was computed from. An item whose facts are not
+            # taken must not reassign it, or the fingerprint oscillates
+            # between source variants on every poll (Rosa m2).
+            listing.fingerprint = fingerprint
             listing.title = event.title
             listing.starts_at = event.starts_at
             listing.ends_at = event.ends_at
@@ -399,8 +416,7 @@ class IngestPipeline:
             if listing.status in ("cancelled", "claimed"):
                 continue
             others_fresh = any(
-                other.source_id != source.id
-                and other.missed_syncs < VANISH_MISSED_SYNCS
+                other.source_id != source.id and self._co_carrier_fresh(other, now)
                 for other in listing.sources
             )
             if others_fresh:
@@ -410,6 +426,22 @@ class IngestPipeline:
             listing.tombstone_until = now + timedelta(days=TOMBSTONE_DAYS)
             listing.updated_at = now
             self.store.update_listing(listing)
+
+    def _co_carrier_fresh(self, row: ListingSourceRecord, now: datetime) -> bool:
+        """Whether another source still carries the event, judged by
+        the freshness definition the rest of the layer uses: the row's
+        last_seen_at inside that source's gate staleness ceiling.
+
+        The missed_syncs counter cannot answer this (Rosa m1): only
+        full-sync sources maintain it, so a non-full-sync co-carrier
+        sat at zero forever and suppressed cancellation indefinitely.
+        """
+        if row.last_seen_at is None:
+            return False
+        carrier = self.store.get_source(row.source_id)
+        if carrier is None:
+            return False
+        return now - row.last_seen_at <= gate.staleness_ceiling(carrier)
 
     # ------------------------------------------------------------------
     # Publish: silver to gold through the provenance gate
@@ -474,6 +506,29 @@ class IngestPipeline:
         }
 
 
+def _ics_key_preview(block: str) -> str:
+    """Key-only preview for an ICS block: its UID line, nothing else."""
+    match = _UID_RE.search(block or "")
+    return f"UID:{match.group(1).strip()}" if match else "<unkeyed ics item>"
+
+
+def _feed_key_preview(item) -> str:
+    """Key-only preview for a JSON feed item: its id, nothing else."""
+    if isinstance(item, dict):
+        for key in ("id", "uid"):
+            value = item.get(key)
+            if value is not None:
+                return f"id:{value}"
+    return "<unkeyed feed item>"
+
+
+def _event_key_preview(event: ExtractedEvent) -> str:
+    return event.source_item_key
+
+
+_KEY_OF_RE = re.compile(r"^(?:UID|id):(.+)$")
+
+
 def _item_key_of(preview: str) -> str | None:
-    match = _UID_RE.search(preview or "")
+    match = _KEY_OF_RE.match((preview or "").strip())
     return match.group(1) if match else None

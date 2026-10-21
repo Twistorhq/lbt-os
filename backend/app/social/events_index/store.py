@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import copy
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from .models import ListingRecord, ListingSourceRecord, SourceConfig, VenueFacts
@@ -328,9 +328,9 @@ class SupabaseStore:
             poll_interval_seconds=row.get("poll_interval_seconds", 21600),
             active=row.get("active", True),
             consecutive_failures=row.get("consecutive_failures", 0),
-            circuit_open_until=row.get("circuit_open_until"),
-            last_polled_at=row.get("last_polled_at"),
-            last_success_at=row.get("last_success_at"),
+            circuit_open_until=_parse_ts(row.get("circuit_open_until")),
+            last_polled_at=_parse_ts(row.get("last_polled_at")),
+            last_success_at=_parse_ts(row.get("last_success_at")),
         )
 
     # -- bronze ------------------------------------------------------
@@ -424,20 +424,20 @@ class SupabaseStore:
             id=row["id"],
             fingerprint=row["fingerprint"],
             title=row["title"],
-            starts_at=row["starts_at"],
-            ends_at=row["ends_at"],
+            starts_at=_parse_ts(row["starts_at"]),
+            ends_at=_parse_ts(row["ends_at"]),
             venue_id=row["venue_id"],
             category=row.get("category"),
             min_age_band=row.get("min_age_band"),
             rating_source=row.get("rating_source"),
-            rated_at=row.get("rated_at"),
+            rated_at=_parse_ts(row.get("rated_at")),
             status=row["status"],
             claimed_group_id=row.get("claimed_group_id"),
             display_source_id=row.get("display_source_id"),
-            cancelled_at=row.get("cancelled_at"),
-            tombstone_until=row.get("tombstone_until"),
-            first_seen_at=row.get("first_seen_at"),
-            updated_at=row.get("updated_at"),
+            cancelled_at=_parse_ts(row.get("cancelled_at")),
+            tombstone_until=_parse_ts(row.get("tombstone_until")),
+            first_seen_at=_parse_ts(row.get("first_seen_at")),
+            updated_at=_parse_ts(row.get("updated_at")),
             sources=[
                 ListingSourceRecord(
                     source_id=r["source_id"],
@@ -445,8 +445,8 @@ class SupabaseStore:
                     source_url=r.get("source_url"),
                     source_organizer_ref=r.get("source_organizer_ref"),
                     authority=r["authority"],
-                    fetched_at=r["fetched_at"],
-                    last_seen_at=r["last_seen_at"],
+                    fetched_at=_parse_ts(r["fetched_at"]),
+                    last_seen_at=_parse_ts(r["last_seen_at"]),
                     missed_syncs=r.get("missed_syncs", 0),
                 )
                 for r in source_rows
@@ -584,7 +584,7 @@ class SupabaseStore:
         self.db.table("evt_ingest_runs").update(
             {
                 "status": status,
-                "finished_at": _ts(datetime.now()),
+                "finished_at": _ts(datetime.now(timezone.utc)),
                 **counts,
                 "detail": detail,
             }
@@ -617,7 +617,8 @@ class SupabaseStore:
     # -- gold --------------------------------------------------------
     def gold_put(self, listing_id: str, row: dict) -> None:
         self.db.table("evt_gold_listings").upsert(
-            {"listing_id": listing_id, **row}, on_conflict="listing_id"
+            {"listing_id": listing_id, **{k: _ts(v) for k, v in row.items()}},
+            on_conflict="listing_id",
         ).execute()
 
     def gold_remove(self, listing_id: str) -> None:
@@ -648,3 +649,23 @@ def _ts(value):
     if value is None or isinstance(value, str):
         return value
     return value.isoformat()
+
+
+def _parse_ts(value):
+    """Parse a PostgREST timestamp into an aware datetime.
+
+    Read rows come back with string timestamps, and the pipeline
+    and gate do arithmetic on the assembled dataclasses; passing
+    the strings through raises TypeError at the first comparison
+    (Rosa call 10). Naive strings are read as UTC: every writer in
+    this layer stamps aware UTC values.
+    """
+    if value is None or isinstance(value, datetime):
+        return value
+    text = str(value).strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    parsed = datetime.fromisoformat(text)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed

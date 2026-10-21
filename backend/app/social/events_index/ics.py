@@ -9,10 +9,14 @@ first instance, as calendar clients do.
 
 Never-store (spec 10.6) at this boundary: DESCRIPTION and image
 properties are stripped from the item before it is hashed or landed
-in bronze, and no extracted shape carries them at all. An ICS
-ORGANIZER line is an email address in practice; it is likewise never
-extracted (evt_listing_sources.source_organizer_ref is for organizer
-names and ids published by API sources, not contact details).
+in bronze, and no extracted shape carries them at all. The contact
+properties are stripped the same way: ORGANIZER and ATTENDEE lines
+carry mailto addresses and CONTACT carries free-form contact text,
+and spec 10.6 bars organizer contact details and attendee lists
+outright. Bronze is storage, so redaction there is the line, not
+just extraction (evt_listing_sources.source_organizer_ref is for
+organizer names and ids published by API sources, never contact
+details, and stays NULL for ICS).
 """
 
 from __future__ import annotations
@@ -29,7 +33,14 @@ from .normalize import payload_hash
 WINDOW_DAYS = 90
 MAX_INSTANCES_PER_EVENT = 200
 
-_REDACTED_PROPS = ("DESCRIPTION",)
+# Properties stripped from a VEVENT before hashing or bronze
+# landing: DESCRIPTION and ATTACH/IMAGE below are the source's
+# expression; ORGANIZER, CONTACT, and ATTENDEE are the contact
+# carriers (spec 10.6). _redact_block matches on the property name
+# before any ";" parameter, so parameterized forms (ORGANIZER;CN=,
+# ATTENDEE;RSVP=TRUE:) are covered, as are lines nested inside
+# VALARM blocks, because redaction runs per line over the block.
+_REDACTED_PROPS = ("DESCRIPTION", "ORGANIZER", "CONTACT", "ATTENDEE")
 _DURATION_RE = re.compile(
     r"^P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$"
 )
@@ -133,8 +144,17 @@ def _parse_location(value: str) -> VenueFacts:
     parts = [p.strip() for p in text.split(",") if p.strip()]
     if len(parts) >= 3 and _STATE_RE.match(parts[-1]):
         city = parts[-2]
-        street = ", ".join(parts[1:-2]) if len(parts) > 3 else parts[1]
-        return VenueFacts(name=parts[0], street_address=street, city=city)
+        if len(parts) > 3:
+            # "Venue, Street, City, ST ZIP": the middle is the street.
+            street = ", ".join(parts[1:-2])
+            return VenueFacts(name=parts[0], street_address=street, city=city)
+        # Exactly three parts is "Venue, City, ST ZIP" (no street was
+        # published) or "Street, City, ST ZIP"; a house number in the
+        # first part is what tells them apart. The city never belongs
+        # in the street slot.
+        if any(ch.isdigit() for ch in parts[0]):
+            return VenueFacts(street_address=parts[0], city=city)
+        return VenueFacts(name=parts[0], city=city)
     if len(parts) == 2 and any(ch.isdigit() for ch in parts[0]):
         return VenueFacts(street_address=parts[0], city=parts[1])
     return VenueFacts(name=", ".join(parts))

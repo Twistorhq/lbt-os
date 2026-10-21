@@ -4,7 +4,8 @@
 
 Author: Dre Coleman, Senior Backend Engineer and DBA
 Branch: `dre/tw-651-events-ingest` off lbt-os main at `9707fc6`
-Commits: RED `75af7e9` (tests only) then GREEN (this build)
+Commits: RED `75af7e9` (tests only) then GREEN `4819720`; fix round
+RED `8fd6ae7` (tests only) then GREEN (this round)
 
 Source contracts: TW-646 architecture spec Section 10; merged
 OpenSpec package (tasks.md items 28 and 29); Diego's Denver events
@@ -57,8 +58,11 @@ their connectors slot into the same registry when approvals land.
    reason. Never-store is enforced in three places: no such column
    exists in the DDL, the extraction shapes have no such field, and
    `redact.py` strips description, photo, image, excerpt, price,
-   and contact keys from JSON items and DESCRIPTION and image
-   properties from ICS items before hashing or bronze landing.
+   and contact keys from JSON items, and the ICS importer strips
+   DESCRIPTION, image properties, and the contact properties
+   (ORGANIZER, CONTACT, ATTENDEE) from ICS items, before hashing
+   or bronze landing. The fix round section below carries the full
+   audit behind the corrected ICS half of that sentence.
 8. **Self-healing** on the platform's TW-208 primitives
    (`app.self_healing`): fetch retries with backoff, per-item fault
    isolation at both parse and merge, dead letters persisted to
@@ -71,18 +75,20 @@ their connectors slot into the same registry when approvals land.
 
 ## Tests
 
-81 new tests, all passing. Per file: migration contract 16,
-normalize 12, ICS 13, connectors 8, gate 10, geocode 7, pipeline 15.
+94 new tests, all passing. Per file: migration contract 16,
+normalize 12, ICS 16, connectors 10, gate 10, geocode 7,
+pipeline 19, store wiring 4.
 
-Full backend suite on this branch: 973 passed, 21 failed, 12
-collection errors. Clean main at 9707fc6 measured the same day: 892
-passed, 21 failed, 12 collection errors. The failed and error node
-sets are identical between the two runs (verified by diff), so the
-delta is exactly the 81 new tests and there are zero regressions.
-The standing failure set is bi_whitelabel 8, missed_call 11,
+Full backend suite on this branch: 986 passed, 21 failed, 12
+collection errors. Clean main at 9707fc6 re-measured this round in
+a control worktree: 892 passed, 21 failed, 12 collection errors.
+The failed and error node sets are identical between the two runs
+(verified by diff over the full 33-line sets), so the delta is
+exactly the 94 new tests and there are zero regressions. The
+standing failure set is bi_whitelabel 8, missed_call 11,
 pilot_blockers 1, usage_metering 1, plus the known xmlsec/lxml
 collection defect. Ruff check and format are clean on every new
-file.
+and touched file.
 
 RED honesty: the RED commit is tests only. Three test adjustments
 landed with GREEN and are disclosed here: the write-policy test now
@@ -172,12 +178,135 @@ the documented payload shapes.
    match wins and gains the provenance row; the vacated listing
    ages out through the gate. Deliberate, and noted here rather
    than hidden.
-10. **SupabaseStore timestamp assembly.** The production store
-    passes Supabase timestamp strings through the same dataclasses
-    the pipeline compares; MemoryStore is the tested path and the
-    Supabase store mirrors it method for method. First live wiring
-    should parse timestamps at assembly (noted for the ingest
-    runner ticket, not silently assumed here).
+10. **SupabaseStore timestamp assembly.** As originally filed:
+    the production store passed Supabase timestamp strings through
+    the same dataclasses the pipeline compares, with parsing noted
+    for the wiring ticket. Rosa accepted the scoping and named the
+    concrete failure (string timestamps raise TypeError in gate
+    arithmetic). The fix round below closes it now instead:
+    assembly parses timestamps into aware datetimes, gold writes
+    serialize through the same helper, and a fake-client contract
+    file (test_events_store.py) proves the wiring end to end. The
+    runner ticket still owns the first live run.
+
+## Fix round (Rosa review: REQUEST CHANGES, 1 major, 3 minors, 2 nits)
+
+RED `8fd6ae7` is tests only: 13 new tests, and all 13 failed
+against the round 1 implementation before GREEN (verified by
+running them pre-fix; the 36 pre-existing tests in the touched
+files stayed green). No schema changed this round, so the live
+migration execution from round 1 stands and was not re-run.
+
+**M1 (major): ICS contact properties reached bronze.** The ICS
+redaction set held only DESCRIPTION plus the ATTACH/IMAGE rule;
+ORGANIZER and CONTACT lines passed into evt_raw_items verbatim,
+organizer email and phone included. Fix: the redaction set is now
+DESCRIPTION, ORGANIZER, CONTACT, ATTENDEE. Matching is on the
+property name before any ";" parameter, so parameterized forms
+(ORGANIZER;CN=..., ATTENDEE;RSVP=TRUE:) are covered, and lines
+nested inside VALARM blocks are covered because redaction runs per
+line over the whole block. The contract test builds its VEVENT
+inline (no fixture dependency, which is how the gap slipped
+through) and asserts no property name, person name, email, or
+phone reaches the bronze payload or any extracted field.
+
+M1 audit trail, as requested. What was checked, connector by
+connector and then along the merge path:
+
+- ICS properties, against RFC 5545: the contact carriers in a
+  VEVENT are ORGANIZER (a mailto address with a CN name), CONTACT
+  (free-form contact text), and ATTENDEE (the attendee list spec
+  10.6 names outright). All three are now dropped. The retained
+  properties (UID, DTSTART, DTEND, DURATION, RRULE, EXDATE,
+  RDATE, SUMMARY, LOCATION, GEO, URL, STATUS, CATEGORIES,
+  RECURRENCE-ID, SEQUENCE, CREATED, LAST-MODIFIED) are facts,
+  schedule data, or opaque identifiers; none carries contact data
+  in any feed profile in the source map (LibCal, Lu.ma, Google
+  exports). X- proprietary properties are retained for change
+  detection and never read by extraction; no profile in the
+  source map places contact data in an X- VEVENT property.
+  Disclosed as the residual: a future feed inventing a contact
+  bearing X- property would need a redaction entry, and the
+  contract test pattern now exists to pin it.
+- Localist: contact data in the payload shape rides the event
+  object itself. The exact-name set already caught email and
+  phone at any nesting depth, but compound keys did not drop:
+  organizer_phone, contact_email, venue_phone, and telephone all
+  survived round 1 redaction (proven by the new test failing
+  pre-fix). redact_json now also drops any key whose name
+  tokenizes (snake, kebab, or camel case) to a contact token:
+  email, phone, telephone, mobile, cell, fax, contact. Both
+  fixture key inventories were enumerated and checked: no
+  retained key tokenizes to a contact token, so the rule costs
+  no legitimate field.
+- Tribe: the organizer object carries phone and email keys
+  (caught by exact match at nesting, now also by token), and a
+  top-level contact_phone survived round 1 (proven pre-fix).
+  source_organizer_ref takes only the published display name from
+  that object; the new test pins that the name is kept and the
+  contact values are not.
+- Merge and persistence path: put_raw receives only connector
+  bronze, which is redacted at the boundary before hashing; the
+  extracted shapes in models.py have no contact field by
+  construction; gold rows are assembled from silver facts only;
+  the publish log carries a listing id and a reason, never item
+  content; the run failure detail carries an exception class and
+  message, never a payload; venue facts sent to the geocoder are
+  the venue's published name and address, never organizer data;
+  dead letters are key-only after m3 below.
+
+**m1: vanish sweep co-carrier freshness.** The sweep judged a
+co-carrying source by missed_syncs, a counter only full-sync
+sources maintain, so a non-full-sync co-carrier suppressed
+cancellation forever. The sweep now judges co-carriers by
+last_seen_at against that source's gate staleness ceiling
+(gate.staleness_ceiling), the freshness definition the rest of the
+layer already uses. Two tests pin both directions: a co-carrier
+never re-seen stops suppressing once its sighting ages past the
+ceiling, and a fresh co-carrier still suppresses until it ages
+out. Silver now reaches cancelled and takes its 90-day tombstone;
+gold was already protected by gate staleness.
+
+**m2: fingerprint oscillation on update.** _merge_item reassigned
+the listing fingerprint from the arriving item unconditionally,
+before the authority check, so a lower-authority variant spelling
+flipped the fingerprint on every poll and the display source
+flipped it back. The fingerprint now reassigns only when the
+arriving item's facts are taken (or at creation, unchanged).
+Pinned by a test where the ICS pipe re-spells the venue (no GEO,
+longer street name) after the API pipe set the display facts: one
+listing, fingerprint and venue unmoved.
+
+**m3: dead-letter payloads carried item content.** The pipeline
+persisted the self-healing 120-character preview into
+evt_dead_letters and the run's DLQ summary; for an early-keyed
+JSON item that preview is the head of a description value. All
+three isolation points (ICS parse, JSON convert, merge) now pass
+key-only preview callables: the UID line for ICS blocks, the item
+id for JSON items, the source item key for extracted events. The
+persisted payload can therefore never contain item content, and
+the parse-stage dead letter now records the real item key for
+JSON pipes too (round 1 recorded None there). Choice disclosed:
+pipeline log lines carry the same key-only preview, which is
+stricter than the platform default; other pipelines keep the
+redacted content preview.
+
+**n1: three-part ICS location mapping.** "Venue, City, ST ZIP"
+put the city in the street slot. The three-part form now maps to
+name plus city with no street, and a house number in the first
+part marks the street form instead ("Street, City, ST ZIP").
+Both shapes are pinned; the four-part form is unchanged.
+
+**n2 plus design call 10: SupabaseStore timestamp wiring.**
+finish_run stamped finished_at from a naive local clock; it now
+uses an aware UTC clock. Assembly parses PostgREST timestamp
+strings into aware datetimes (_parse_ts) for listing rows,
+listing source rows, and source rows, so gate arithmetic and the
+circuit check compare datetimes to datetimes instead of raising
+TypeError on first live use. gold_put serializes datetimes
+through _ts. test_events_store.py proves all of it against a fake
+client, including a gate decision computed on assembled values
+end to end.
 
 ## Not in scope (by ticket)
 
