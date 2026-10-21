@@ -1,0 +1,80 @@
+BEGIN:VCALENDAR
+PRODID:-//Springshare//LibCal//EN
+VERSION:2.0
+X-WR-CALNAME:Denver Public Library Events
+X-WR-TIMEZONE:America/Denver
+BEGIN:VEVENT
+UID:storytime-1001@denverlibrary.libcal.com
+DTSTAMP:20261015T150000Z
+DTSTART;TZID=America/Denver:20261024T103000
+DTEND;TZID=America/Denver:20261024T111500
+RRULE:FREQ=WEEKLY;COUNT=4;BYDAY=SA
+SUMMARY:Preschool Storytime
+DESCRIPTION:Bring your little ones for stories\, songs\, and rhymes led by
+ our children's librarians. Registration opens two weeks ahead.
+LOCATION:Central Library\, Children's Library
+URL:https://denverlibrary.libcal.com/event/1001
+STATUS:CONFIRMED
+CATEGORIES:Storytime
+END:VEVENT
+BEGIN:VEVENT
+UID:techhelp-1002@denverlibrary.libcal.com
+DTSTAMP:20261015T150000Z
+DTSTART:20261026T170000Z
+DTEND:20261026T180000Z
+SUMMARY:One-on-One Tech Help
+DESCRIPTION:Drop in for help with your phone or laptop. This description
+ must never reach silver or gold.
+LOCATION:Blair-Caldwell African American Research Library
+URL:https://denverlibrary.libcal.com/event/1002
+STATUS:CONFIRMED
+END:VEVENT
+BEGIN:VEVENT
+UID:cancelled-1003@denverlibrary.libcal.com
+DTSTAMP:20261015T150000Z
+DTSTART;TZID=America/Denver:20261027T180000
+DTEND;TZID=America/Denver:20261027T193000
+SUMMARY:Evening Book Club
+DESCRIPTION:This meeting was cancelled by the organizer.
+LOCATION:Ross-Cherry Creek Branch Library
+URL:https://denverlibrary.libcal.com/event/1003
+STATUS:CANCELLED
+END:VEVENT
+BEGIN:VEVENT
+UID:markethall-1004@example.org
+DTSTAMP:20261015T150000Z
+DTSTART;TZID=America/Denver:20261028T190000
+DURATION:PT2H
+SUMMARY:Neighborhood Night Market
+DESCRIPTION:Food trucks and local makers. Expression we do not copy.
+LOCATION:Mercado Hall\, 2901 Inca St\, Denver\, CO
+GEO:39.75891;-104.99988
+URL:https://example.org/events/night-market
+STATUS:CONFIRMED
+CATEGORIES:Market
+END:VEVENT
+BEGIN:VEVENT
+UID:cleanup-1005@example.org
+DTSTAMP:20261015T150000Z
+DTSTART;VALUE=DATE:20261031
+DTEND;VALUE=DATE:20261101
+SUMMARY:Creek Cleanup Day
+DESCRIPTION:Gloves provided.
+LOCATION:Confluence Park
+URL:https://example.org/events/creek-cleanup
+STATUS:CONFIRMED
+END:VEVENT
+BEGIN:VEVENT
+UID:choir-1006@example.org
+DTSTAMP:20261015T150000Z
+DTSTART;TZID=America/Denver:20261025T160000
+DTEND;TZID=America/Denver:20261025T173000
+RRULE:FREQ=MONTHLY;BYDAY=2TU;UNTIL=20261231T235959Z
+EXDATE;TZID=America/Denver:20261110T160000
+SUMMARY:Community Choir Rehearsal
+DESCRIPTION:Open to all voices.
+LOCATION:Community Church\, 100 Main St\, Denver\, CO
+URL:https://example.org/events/choir
+STATUS:CONFIRMED
+END:VEVENT
+END:VCALENDAR
