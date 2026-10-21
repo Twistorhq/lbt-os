@@ -227,7 +227,7 @@ class _ClientCtx:
 
     def __enter__(self):
         tv_router.get_db = lambda: self._db
-        app.dependency_overrides[get_auth] = lambda: AuthContext("user_1", ORG, "pro")
+        app.dependency_overrides[get_auth] = lambda: AuthContext("user_1", ORG, "pro", "active", "sub_test")
         return TestClient(app)
 
     def __exit__(self, *exc):

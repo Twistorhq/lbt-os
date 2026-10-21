@@ -86,10 +86,16 @@ class UserContext:
 
 class AuthContext:
     """Full auth — verified user with a resolved org UUID."""
-    def __init__(self, user_id: str, org_id: str, plan: str = "basic", is_owner: bool = False):
+    # TW-677 merge union: the PR's subscription fields keep their positional
+    # slots (existing Trade View tests construct them positionally) and
+    # TW-484's is_owner is appended, so every main-side caller using keywords
+    # or <=3 positional args is unaffected.
+    def __init__(self, user_id: str, org_id: str, plan: str = "basic", subscription_status: str = "inactive", stripe_subscription_id: str | None = None, is_owner: bool = False):
         self.user_id = user_id
         self.org_id  = org_id
         self.plan    = plan
+        self.subscription_status = subscription_status
+        self.stripe_subscription_id = stripe_subscription_id
         self.is_owner = is_owner  # TW-484: owner SSO bypasses all plan gates
 
 
@@ -158,7 +164,7 @@ async def get_auth(
     db = get_db()
     result = (
         db.table("organizations")
-        .select("id, plan, subscription_status")
+        .select("id, plan, subscription_status, stripe_subscription_id")
         .eq("clerk_user_id", user_id)
         .maybe_single()
         .execute()
@@ -174,9 +180,33 @@ async def get_auth(
         user_id=user_id,
         org_id=result.data["id"],
         plan=result.data.get("plan", "basic"),
+        subscription_status=result.data.get("subscription_status", "inactive"),
+        stripe_subscription_id=result.data.get("stripe_subscription_id"),
         # TW-484: owner SSO — cached lookup, not a Clerk call per request.
         is_owner=resolve_owner_status(user_id),
     )
+
+
+def require_tradeview_subscription(auth: AuthContext = Depends(get_auth)) -> AuthContext:
+    """Fail closed using server-resolved subscription state, never UI flags.
+
+    Existing billing sync treats active trials as active access too. This is
+    an entitlement check, not proof of payment. No new price/SKU is created.
+    """
+    # TW-484: owner SSO bypasses all plan gates (same rule as require_plan).
+    if auth.is_owner:
+        return auth
+    # TW-677 (Rosa PR4 B1): the recognized plan set derives from PLAN_ORDER
+    # keys, the single source of truth that already maps the TW-550 flat
+    # tiers (trades_starter, trades_pro) alongside the legacy plans. A
+    # second hardcoded list here is what drifted and locked out paying
+    # Trades orgs. PLAN_ORDER is defined below in this module; the lookup
+    # happens at call time.
+    if (auth.subscription_status != "active"
+            or not auth.stripe_subscription_id
+            or auth.plan not in PLAN_ORDER):
+        raise HTTPException(status_code=403, detail="Trade View connected data requires an active subscription.")
+    return auth
 
 
 def get_clerk_user_email(user_id: str) -> str | None:
