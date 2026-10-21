@@ -193,9 +193,18 @@ def require_tradeview_subscription(auth: AuthContext = Depends(get_auth)) -> Aut
     Existing billing sync treats active trials as active access too. This is
     an entitlement check, not proof of payment. No new price/SKU is created.
     """
+    # TW-484: owner SSO bypasses all plan gates (same rule as require_plan).
+    if auth.is_owner:
+        return auth
+    # TW-677 (Rosa PR4 B1): the recognized plan set derives from PLAN_ORDER
+    # keys, the single source of truth that already maps the TW-550 flat
+    # tiers (trades_starter, trades_pro) alongside the legacy plans. A
+    # second hardcoded list here is what drifted and locked out paying
+    # Trades orgs. PLAN_ORDER is defined below in this module; the lookup
+    # happens at call time.
     if (auth.subscription_status != "active"
             or not auth.stripe_subscription_id
-            or auth.plan not in {"basic", "pro", "premium", "enterprise"}):
+            or auth.plan not in PLAN_ORDER):
         raise HTTPException(status_code=403, detail="Trade View connected data requires an active subscription.")
     return auth
 
