@@ -128,7 +128,9 @@ class TestFixtureVouchPath:
 
     def test_vouch_only_path_qualifies(self):
         s = stats(
-            completed_nights=20, no_shows=3, best_series_streak=0,
+            completed_nights=20,
+            no_shows=3,
+            best_series_streak=0,
             distinct_vouches=3,
         )
         assert compute_standing(s).tier == "fixture"

@@ -12,6 +12,11 @@ build against stable signatures:
   every table is RLS deny-all to anything else.
 - user_id always comes from the verified Identity token, never from
   a request body.
+- reads are viewer-relative: get_group / get_event take the
+  viewer's user_id because the band filter (Section 5.9), audience
+  scope, and block checks that make a read legal are all computed
+  against a specific viewer. A read signature without a viewer
+  cannot express a legal read, so there isn't one.
 - reveal_event_location is fail-closed by doctrine: until Phase 4
   lands the full condition set (band attestation, tier floor, trust
   band, block check, audience scope, reveal window, reveal logging),
@@ -47,7 +52,7 @@ def create_group(db, user_id: UUID, payload: models.GroupCreate) -> dict:
     raise _todo(_PHASE_4)
 
 
-def get_group(db, group_id: UUID) -> dict:
+def get_group(db, viewer_user_id: UUID, group_id: UUID) -> dict:
     raise _todo(_PHASE_4)
 
 
@@ -55,7 +60,7 @@ def create_event(db, user_id: UUID, payload: models.EventCreate) -> dict:
     raise _todo(_PHASE_4)
 
 
-def get_event(db, event_id: UUID) -> dict:
+def get_event(db, viewer_user_id: UUID, event_id: UUID) -> dict:
     raise _todo(_PHASE_4)
 
 

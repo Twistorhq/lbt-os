@@ -144,8 +144,11 @@ CREATE INDEX IF NOT EXISTS idx_rsn_close_friends_friend
 -- Series: the standing meetup. Instances are ordinary rsn_events
 -- rows materialized by the scheduler tick on a rolling 4-week
 -- horizon (spec Section 4). venue_ref points at the series' usual
--- rsn_event_locations record; its FK is added after that table
--- exists (circular pair, see below).
+-- rsn_event_locations record and is the ONLY link between a series
+-- and its location (Rosa M2): the locations table carries no
+-- back-pointer, so the two can never disagree about which address
+-- is authoritative. Its FK is added after that table exists
+-- (circular pair, see below).
 CREATE TABLE IF NOT EXISTS rsn_event_series (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     group_id UUID NOT NULL REFERENCES rsn_groups(id) ON DELETE CASCADE,
@@ -202,21 +205,23 @@ CREATE INDEX IF NOT EXISTS idx_rsn_events_series
 
 -- Exact locations (bronze). Separate table, separate access path:
 -- the exact location is served only by the gated reveal endpoint
--- (spec Section 8). Exactly one owner per row: an event, or a series
--- (its usual-location template, the target of rsn_event_series
--- .venue_ref). The surrogate id exists so venue_ref has a stable
--- target; event ownership stays UNIQUE.
+-- (spec Section 8). A row is owned in exactly one of two ways: by
+-- an event (event_id, UNIQUE), or as a series' usual-location
+-- template, in which case event_id is NULL and ownership is
+-- expressed ONLY by rsn_event_series.venue_ref pointing here
+-- (Rosa M2: one source of truth, no back-pointer column that could
+-- diverge from it). The surrogate id exists so venue_ref has a
+-- stable target; a template row no series points at is inert and
+-- is never reachable through the reveal path.
 CREATE TABLE IF NOT EXISTS rsn_event_locations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     event_id UUID UNIQUE REFERENCES rsn_events(id) ON DELETE CASCADE,
-    series_id UUID UNIQUE REFERENCES rsn_event_series(id) ON DELETE CASCADE,
     venue_name TEXT,
     street_address TEXT NOT NULL,
     latitude DOUBLE PRECISION NOT NULL,
     longitude DOUBLE PRECISION NOT NULL,
     arrival_instructions TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CHECK ((event_id IS NOT NULL) <> (series_id IS NOT NULL))
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Close the circular pair: series.venue_ref -> locations(id).
@@ -232,6 +237,11 @@ BEGIN
             ON DELETE SET NULL;
     END IF;
 END $$;
+
+-- One usual-location row serves one series (Rosa M2): two series
+-- never share, and silently co-edit, a single address record.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rsn_event_series_venue_ref_unique
+    ON rsn_event_series(venue_ref) WHERE venue_ref IS NOT NULL;
 
 -- RSVPs. `requested` is the TW-648 fix-round sub-state: a guest RSVP
 -- enters requested; the host approves (going, a host-approved
@@ -428,6 +438,14 @@ CREATE TABLE IF NOT EXISTS rsn_collectibles (
     revoke_reason TEXT,
     UNIQUE (user_id, rule_key, ref_type, ref_id, value)
 );
+-- Ref-less rules (First Night, night counts, Year One) carry
+-- ref_id NULL, and Postgres treats NULLs as distinct under the
+-- table constraint above, so it cannot bind for them (Rosa m5).
+-- This partial index is what makes a ref-less instance one per
+-- member per rule and value (spec Section 7.9).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rsn_collectibles_refless_unique
+    ON rsn_collectibles(user_id, rule_key, ref_type, value)
+    WHERE ref_id IS NULL;
 
 -- A vouch is a trust signal only: it never grants the vouchee any
 -- capability, scope, or tier (spec Sections 5.1, 7.5).

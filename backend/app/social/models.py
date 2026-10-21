@@ -6,7 +6,9 @@ fix-round deltas). Fail-loud rules:
 - unknown fields are refused (extra='forbid'), never ignored;
 - mandatory age ratings have no default: an unrated group, event, or
   series cannot be constructed (spec Section 5.9);
-- a check-in carries a proof verdict only. There is deliberately no
+- a check-in carries a proof verdict only (verdict, accuracy
+  bucket, timestamp for geo proof; token for QR proof; nothing
+  client-asserted for host confirm). There is deliberately no
   coordinate field on CheckinCreate, so raw coordinates cannot cross
   the wire through this API (spec Section 7.1);
 - no model here accepts a date of birth or any raw identity field:
@@ -20,6 +22,8 @@ from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from . import geo
 
 # Enum vocabularies — kept in lockstep with the CHECK constraints in
 # supabase/migration_social_v1.sql and migration_verify_v1.sql.
@@ -38,6 +42,9 @@ RSVP_WINDOWS = (
     "host_held",
 )
 PROOF_TYPES = ("geo_soft", "qr_strong", "host_confirm")
+# Lockstep with geo.ACCURACY_BUCKETS (asserted by contract test):
+# the wire vocabulary for a geo verdict's precision is one list.
+ACCURACY_BUCKETS = ("coarse", "fine")
 WELFARE_RESPONSES = ("fine", "need_a_minute", "need_help", "no_response")
 HELP_ACTIONS = (
     "none",
@@ -168,12 +175,76 @@ class RsvpDecision(_Strict):
 
 
 class CheckinCreate(_Strict):
-    """A check-in is a verdict, not a location. No coordinate fields
-    exist on this model by design; extra='forbid' makes any attempt
-    to send them fail loud (spec Section 7.1)."""
+    """The Section 7.1 wire contract: a verdict, an accuracy bucket,
+    and a timestamp, never coordinates. No coordinate fields exist
+    on this model by design; extra='forbid' makes any attempt to
+    send them fail loud.
+
+    Validation is conditional on the proof type:
+    - geo_soft carries the device's geofence verdict payload, and
+      the payload is checked by geo.validate_arrival_payload, the
+      same fail-closed validator the geo module pins;
+    - qr_strong carries the scanned venue token and nothing else
+      (the scan is the assertion; a client-supplied verdict beside
+      it would be a second, weaker claim);
+    - host_confirm carries nothing the client asserts: the host
+      confirms out-of-band and the server stamps the arrival.
+    """
 
     event_id: UUID
     proof_type: Literal["geo_soft", "qr_strong", "host_confirm"]
+    within_geofence: bool | None = None
+    accuracy_bucket: Literal["coarse", "fine"] | None = None
+    observed_at: datetime | None = None
+    qr_token: str | None = Field(default=None, min_length=1, max_length=256)
+
+    @model_validator(mode="after")
+    def _check_proof_payload(self) -> "CheckinCreate":
+        if self.proof_type == "geo_soft":
+            if (
+                self.within_geofence is None
+                or self.accuracy_bucket is None
+                or self.observed_at is None
+            ):
+                raise ValueError(
+                    "geo_soft check-in requires within_geofence, "
+                    "accuracy_bucket, and observed_at"
+                )
+            if self.qr_token is not None:
+                raise ValueError("geo_soft check-in must not carry a qr_token")
+            # Bind the wire contract to the geo module's validator so
+            # the two can never drift apart.
+            try:
+                geo.validate_arrival_payload(
+                    {
+                        "within_geofence": self.within_geofence,
+                        "accuracy_bucket": self.accuracy_bucket,
+                    }
+                )
+            except geo.GeoError as exc:
+                raise ValueError(str(exc)) from exc
+        elif self.proof_type == "qr_strong":
+            if self.qr_token is None:
+                raise ValueError("qr_strong check-in requires a qr_token")
+            if (
+                self.within_geofence is not None
+                or self.accuracy_bucket is not None
+                or self.observed_at is not None
+            ):
+                raise ValueError(
+                    "qr_strong check-in carries the token only, no geo verdict fields"
+                )
+        else:  # host_confirm
+            if (
+                self.within_geofence is not None
+                or self.accuracy_bucket is not None
+                or self.observed_at is not None
+                or self.qr_token is not None
+            ):
+                raise ValueError(
+                    "host_confirm check-in carries no client-asserted payload"
+                )
+        return self
 
 
 class EncounterConfirmCreate(_Strict):

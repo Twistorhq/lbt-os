@@ -315,8 +315,13 @@ class TestRetentionMachinery:
         block = _table_block(verify_sql, "vfy_verification_states")
         for status in ("unverified", "verified", "dropped", "revoked", "surrendered"):
             assert f"'{status}'" in block, status
-        for col in ("current_tier", "verified_at", "last_interaction_at",
-                    "dropped_at", "drop_reason"):
+        for col in (
+            "current_tier",
+            "verified_at",
+            "last_interaction_at",
+            "dropped_at",
+            "drop_reason",
+        ):
             assert col in block, col
         # Tier and status cannot disagree: verified iff a tier is held.
         assert "(status = 'verified') = (current_tier > 0)" in block

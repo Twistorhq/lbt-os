@@ -106,7 +106,7 @@ def get_group(
     claims: dict = Depends(_verified_claims),
     db: Client = Depends(get_db),
 ):
-    return _call(service.get_group, db, group_id)
+    return _call(service.get_group, db, UUID(claims["sub"]), group_id)
 
 
 @router.post("/events", status_code=201)
@@ -128,7 +128,7 @@ def get_event(
     claims: dict = Depends(_verified_claims),
     db: Client = Depends(get_db),
 ):
-    return _call(service.get_event, db, event_id)
+    return _call(service.get_event, db, UUID(claims["sub"]), event_id)
 
 
 @router.post("/events/{event_id}/rsvps", status_code=201)

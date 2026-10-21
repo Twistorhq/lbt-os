@@ -145,9 +145,7 @@ class TestCheckinContract:
 
     def test_coordinates_refused_loudly(self):
         with pytest.raises(ValidationError):
-            models.CheckinCreate(
-                **self._geo(latitude=39.7392, longitude=-104.9903)
-            )
+            models.CheckinCreate(**self._geo(latitude=39.7392, longitude=-104.9903))
 
     def test_qr_strong_requires_token(self):
         with pytest.raises(ValidationError):

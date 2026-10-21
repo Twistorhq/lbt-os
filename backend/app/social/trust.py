@@ -8,7 +8,10 @@ core of that derivation: aggregates in, standing out, no I/O.
 Standing ladder (reward catalog, Imani; planning thresholds, tuned
 by configuration later, never by hand grants):
   Regular   = 5 completed nights + 80% show rate
-  Fixture   = 20 nights + 85% show + a 4-instance series streak
+  Fixture   = 20 nights + 85% show + corroboration: a 4-instance
+              series streak OR vouches from 3 distinct verified
+              members after shared check-ins (vouches corroborate
+              only; they never substitute for nights or show rate)
   Pillar    = 40 nights + 90% show + 90% would-meet-again across
               15+ reviews + 6 clean hosted events
   Keyholder = 75 nights + 15 clean hosted + 95% WMA across 30+
@@ -38,6 +41,7 @@ REGULAR_SHOW_RATE = 0.80
 FIXTURE_NIGHTS = 20
 FIXTURE_SHOW_RATE = 0.85
 FIXTURE_STREAK = 4
+FIXTURE_VOUCHES = 3
 PILLAR_NIGHTS = 40
 PILLAR_SHOW_RATE = 0.90
 PILLAR_WMA_RATE = 0.90
@@ -66,6 +70,10 @@ class MemberStats:
     would_meet_again_positive: int = 0
     hosted_clean: int = 0
     best_series_streak: int = 0
+    # Distinct verified members who vouched for this member after a
+    # shared check-in (rsn_vouches, one row per voucher/vouchee
+    # pair, so the count is distinct by construction).
+    distinct_vouches: int = 0
     tenure_days: int = 0
     substantiated_reports: int = 0
     identity_strikes: int = 0
@@ -104,12 +112,15 @@ def _meets_regular(s: MemberStats) -> bool:
 
 def _meets_fixture(s: MemberStats) -> bool:
     rate = show_rate(s)
+    corroborated = (
+        s.best_series_streak >= FIXTURE_STREAK or s.distinct_vouches >= FIXTURE_VOUCHES
+    )
     return (
         _meets_regular(s)
         and s.completed_nights >= FIXTURE_NIGHTS
         and rate is not None
         and rate >= FIXTURE_SHOW_RATE
-        and s.best_series_streak >= FIXTURE_STREAK
+        and corroborated
     )
 
 
