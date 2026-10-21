@@ -1,4 +1,4 @@
-"""TW-650 Twistor Social — fail-loud Pydantic models.
+"""TW-650 Twistor Social: fail-loud Pydantic models.
 
 These mirror the rsn_ schema contract (spec Section 4 + the TW-648
 fix-round deltas). Fail-loud rules:
@@ -25,7 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from . import geo
 
-# Enum vocabularies — kept in lockstep with the CHECK constraints in
+# Enum vocabularies, kept in lockstep with the CHECK constraints in
 # supabase/migration_social_v1.sql and migration_verify_v1.sql.
 AGE_BANDS = ("under_16", "age_16_17", "age_18_20", "age_21_plus")
 MIN_AGE_BANDS = ("age_16_plus", "age_18_plus", "age_21_plus")
@@ -172,6 +172,65 @@ class RsvpDecision(_Strict):
     comes from the verified token, never from the request body."""
 
     decision: Literal["approve", "decline"]
+
+
+class MembershipDecision(_Strict):
+    """Owner/admin decision on a pending (`invited`) membership."""
+
+    decision: Literal["approve", "decline"]
+
+
+class MemberRoleUpdate(_Strict):
+    """Owner-only role assignment. The owner's own role is not
+    assignable through this model (the service refuses it)."""
+
+    role: Literal["admin", "moderator", "member"]
+
+
+class EventLocationIn(_Strict):
+    """The bronze location write (spec Section 4): exact address,
+    written only through the host-only location endpoints, stored
+    only in rsn_event_locations, and never part of any read model
+    except the gated reveal."""
+
+    venue_name: str | None = Field(default=None, max_length=200)
+    street_address: str = Field(min_length=1, max_length=500)
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    arrival_instructions: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("street_address")
+    @classmethod
+    def _check_address(cls, v: str) -> str:
+        return _non_blank(v, "street_address")
+
+
+class SeriesCreate(_Strict):
+    """A recurring series (spec Section 4). The rating is mandatory,
+    same as events. `venue_type` and `audience_scope` are
+    materialization inputs for the instances: rsn_event_series
+    carries no columns for them (flagged in the TW-660 evidence doc),
+    so instances materialized later inherit them from the series'
+    existing instances."""
+
+    group_id: UUID
+    title: str = Field(min_length=1, max_length=200)
+    description_template: str | None = Field(default=None, max_length=4000)
+    recurrence_rule: str = Field(min_length=1, max_length=500)
+    first_starts_at: datetime
+    default_capacity: int | None = Field(default=None, gt=0)
+    default_guests_enabled: bool = True
+    default_min_tier_view: TierGate = "verified"
+    default_min_tier_rsvp: TierGate = "verified"
+    # Mandatory at creation, no unrated state (spec Section 5.9).
+    default_min_age_band: MinAgeBand
+    venue_type: Literal["venue", "home"] = "venue"
+    audience_scope: AudienceScope = "group"
+
+    @field_validator("title")
+    @classmethod
+    def _check_series_title(cls, v: str) -> str:
+        return _non_blank(v, "title")
 
 
 class CheckinCreate(_Strict):
