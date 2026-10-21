@@ -19,6 +19,14 @@ from .normalize import normalize_dob, normalize_doc_number, normalize_expiry
 
 _FIELDS = ("doc_number", "dob", "expiry", "surname", "given_names")
 
+# The fields a front-vs-MRZ comparison can evidence. The MRZ is a
+# complete structured read and OCR is a best-effort one, so a pair
+# evidences disagreement only when BOTH reads carry the field: a
+# field the front read never labeled is absence, not tampering.
+# Names are excluded: OCR keeps the printed name whole (the anchor
+# compares it whole), it never splits surname from given names.
+_MRZ_AGREEMENT_FIELDS = ("doc_number", "dob", "expiry")
+
 
 def _normalize_fields(raw: dict, today: date) -> dict[str, str]:
     out: dict[str, str] = {}
@@ -49,6 +57,7 @@ class DocumentEvaluation:
     fields: dict[str, str]  # canonical, normalized (dob/expiry ISO)
     mrz_valid: bool | None  # None when the class carries no MRZ
     agreement: dict[str, bool]  # per-field front-vs-barcode agreement
+    mrz_agreement: dict[str, bool]  # per-field front-vs-MRZ agreement
     tamper_signals: list[str] = field(default_factory=list)
 
     @property
@@ -83,6 +92,7 @@ def evaluate_document(
 
     tamper: list[str] = []
     agreement: dict[str, bool] = {}
+    mrz_agreement: dict[str, bool] = {}
 
     # Front-to-barcode agreement (the harness's own metric shape):
     # evidenced pairs only, per documents.agreement_rate. Computed
@@ -109,6 +119,25 @@ def evaluate_document(
             tamper.append("mrz_check_failed:" + ",".join(sorted(failed)))
         mrz_fields = _normalize_fields(mrz.get("fields") or {}, today)
 
+        # Front-vs-MRZ agreement, the comparison the barcode path
+        # already had and the passport path was missing: where both
+        # reads carry a field, they must agree, or the disagreement
+        # is a named tamper signal. The MRZ stays canonical either
+        # way; the signal is what a human reviews.
+        shared = [n for n in _MRZ_AGREEMENT_FIELDS if n in ocr and n in mrz_fields]
+        if shared:
+            rates = agreement_rate(
+                [{n: ocr[n] for n in shared}],
+                [{n: mrz_fields[n] for n in shared}],
+                shared,
+            )
+            for name, rate in rates.items():
+                if rate is None:
+                    continue
+                mrz_agreement[name] = rate == 1.0
+                if rate != 1.0:
+                    tamper.append(f"front_mrz_disagreement:{name}")
+
     # Canonical preference by class: MRZ on passports, barcode on US
     # licenses and state IDs, OCR as the fallback for every field.
     if document_type == "passport":
@@ -127,6 +156,7 @@ def evaluate_document(
         fields=canonical,
         mrz_valid=mrz_valid,
         agreement=agreement,
+        mrz_agreement=mrz_agreement,
         tamper_signals=tamper,
     )
 

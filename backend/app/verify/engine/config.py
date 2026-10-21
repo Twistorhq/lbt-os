@@ -60,8 +60,9 @@ class EngineConfig:
     velocity_max_per_device: int = 10
     velocity_max_per_network: int = 20
     velocity_window_hours: int = 24
-    # Raw image staging hard ceiling (Section 5.7); the pipeline
-    # destroys on decision, long before this ever binds.
+    # Raw image staging hard ceiling (Section 5.7), enforced by
+    # Staging.sweep_expired through pipeline.sweep_staging; the
+    # pipeline destroys on decision, long before this ever binds.
     staging_ttl_hours: int = 72
     # D3: production capture flag. Default OFF, always.
     production_capture_enabled: bool = False

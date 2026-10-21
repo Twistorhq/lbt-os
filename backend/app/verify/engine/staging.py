@@ -10,6 +10,12 @@ never in logs. Two implementations of one seam:
 - InMemoryStaging: test shape. Bytes never leave the process except
   through local_path, below. Used with stubbed ports in tests.
 
+The ceiling is a mechanism, not a constant: sweep_expired destroys
+every ref older than the TTL (by put time in memory, by file age on
+disk), and the pipeline exposes it as sweep_staging so the service
+can run it on a schedule. A ref orphaned by a crashed stage dies
+there, at the latest.
+
 The FOSS model libraries read files, so staging can materialize a
 plaintext local path for a ref. That plaintext exists only inside
 the verify service's staging area, only between capture and
@@ -21,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import tempfile
+import time
 import uuid
 from pathlib import Path
 from typing import Protocol
@@ -39,15 +46,24 @@ class Staging(Protocol):
 
     def refs(self) -> list[str]: ...
 
+    def sweep_expired(self, ttl_hours: float, *, now: float | None = None) -> list[str]:
+        """Destroy every ref older than the TTL; return their refs."""
+        ...
+
 
 class InMemoryStaging:
     def __init__(self):
         self._blobs: dict[str, bytes] = {}
         self._paths: dict[str, str] = {}
+        self._put_at: dict[str, float] = {}
 
     def put(self, data: bytes) -> str:
-        ref = hashlib.sha256(data).hexdigest()
+        # Unique per put: a content-addressed ref would let two
+        # sessions share one blob, and one session's wipe would
+        # destroy the other's capture (Rosa's n1).
+        ref = f"{hashlib.sha256(data).hexdigest()}-{uuid.uuid4().hex}"
         self._blobs[ref] = data
+        self._put_at[ref] = time.time()
         return ref
 
     def get(self, ref: str) -> bytes:
@@ -65,12 +81,20 @@ class InMemoryStaging:
 
     def wipe(self, ref: str) -> None:
         self._blobs.pop(ref, None)
+        self._put_at.pop(ref, None)
         path = self._paths.pop(ref, None)
         if path:
             Path(path).unlink(missing_ok=True)
 
     def refs(self) -> list[str]:
         return sorted(self._blobs)
+
+    def sweep_expired(self, ttl_hours: float, *, now: float | None = None) -> list[str]:
+        cutoff = (time.time() if now is None else now) - ttl_hours * 3600
+        expired = [ref for ref, at in self._put_at.items() if at <= cutoff]
+        for ref in expired:
+            self.wipe(ref)
+        return sorted(expired)
 
 
 class EncryptedFileStaging:
@@ -102,3 +126,12 @@ class EncryptedFileStaging:
 
     def refs(self) -> list[str]:
         return sorted(p.name for p in self._root.glob("*.enc"))
+
+    def sweep_expired(self, ttl_hours: float, *, now: float | None = None) -> list[str]:
+        cutoff = (time.time() if now is None else now) - ttl_hours * 3600
+        expired = []
+        for path in self._root.glob("*.enc"):
+            if path.stat().st_mtime <= cutoff:
+                expired.append(path.name)
+                self.wipe(path.name)
+        return sorted(expired)

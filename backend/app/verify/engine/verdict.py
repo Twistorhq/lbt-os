@@ -70,6 +70,13 @@ def decide(inputs: VerdictInputs, config: EngineConfig) -> Verdict:
     review: list[str] = []
     if not inputs.document_extracted:
         review.append("document_unreadable")
+    if inputs.dob_band is None:
+        # An age band is this product's core fact, and the schema
+        # states the same doctrine (vfy_documents forbids a NULL
+        # dob_hash for government classes). A pass without a band
+        # must be impossible by construction, not by the persist
+        # path happening to crash later.
+        review.append("dob_unreadable")
     if inputs.mrz_valid is False:
         review.append("mrz_check_failed")
     if inputs.tamper_signals:

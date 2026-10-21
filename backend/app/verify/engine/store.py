@@ -1,17 +1,24 @@
 """Verify store: the engine's persistence boundary (TW-658).
 
 One protocol, two implementations. InMemoryVerifyStore is a full
-fidelity double shaped exactly like the vfy_ tables (TW-650): the
-pipeline's persistence effects are unit-tested against it.
-SupabaseVerifyStore is the production implementation over the
-service-role client; every vfy_ table is RLS deny-all to anything
-else. The store never accepts a raw image: documents arrive as
-hashes plus an encrypted payload, biometrics as ciphertext.
+fidelity double shaped exactly like the vfy_ tables (TW-650, plus
+the TW-658 v3 column below): the pipeline's persistence effects are
+unit-tested against it, and the Supabase implementation is driven
+through a fake client in the store tests so the double is not the
+only witness. SupabaseVerifyStore is the production implementation
+over the service-role client; every vfy_ table is RLS deny-all to
+anything else. The store never accepts a raw image: documents
+arrive as hashes plus an encrypted payload, biometrics as
+ciphertext.
 
-Session working state that has no column (the declared document
-class, carried from session creation to document submission) rides
-on the session dict in both implementations; the durable record of
-the class is vfy_documents.document_type, written at submission.
+The session's document class is a vfy_sessions column
+(migration_verify_v3.sql): both implementations write it at
+creation and return it on the session row, so it survives a
+PostgREST round trip. The durable per-document record of the class
+remains vfy_documents.document_type, written at submission. (The
+original build echoed the class into the created dict only; Rosa's
+TW-658 M3 showed the echo could never survive get_session, and
+the fix round replaced design call 3 with the column.)
 """
 
 from __future__ import annotations
@@ -235,6 +242,22 @@ class InMemoryVerifyStore:
     # -- velocity ------------------------------------------------------------------
     def record_attempt(self, session_id, record):
         self.attempts.append(record)
+        # Mirror the production persistence shape: attempts are
+        # vfy_signals rows under their own signal type, never the
+        # decision summary's "velocity" (Rosa's M4 collision).
+        self.signals.append(
+            {
+                "id": uuid.uuid4().hex,
+                "session_id": session_id,
+                "signal_type": "velocity_attempt",
+                "score": None,
+                "detail": {
+                    "kind": record.kind,
+                    "key": record.key,
+                    "at": record.at.isoformat(),
+                },
+            }
+        )
 
     def list_attempts(self):
         return list(self.attempts)
@@ -282,17 +305,18 @@ class SupabaseVerifyStore:
     def create_session(
         self, *, user_id, document_type, tier_requested, engine_version_id
     ):
-        row = self._one(
+        # document_type is a vfy_sessions column since
+        # migration_verify_v3.sql; the row PostgREST returns
+        # carries it, exactly as get_session will return it.
+        return self._one(
             "vfy_sessions",
             {
                 "user_id": user_id,
+                "document_type": document_type,
                 "tier_requested": tier_requested,
                 "engine_version_id": engine_version_id,
             },
         )
-        # No document_type column on vfy_sessions (TW-650 schema);
-        # the class is session working state, echoed for the caller.
-        return {**row, "document_type": document_type}
 
     def get_session(self, session_id):
         found = (
@@ -429,10 +453,15 @@ class SupabaseVerifyStore:
         return self._one("vfy_retention_actions", row)
 
     def record_attempt(self, session_id, record):
+        # Attempts live under their own signal type. The decision
+        # summary (the pipeline's "velocity" signal, detail shaped
+        # {exceeded, document, device, network}) shares the table,
+        # and parsing it as an attempt crashed every later velocity
+        # read (Rosa's M4).
         self.add_signal(
             {
                 "session_id": session_id,
-                "signal_type": "velocity",
+                "signal_type": "velocity_attempt",
                 "score": None,
                 "detail": {
                     "kind": record.kind,
@@ -448,7 +477,7 @@ class SupabaseVerifyStore:
         found = (
             self._db.table("vfy_signals")
             .select("detail")
-            .eq("signal_type", "velocity")
+            .eq("signal_type", "velocity_attempt")
             .execute()
         )
         return [

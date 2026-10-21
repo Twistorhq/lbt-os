@@ -17,6 +17,13 @@ Decision discipline, on every outcome including review and fail:
 staged images are wiped, the match payload is cleared, and the
 destruction is written into the retention log as executed actions.
 Only a pass persists a template, an attestation, and a tier.
+Consent is required twice: before a session exists, and again at
+decision time before anything persists, so a mid-session
+withdrawal cannot be silently undone by an in-flight session. No
+exception path leaves a staged image behind either: a failed stage
+wipes what it staged before the error propagates, and staged refs
+that outlive their session are bounded by the staging TTL sweep
+(sweep_staging).
 
 Production capture is gated by the D3 flag in EngineConfig and by
 current consent (TW-654 D1/D2), in that order, before a session
@@ -34,11 +41,12 @@ from datetime import date, datetime, timezone
 from app.verify.benchmark.stages import StageUnavailable
 
 from .config import ENGINE_VERSION, EngineConfig
-from .consent import active_consent, require_consent
+from .consent import require_consent
 from .crosschecks import evaluate_document, parse_ocr_fields
 from .crypto import Encryptor
 from .errors import (
     CaptureDisabled,
+    ConsentRequired,
     DocumentClassNotEnabled,
     SessionStateError,
     UnknownSession,
@@ -56,7 +64,7 @@ from .ports import PipelinePorts
 from .staging import Staging
 from .store import VerifyStore
 from .velocity import AttemptRecord, check_velocity
-from .verdict import VerdictInputs, decide
+from .verdict import Verdict, VerdictInputs, decide
 
 # Where the template key lives: a secrets-store reference, never a
 # value, recorded on each biometric row per the schema.
@@ -181,8 +189,21 @@ class VerificationPipeline:
             raise SessionStateError(
                 f"session {session_id} is {session['status']}, not started"
             )
-        now = self.clock()
         ref = self.staging.put(image_bytes)
+        try:
+            self._run_document_stage(session, ref)
+        except Exception:
+            # No failure path leaves a staged image behind. An
+            # unavailable stage surfaces as its typed refusal (the
+            # router maps StageUnavailable to 503), the session
+            # stays at started, and the member can retry.
+            self.staging.wipe(ref)
+            raise
+        return "document_received"
+
+    def _run_document_stage(self, session: dict, ref: str) -> None:
+        session_id = session["id"]
+        now = self.clock()
         path = self.staging.local_path(ref)
         document_type = session["document_type"]
 
@@ -264,6 +285,16 @@ class VerificationPipeline:
                     "detail": evaluation.agreement,
                 }
             )
+        if evaluation.mrz_agreement:
+            agreed = sum(1 for ok in evaluation.mrz_agreement.values() if ok)
+            self.store.add_signal(
+                {
+                    "session_id": session_id,
+                    "signal_type": "front_mrz_agreement",
+                    "score": agreed / len(evaluation.mrz_agreement),
+                    "detail": evaluation.mrz_agreement,
+                }
+            )
         self.store.add_signal(
             {
                 "session_id": session_id,
@@ -279,12 +310,11 @@ class VerificationPipeline:
         context = self._context.setdefault(session_id, {})
         context["document_ref"] = ref
         context["document_id"] = document["id"]
-        return "document_received"
 
     # ------------------------------------------------------------- stage 4
 
-    def begin_liveness(self, session_id: str) -> list[str]:
-        session = self._session(session_id)
+    def begin_liveness(self, session_id: str, user_id: str) -> list[str]:
+        session = self._session(session_id, user_id)
         if session["status"] != "document_received":
             raise SessionStateError(
                 f"session {session_id} is {session['status']}; "
@@ -321,6 +351,42 @@ class VerificationPipeline:
         )
 
         ref = self.staging.put(image_bytes)
+        try:
+            return self._run_selfie_stage(
+                session=session,
+                session_id=session_id,
+                user_id=user_id,
+                document=document,
+                payload=payload,
+                ref=ref,
+                frames=frames,
+                now=now,
+                today=today,
+                context=context,
+                challenges=challenges,
+            )
+        except Exception:
+            # No failure path leaves the selfie staged. The
+            # document stays with its still-live session, bounded
+            # by its decision or the staging sweep.
+            self.staging.wipe(ref)
+            raise
+
+    def _run_selfie_stage(
+        self,
+        *,
+        session: dict,
+        session_id: str,
+        user_id: str,
+        document: dict,
+        payload: dict,
+        ref: str,
+        frames: list,
+        now: datetime,
+        today: date,
+        context: dict,
+        challenges: list,
+    ) -> VerdictView:
         path = self.staging.local_path(ref)
         selfie_count = len(self.ports.face_detect.detect(path))
         embedding = None
@@ -388,8 +454,16 @@ class VerificationPipeline:
                 banned = True
 
         # Velocity: record this attempt, then check the window.
-        doc_key = document["doc_number_hash"]
-        self.store.record_attempt(session_id, AttemptRecord("document", doc_key, now))
+        # A document with no extracted number has no document key:
+        # its doc_number_hash is the empty-string placeholder
+        # (design call 7), and recording velocity against it would
+        # bucket every unreadable document on the platform into
+        # one shared limit (Rosa's m4).
+        doc_key = document["doc_number_hash"] if payload.get("doc_number") else None
+        if doc_key is not None:
+            self.store.record_attempt(
+                session_id, AttemptRecord("document", doc_key, now)
+            )
         if context.get("device_ref"):
             self.store.record_attempt(
                 session_id, AttemptRecord("device", context["device_ref"], now)
@@ -479,77 +553,100 @@ class VerificationPipeline:
         status = {"pass": "passed", "fail": "failed", "review": "review"}[
             verdict.status
         ]
-        if verdict.status == "pass":
-            consent = active_consent(self.store, user_id, session["document_type"])
-            self.store.save_biometric(
-                {
-                    "session_id": session_id,
-                    "user_id": user_id,
-                    "consent_id": consent["id"] if consent else None,
-                    "template_encrypted": self.encryptor.encrypt(
-                        json.dumps(list(embedding)).encode("utf-8")
-                    ),
-                    "template_key_ref": TEMPLATE_KEY_REF,
-                    "anchor_hash": anchor,
-                }
+        try:
+            if verdict.status == "pass":
+                # Consent is re-required at decision time, before
+                # anything persists (design call 5, enforced): a
+                # session that started before a withdrawal cannot
+                # resurrect the standing the member revoked.
+                consent = None
+                try:
+                    consent = require_consent(
+                        self.store, user_id, session["document_type"]
+                    )
+                except ConsentRequired:
+                    consent = None
+                if consent is None:
+                    verdict = Verdict("review", "low", ["consent_not_current"])
+                    status = "review"
+                else:
+                    # The attestation inputs are validated before
+                    # the first write: a pass carries a DOB by
+                    # construction (the combiner), and this path
+                    # never discovers otherwise mid-persist.
+                    dob_date = date.fromisoformat(dob)
+                    self.store.save_biometric(
+                        {
+                            "session_id": session_id,
+                            "user_id": user_id,
+                            "consent_id": consent["id"],
+                            "template_encrypted": self.encryptor.encrypt(
+                                json.dumps(list(embedding)).encode("utf-8")
+                            ),
+                            "template_key_ref": TEMPLATE_KEY_REF,
+                            "anchor_hash": anchor,
+                        }
+                    )
+                    self.store.upsert_anchor(anchor, user_id=user_id)
+                    self.store.save_age_attestation(
+                        {
+                            "identity_anchor_hash": anchor,
+                            "band": band,
+                            "band_as_of": today,
+                            "next_band_date": next_band_date_for(dob_date, today),
+                            "engine_version": ENGINE_VERSION,
+                            "computed_at": now,
+                        }
+                    )
+                    self.store.set_verification_state(
+                        user_id,
+                        identity_anchor_hash=anchor,
+                        status="verified",
+                        current_tier=session["tier_requested"],
+                        verified_at=now,
+                        last_interaction_at=now,
+                    )
+            self.store.update_session(
+                session_id,
+                status=status,
+                decision_by="engine",
+                confidence_band=verdict.confidence_band,
+                decided_at=now,
             )
-            self.store.upsert_anchor(anchor, user_id=user_id)
-            dob_date = date.fromisoformat(dob)
-            self.store.save_age_attestation(
-                {
-                    "identity_anchor_hash": anchor,
-                    "band": band,
-                    "band_as_of": today,
-                    "next_band_date": next_band_date_for(dob_date, today),
-                    "engine_version": ENGINE_VERSION,
-                    "computed_at": now,
-                }
+        finally:
+            # Destruction on decision, every outcome, and on any
+            # failure inside the persist tail too: staged images
+            # are wiped and the match payload is cleared; the
+            # retention log records both as executed actions
+            # (spec S5.7).
+            self.staging.wipe(
+                context.get("document_ref") or document["image_staging_ref"]
             )
-            self.store.set_verification_state(
-                user_id,
-                identity_anchor_hash=anchor,
-                status="verified",
-                current_tier=session["tier_requested"],
-                verified_at=now,
-                last_interaction_at=now,
+            self.staging.wipe(ref)
+            self.store.update_document(
+                document["id"],
+                match_payload_encrypted=None,
+                match_payload_cleared_at=now,
+                image_destroyed_at=now,
             )
-        self.store.update_session(
-            session_id,
-            status=status,
-            decision_by="engine",
-            confidence_band=verdict.confidence_band,
-            decided_at=now,
-        )
-
-        # Destruction on decision, every outcome: staged images are
-        # wiped and the match payload is cleared; the retention log
-        # records both as executed actions (spec S5.7).
-        self.staging.wipe(context.get("document_ref") or document["image_staging_ref"])
-        self.staging.wipe(ref)
-        self.store.update_document(
-            document["id"],
-            match_payload_encrypted=None,
-            match_payload_cleared_at=now,
-            image_destroyed_at=now,
-        )
-        for action in ("destroy_document_image", "clear_document_payload"):
-            self.store.add_retention_action(
-                {
-                    "user_id": user_id,
-                    "biometric_id": None,
-                    "document_id": document["id"],
-                    "action": action,
-                    "trigger": "purpose_satisfied",
-                    "determined_at": now,
-                    "due_at": now,
-                    "extended_due_at": None,
-                    "executed_at": now,
-                    "hold": False,
-                    "hold_reason": None,
-                    "notice_sent_at": None,
-                    "tier_dropped_at": None,
-                }
-            )
+            for action in ("destroy_document_image", "clear_document_payload"):
+                self.store.add_retention_action(
+                    {
+                        "user_id": user_id,
+                        "biometric_id": None,
+                        "document_id": document["id"],
+                        "action": action,
+                        "trigger": "purpose_satisfied",
+                        "determined_at": now,
+                        "due_at": now,
+                        "extended_due_at": None,
+                        "executed_at": now,
+                        "hold": False,
+                        "hold_reason": None,
+                        "notice_sent_at": None,
+                        "tier_dropped_at": None,
+                    }
+                )
         self._context.pop(session_id, None)
 
         return VerdictView(
@@ -563,8 +660,11 @@ class VerificationPipeline:
 
     # ------------------------------------------------------------ verdict API
 
-    def get_verdict(self, session_id: str) -> VerdictView:
-        session = self._session(session_id)
+    def get_verdict(self, session_id: str, user_id: str) -> VerdictView:
+        # Ownership, the same check the submit endpoints enforce:
+        # a verdict carries the member's age band and is readable
+        # by its owner only.
+        session = self._session(session_id, user_id)
         decided = session.get("decided_at")
         age_band = None
         if session["status"] == "passed":
@@ -592,3 +692,12 @@ class VerificationPipeline:
             "exists": row is not None,
             "banned": bool(row and row["is_banned"]),
         }
+
+    def sweep_staging(self) -> list[str]:
+        """Destroy staged images past the TTL ceiling (S5.7).
+
+        The pipeline destroys on decision; this bounds everything
+        else (a stage that died mid-session, an abandoned flow).
+        The service runs it on a schedule; returns the wiped refs.
+        """
+        return self.staging.sweep_expired(self.config.staging_ttl_hours)
