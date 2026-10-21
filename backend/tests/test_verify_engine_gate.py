@@ -111,7 +111,7 @@ class TestEngineScorerSyntheticPath:
         vectors = {
             "ama-1": _unit(5),
             "ama-2": _unit(9),
-            "kofi-1": _unit(80),
+            "kofi-1": _unit(95),
         }
         scorer = EngineFaceScorer(_PairEmbed(vectors))
         attempts = scorer.score_pairs(

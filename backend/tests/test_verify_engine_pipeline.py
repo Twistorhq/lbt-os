@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import random
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 
 import pytest
 
@@ -101,11 +101,11 @@ class FakeDetect:
 
 
 class FakeEmbed:
-    def embed(self, image_ref: str) -> tuple[float, ...]:
-        for data, vector in _VECTORS.items():
-            if _ref(data) == image_ref:
-                return vector
-        return (0.0, 0.0, 1.0)
+    def embed(self, image_path: str) -> tuple[float, ...]:
+        from pathlib import Path
+
+        data = Path(image_path).read_bytes()
+        return _VECTORS.get(data, (0.0, 0.0, 1.0))
 
 
 def _open_landmarks(nose_x: float = 0.5, eyes_open: bool = True):
@@ -158,7 +158,9 @@ def _ports(**overrides) -> PipelinePorts:
     return ports
 
 
-def _pipeline(store=None, staging=None, config=None, ports=None) -> VerificationPipeline:
+def _pipeline(
+    store=None, staging=None, config=None, ports=None
+) -> VerificationPipeline:
     return VerificationPipeline(
         store=store or InMemoryVerifyStore(),
         staging=staging or InMemoryStaging(),
@@ -186,7 +188,9 @@ def _run_pass(pipe: VerificationPipeline, user_id: str = "u-ama"):
     session = pipe.start_session(user_id, "passport")
     pipe.submit_document(session.id, user_id, AMA_DOC)
     challenges = pipe.begin_liveness(session.id)
-    verdict = pipe.submit_selfie(session.id, user_id, AMA_SELFIE, _frames_for(challenges))
+    verdict = pipe.submit_selfie(
+        session.id, user_id, AMA_SELFIE, _frames_for(challenges)
+    )
     return session, verdict
 
 
@@ -376,10 +380,12 @@ class TestReviewAndFailPaths:
 
     def test_mid_similarity_routes_to_review(self):
         class MidEmbed(FakeEmbed):
-            def embed(self, image_ref: str):
-                if _ref(AMA_SELFIE) == image_ref:
+            def embed(self, image_path: str):
+                from pathlib import Path
+
+                if Path(image_path).read_bytes() == AMA_SELFIE:
                     return (0.5, 0.86, 0.0)  # cosine ~0.545: review band
-                return super().embed(image_ref)
+                return super().embed(image_path)
 
         pipe = _pipeline(ports=_ports(embed=MidEmbed()))
         _, verdict = _run_pass(pipe)
@@ -387,10 +393,12 @@ class TestReviewAndFailPaths:
 
     def test_no_match_fails(self):
         class FarEmbed(FakeEmbed):
-            def embed(self, image_ref: str):
-                if _ref(AMA_SELFIE) == image_ref:
+            def embed(self, image_path: str):
+                from pathlib import Path
+
+                if Path(image_path).read_bytes() == AMA_SELFIE:
                     return (0.0, 0.0, 1.0)
-                return super().embed(image_ref)
+                return super().embed(image_path)
 
         pipe = _pipeline(ports=_ports(embed=FarEmbed()))
         _, verdict = _run_pass(pipe)
@@ -398,10 +406,12 @@ class TestReviewAndFailPaths:
 
     def test_images_destroyed_on_review_and_fail_too(self):
         class FarEmbed(FakeEmbed):
-            def embed(self, image_ref: str):
-                if _ref(AMA_SELFIE) == image_ref:
+            def embed(self, image_path: str):
+                from pathlib import Path
+
+                if Path(image_path).read_bytes() == AMA_SELFIE:
                     return (0.0, 0.0, 1.0)
-                return super().embed(image_ref)
+                return super().embed(image_path)
 
         staging = InMemoryStaging()
         pipe = _pipeline(staging=staging, ports=_ports(embed=FarEmbed()))

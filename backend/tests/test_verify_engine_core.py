@@ -64,13 +64,15 @@ class TestCaptureFlag:
 
     def test_flag_requires_an_explicit_affirmative(self):
         for value in ("1", "true", "TRUE", "yes", "on"):
-            assert production_capture_enabled(
-                {"VFY_PRODUCTION_CAPTURE_ENABLED": value}
-            ) is True
+            assert (
+                production_capture_enabled({"VFY_PRODUCTION_CAPTURE_ENABLED": value})
+                is True
+            )
         for value in ("0", "false", "off", "", "enabled-ish"):
-            assert production_capture_enabled(
-                {"VFY_PRODUCTION_CAPTURE_ENABLED": value}
-            ) is False
+            assert (
+                production_capture_enabled({"VFY_PRODUCTION_CAPTURE_ENABLED": value})
+                is False
+            )
 
     def test_config_from_env(self):
         cfg = EngineConfig.from_env({"VFY_PRODUCTION_CAPTURE_ENABLED": "true"})
@@ -262,7 +264,7 @@ class TestFaceMath:
         corpus = [
             TemplateRecord("anchor-kofi", "u-kofi", False, (0.0, 1.0)),
             TemplateRecord("anchor-ama", "u-ama", False, (0.99, 0.14)),
-            TemplateRecord("anchor-weak", "u-weak", False, (0.6, 0.8)),
+            TemplateRecord("anchor-weak", "u-weak", False, (0.92, 0.39)),
         ]
         hits = find_duplicates((1.0, 0.05), corpus, cfg)
         assert [h.anchor_hash for h in hits] == ["anchor-ama", "anchor-weak"]

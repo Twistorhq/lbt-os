@@ -57,9 +57,7 @@ def _build_app(*, authenticated: bool, capture_enabled: bool) -> FastAPI:
     pipeline = _pipeline(capture_enabled)
     app.dependency_overrides[verify_router.get_pipeline] = lambda: pipeline
     if authenticated:
-        app.dependency_overrides[verify_router._verified_claims] = lambda: {
-            "sub": USER
-        }
+        app.dependency_overrides[verify_router._verified_claims] = lambda: {"sub": USER}
     app.state.test_pipeline = pipeline
     return app
 
@@ -95,7 +93,9 @@ class TestRoutes:
     def test_unauthenticated_is_401(self):
         app = _build_app(authenticated=False, capture_enabled=True)
         client = TestClient(app, raise_server_exceptions=False)
-        resp = client.post("/api/v1/verify/sessions", json={"document_type": "passport"})
+        resp = client.post(
+            "/api/v1/verify/sessions", json={"document_type": "passport"}
+        )
         assert resp.status_code == 401
 
 

@@ -31,9 +31,9 @@ def v2_sql() -> str:
 
 class TestConsentTypeUpdateGuard:
     def test_trigger_watches_consent_type_updates(self, v2_sql):
-        assert re.search(
-            r"CREATE CONSTRAINT TRIGGER\s+\w+", v2_sql, re.IGNORECASE
-        ), "the guard must be a constraint trigger (deferred, like v1)"
+        assert re.search(r"CREATE CONSTRAINT TRIGGER\s+\w+", v2_sql, re.IGNORECASE), (
+            "the guard must be a constraint trigger (deferred, like v1)"
+        )
         assert re.search(
             r"UPDATE OF consent_type ON vfy_consents", v2_sql, re.IGNORECASE
         ), "the trigger must fire on UPDATE OF consent_type on vfy_consents"
