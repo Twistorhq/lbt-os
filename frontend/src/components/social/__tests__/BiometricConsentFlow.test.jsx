@@ -4,11 +4,14 @@
 // TW-654 Section 1.4, item 1). The load-bearing assertions are legal,
 // not cosmetic: the grant stays disabled until the attestation is
 // checked, the payload carries the exact vfy_consents fields, the
-// decline captures nothing and never nags, and the rejected state
-// surfaces the human review path.
+// decline captures nothing and never nags, the rejected state
+// surfaces the human review path, and the band display fails closed:
+// a missing or unrecognized band renders no band claim, never the
+// 21+ title and chip (TW-652 review M1).
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import BiometricConsentFlow from '../consent/BiometricConsentFlow'
+import SocBandChip from '../SocBandChip'
 
 describe('BiometricConsentFlow: pre-capture consent (TW-652)', () => {
   it('opens on the explanation with the door-check framing', () => {
@@ -134,6 +137,45 @@ describe('BiometricConsentFlow: capture handoff and outcomes (TW-652)', () => {
     expect(chip.className).toContain('soc-chip--18')
   })
 
+  it('approved renders the TEEN chip and the band-free title for the teen band', () => {
+    render(<BiometricConsentFlow phase="approved" band="teen" />)
+    expect(screen.getByRole('heading', { name: 'You are verified' })).toBeInTheDocument()
+    const chip = screen.getByRole('img', { name: 'Teen account' })
+    expect(chip).toHaveTextContent('TEEN')
+    expect(chip.className).toContain('soc-chip--teen')
+  })
+
+  it('approved with no band renders no band claim (fail closed, M1)', () => {
+    const { container } = render(<BiometricConsentFlow phase="approved" />)
+    expect(screen.getByRole('heading', { name: 'You are verified' })).toBeInTheDocument()
+    expect(
+      screen.queryByRole('heading', { name: 'You are verified 21+' }),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByRole('img', { name: /Age band/ })).not.toBeInTheDocument()
+    expect(container.textContent).not.toContain('21+')
+  })
+
+  it('approved with an unrecognized band renders no band claim (fail closed, M1)', () => {
+    const { container } = render(<BiometricConsentFlow phase="approved" band="25-plus" />)
+    expect(screen.getByRole('heading', { name: 'You are verified' })).toBeInTheDocument()
+    expect(
+      screen.queryByRole('heading', { name: 'You are verified 21+' }),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByRole('img', { name: /Age band/ })).not.toBeInTheDocument()
+    expect(container.textContent).not.toContain('21+')
+  })
+
+  it('approved with an unrecognized band fails closed in Spanish too (M1)', () => {
+    render(<BiometricConsentFlow locale="es" phase="approved" band="desconocida" />)
+    expect(
+      screen.getByRole('heading', { name: 'Verificación completa' }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('heading', { name: 'Verificación completa: 21+' }),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByRole('img', { name: /Banda de edad/ })).not.toBeInTheDocument()
+  })
+
   it('rejected surfaces retake and human review, and never blames the member', () => {
     const onRequestReview = vi.fn()
     const onRetake = vi.fn()
@@ -160,5 +202,27 @@ describe('BiometricConsentFlow: capture handoff and outcomes (TW-652)', () => {
     expect(screen.getByText(/24 months since your last activity/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Verify again' }))
     expect(onReverify).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('SocBandChip: the chip states only a verified fact (TW-652 M1)', () => {
+  it('renders the stated band for each known band', () => {
+    const { rerender } = render(<SocBandChip band="21+" />)
+    expect(screen.getByRole('img', { name: 'Age band: 21 plus' })).toHaveTextContent('21+')
+    rerender(<SocBandChip band="18-20" />)
+    expect(screen.getByRole('img', { name: 'Age band: 18 to 20' })).toHaveTextContent('18+')
+    rerender(<SocBandChip band="teen" />)
+    expect(screen.getByRole('img', { name: 'Teen account' })).toHaveTextContent('TEEN')
+  })
+
+  it('renders nothing for a missing band', () => {
+    const { container } = render(<SocBandChip />)
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it('renders nothing for an unrecognized band, never the 21+ chip', () => {
+    const { container } = render(<SocBandChip band="25-plus" />)
+    expect(container).toBeEmptyDOMElement()
+    expect(screen.queryByRole('img', { name: 'Age band: 21 plus' })).not.toBeInTheDocument()
   })
 })

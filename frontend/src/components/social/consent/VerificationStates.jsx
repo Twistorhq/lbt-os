@@ -1,6 +1,6 @@
 import SocScreen from '../SocScreen'
 import SocActionBar from '../SocActionBar'
-import SocBandChip from '../SocBandChip'
+import SocBandChip, { isKnownBand } from '../SocBandChip'
 import { fill } from '../strings'
 import '../social.css'
 
@@ -104,9 +104,13 @@ const APPROVED_TITLES = {
   teen: 'titleTeen',
 }
 
-export function ApprovedState({ s, locale, band = '21+', onStart }) {
+export function ApprovedState({ s, locale, band, onStart }) {
   const a = s.approved
-  const title = a[APPROVED_TITLES[band] || 'title21']
+  // Fail closed (TW-652 review M1): a band claim renders only for a
+  // known band. A missing or unrecognized band gets the band-free
+  // title and no chip, never the 21+ claim.
+  const known = isKnownBand(band)
+  const title = known ? a[APPROVED_TITLES[band]] : a.titleTeen
   return (
     <>
       <SocScreen title={title}>
@@ -114,9 +118,11 @@ export function ApprovedState({ s, locale, band = '21+', onStart }) {
           <CheckIcon />
           <p className="soc-banner__text">{s.common.doorBadge}</p>
         </div>
-        <div className="soc-approved-head">
-          <SocBandChip band={band} size="glance" locale={locale} />
-        </div>
+        {known ? (
+          <div className="soc-approved-head">
+            <SocBandChip band={band} size="glance" locale={locale} />
+          </div>
+        ) : null}
         <p className="soc-body">{a.body}</p>
       </SocScreen>
       <SocActionBar primaryLabel={a.start} onPrimary={onStart} />

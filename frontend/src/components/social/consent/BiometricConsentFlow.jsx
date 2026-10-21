@@ -41,6 +41,11 @@ import {
  * the session; every exit is a callback, and this component never
  * invents a backend call.
  *
+ * The band prop carries the verified band from the engine verdict and
+ * deliberately has no default: an absent or unrecognized band renders
+ * no band claim on the approved screen (fail closed, TW-652 review
+ * M1).
+ *
  * Prepared by Twistor Holdings LLC
  */
 export const CONSENT_PHASES = [
@@ -57,7 +62,7 @@ export const CONSENT_PHASES = [
 
 export default function BiometricConsentFlow({
   locale = 'en',
-  band = '21+',
+  band = null,
   destroyedOn = null,
   policyVersion = BIOMETRIC_POLICY_VERSION,
   retentionVersion = RETENTION_SCHEDULE_VERSION,

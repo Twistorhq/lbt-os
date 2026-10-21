@@ -12,6 +12,11 @@ import './social.css'
  *
  * The chip is text, announced as text; color is never the only signal.
  *
+ * Fail closed (TW-652 review M1): a missing or unrecognized band is
+ * not a verified fact, so the chip renders nothing for it. There is
+ * no default band anywhere in the display chain; an unknown band is
+ * treated as no claim, never as the most privileged band.
+ *
  * Prepared by Twistor Holdings LLC
  */
 const VARIANTS = {
@@ -20,8 +25,14 @@ const VARIANTS = {
   teen: { className: 'soc-chip--teen', text: 'TEEN', ariaKey: 'ariaTeen' },
 }
 
+/** The only bands the display chain may state as fact. */
+export function isKnownBand(band) {
+  return Object.prototype.hasOwnProperty.call(VARIANTS, band)
+}
+
 export default function SocBandChip({ band, size = 'standard', locale = 'en' }) {
-  const variant = VARIANTS[band] || VARIANTS['21+']
+  if (!isKnownBand(band)) return null
+  const variant = VARIANTS[band]
   const s = getStrings(locale)
   const sizeClass = size === 'glance' ? ' soc-chip--glance' : ''
   return (
