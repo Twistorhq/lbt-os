@@ -3,9 +3,9 @@
 **Prepared by Twistor Holdings LLC**
 
 Ticket: TW-660 (reporter: Justynn) · Branch: `zeke/tw-660-core-loop` off main @ 8bed424 · Author: Zeke Okafor
-Reviewer: Rosa Delgado (pending) · Date: 2026-10-20
+Reviewer: Rosa Delgado (review complete: REQUEST CHANGES; fix round below) · Date: 2026-10-20
 
-Commits: RED `b59f416` · GREEN `2ced655` · punctuation cleanup `710a4db`
+Commits: RED `b59f416` · GREEN `2ced655` · punctuation cleanup `710a4db` · fix round RED `589c031` · fix round GREEN `13de2c5` · format `c5cb127`
 
 ## Scope delivered (spec Section 13 step 4, first slice)
 
@@ -78,6 +78,93 @@ list/get).
   invisibility is enforced at directory and detail, not at join.
 - **Cleanup (`710a4db`)**: docstring punctuation normalized; the social
   package now carries no em or en dashes.
+
+## Fix round (Rosa review, 2026-10-20)
+
+Rosa's verdict on the first submission: REQUEST CHANGES, 2 majors,
+2 minors, 2 nits (docs/reviews/TW-660-review.md). Her execution
+re-verified every headline claim from the first submission (96/96,
+180/180, zero new failures, RED honesty, 41 adversarial probes with
+40 passes). Disposition of each finding:
+
+- **M1 (major), FIXED.** The ghost shell's `_next_gathering` filtered
+  by group, status, and band but never by `audience_scope`, so a
+  tier-less ghost was served a close_friends event's title, start
+  time, and metro. `_next_gathering` is now a positive allowlist:
+  only `group`-scope gatherings may appear on the shell. Connections
+  and close_friends scopes are audience-restricted (Section 8) and
+  neither admits a non-member; any future stricter scope value
+  fails closed by construction. Reading note for the re-review: the
+  spec names "the group's next public gathering" as a shell element
+  (Section 5.11), and `group` scope inside a public group is the
+  only member-event class that is public index content; the fully
+  conservative alternative (no gathering on any shell) would delete
+  a spec-listed element, so the allowlist is the fix taken.
+  Regression tests: `test_ghost_shell_next_gathering_skips_restricted_scopes`
+  (restricted events starting earlier are skipped for the group-scope
+  one) and `test_ghost_shell_next_gathering_none_when_only_restricted`
+  (Rosa's probe: only a close_friends event upcoming, shell reports
+  no gathering).
+- **M2 (major), NOT IMPLEMENTED THIS ROUND, by direction.** Hidden
+  groups joinable by direct id, landing ACTIVE with no approval
+  (design call 4 in the first submission). Justynn is deciding
+  between Rosa's one-condition fix (hidden joins land `invited` and
+  wait for an owner or admin decision) and explicitly ratifying
+  id-as-invitation for hidden groups. No code changed either way in
+  this round; if he picks the fix, it lands as an extra commit on
+  this branch before Rosa's re-review.
+- **m1 (minor), FIXED.** `ruff format` applied to the three files
+  Rosa named (service.py, test_social_core_loop.py,
+  test_social_router.py). `ruff format --check` and `ruff check`
+  both clean on all three after the pass; whitespace only, suites
+  re-run green after (counts below).
+- **m2 (minor), FIXED.** Band resolution no longer reads
+  `attestations[0]` in storage order. `get_member_context` resolves
+  through `_live_band`: the newest `band_as_of` governs
+  (`computed_at` breaks that tie), and two live rows tied on both
+  timestamps with different bands fail closed to no band. Tests:
+  `test_two_live_attestations_resolve_to_newest_band`,
+  `test_two_live_attestations_resolve_regardless_of_order`,
+  `test_ambiguous_live_attestations_fail_closed`. RED honesty for
+  the pair: the newest-first seeding passed pre-fix by storage
+  order luck, which is the defect the pair documents; the other
+  three new tests failed pre-fix.
+- **n1 (nit), FIXED.** Comment at the withdrawal write site in
+  `withdraw_rsvp`: the schema has no `withdrawn` status, a member
+  withdrawal writes `declined` with `host_decided_by` left null,
+  and that null is what distinguishes it from a host decline in
+  the raw rows.
+- **n2 (nit), CONFIRMED, no code change.** The reveal surface does
+  not ship publicly in this slice. Verified by inspection this
+  round: the reveal route (`POST /events/{event_id}/reveal`) sits
+  behind verified identity claims in the router, and the service
+  re-checks voice, band, membership, RSVP state, and the reveal
+  window at request time. The profiles 501 stubs mean only that
+  `watermark_display_name` is null on a member-only payload. The
+  Section 8 watermark deterrent still does not exist in practice
+  until the profiles slice lands, so the reveal surface must not
+  be exposed publicly before that slice closes; carried as a
+  launch-gate note, unchanged from Rosa's wording.
+
+Fix round test evidence (same sandbox, same methodology as the
+first submission):
+
+- RED (`589c031`): the five new tests run against the pre-fix
+  service: 4 failed, 1 passed (see m2 above).
+- GREEN (`13de2c5`): core loop + router **101 passed** (96 + 5 new);
+  all social test files **275 passed**.
+- After format (`c5cb127`): core loop + router 101 passed, all
+  social files 275 passed, social + events files **372 passed**.
+- Full suite: branch **1183 passed / 20 failed / 7 errors** vs a
+  fresh clean-main baseline measured the same way in the same
+  sandbox (**1090 / 20 / 7**). The failed + error node sets are
+  byte-identical (27 nodes each, diff empty): zero new failures,
+  +5 net new passing tests, exactly the fix round's new tests.
+
+Traceability: Rosa's follow-up schema ticket for the RSVP waves
+deferral (design call 1) is filed as TW-661 (Dre): `rsvp_opens_at`,
+held-seat accounting and release, and the couple-RSVP RPC
+atomicity from design call 12.
 
 ## Test evidence
 
