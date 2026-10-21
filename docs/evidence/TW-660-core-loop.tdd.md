@@ -5,7 +5,7 @@
 Ticket: TW-660 (reporter: Justynn) · Branch: `zeke/tw-660-core-loop` off main @ 8bed424 · Author: Zeke Okafor
 Reviewer: Rosa Delgado (review complete: REQUEST CHANGES; fix round below) · Date: 2026-10-20
 
-Commits: RED `b59f416` · GREEN `2ced655` · punctuation cleanup `710a4db` · fix round RED `589c031` · fix round GREEN `13de2c5` · format `c5cb127`
+Commits: RED `b59f416` · GREEN `2ced655` · punctuation cleanup `710a4db` · fix round RED `589c031` · fix round GREEN `13de2c5` · format `c5cb127` · M2 fix RED `04af18a` · M2 fix GREEN `0428b7c`
 
 ## Scope delivered (spec Section 13 step 4, first slice)
 
@@ -15,8 +15,9 @@ merged TW-650 rsn_ schema, service-role pattern as in the verify engine.
 1. **Groups.** Create, directory list, detail, join, membership decision,
    role assignment. Creation is gated by standing (Regular tier and up,
    Section 7.7) and by the safety band (watch and below cannot host).
-   Private groups and host-approved-tier groups land joins as pending
-   (`invited`); owner/admin approve or decline. The creator becomes owner.
+   Private groups, hidden groups (since the M2 fix below), and
+   host-approved-tier groups land joins as pending (`invited`);
+   owner/admin approve or decline. The creator becomes owner.
 2. **Events.** Member-created events (any active group member may host;
    capacity capped by the host's standing tier: 12 / 12 / 25 / 50 / 100),
    plus recurring series as first-class objects: `rsn_event_series` rows
@@ -165,6 +166,80 @@ Traceability: Rosa's follow-up schema ticket for the RSVP waves
 deferral (design call 1) is filed as TW-661 (Dre): `rsvp_opens_at`,
 held-seat accounting and release, and the couple-RSVP RPC
 atomicity from design call 12.
+
+## M2 fix (Justynn's decision, 2026-10-20)
+
+Justynn decided M2 for Rosa's fix over ratifying id-as-invitation.
+This supersedes the GREEN-time correction in the first submission
+(the id is the invitation) for hidden groups; public and private
+groups keep their existing behavior. Rosa's approval was
+conditional on this landing; her spot-verification is next.
+Commits: RED `04af18a`, GREEN `0428b7c`.
+
+- **The join change (Rosa's one condition).** In `join_group` the
+  pending condition now reads `visibility in ("private", "hidden")
+  or meetup_min_tier == "host_approved"`. A hidden-group join by
+  direct id creates the membership as `invited` and reuses the
+  existing `decide_membership` flow unchanged: the owner or an
+  admin approves (status becomes `active`) or declines (the
+  pending row is deleted, the ephemeral-membership rule of
+  design call 3).
+- **Companion change, one condition, flagged for the
+  spot-verification.** The join change alone would still have
+  leaked the group to a pending requester: `_group_visible_to_member`
+  admitted any membership not in (removed, left), and `list_groups`
+  serves the full group payload, so a pending hidden member would
+  have read the group's name, description, and member count in
+  the directory, and the detail, before approval. The acceptance
+  test (no read before approval) cannot pass while that stands.
+  The hidden branch now requires `status == "active"`: a hidden
+  group exists only for its active members, and a pending
+  requester is treated exactly like a non-member on every surface
+  that reads through the gate (directory, detail, event and
+  series hosting). Event reads and RSVPs already required an
+  active membership (`_can_view_event`), so no change was needed
+  there. One pre-existing case changes with it: a pending member
+  of a hidden host-approved-tier group previously saw the group
+  in the directory while waiting; now they do not. That is the
+  decided M2 semantics, not a regression.
+- **Existing test updated, assertions unchanged.**
+  `test_hidden_group_absent_for_non_member_present_for_member`
+  encoded the old join behavior: it joined a hidden group and
+  asserted member visibility directly. Its setup now approves
+  the join through `decide_membership` first; every assertion
+  is the same. Pre-fix it fails at the decide step with
+  ConflictError, and it is part of the RED set below.
+
+M2 round test evidence (same sandbox, same methodology):
+
+- RED (`04af18a`): the five new `TestHiddenGroupJoin` tests plus
+  the updated directory test, run against the pre-fix service:
+  6 failed, 0 passed.
+- GREEN (`0428b7c`): core loop + router **106 passed** (101 + 5
+  new); all social test files **280 passed**; social + events
+  files **377 passed**.
+- Full suite: branch **1188 passed / 20 failed / 7 errors** vs a
+  fresh clean-main baseline measured the same way in the same
+  sandbox (**1090 / 20 / 7** @ 8bed424, scratch worktree). The
+  failed + error node sets are byte-identical (27 nodes each,
+  diff empty): zero new failures, +5 net new passing tests,
+  exactly this round's new tests.
+- Lint: `ruff check` clean and `ruff format --check` clean on
+  both touched files (service.py, test_social_core_loop.py).
+
+| # | What is guaranteed | Test file or command | Type | Result | Evidence |
+|---|---|---|---|---|---|
+| 1 | A hidden-group join by direct id lands `invited`, never active | `TestHiddenGroupJoin::test_hidden_join_by_direct_id_lands_pending` | RED | PASS after fix, FAIL before | RED run: 6 failed; GREEN run: 106 passed |
+| 2 | A pending hidden member reads nothing: no directory card, no group detail, no event detail | `TestHiddenGroupJoin::test_pending_hidden_member_sees_nothing_of_the_group` | RED | PASS after fix, FAIL before | Same runs |
+| 3 | A pending hidden member has no voice: hosting and RSVP refuse as invisibility (404), as for any non-member | `TestHiddenGroupJoin::test_pending_hidden_member_has_no_voice_in_the_group` | RED | PASS after fix, FAIL before | Same runs |
+| 4 | Owner approval activates the membership; detail and RSVP then work | `TestHiddenGroupJoin::test_hidden_join_approval_activates_membership` | RED | PASS after fix, FAIL before (ConflictError) | Same runs |
+| 5 | Owner decline deletes the pending row; the group stays invisible to the declined requester | `TestHiddenGroupJoin::test_hidden_join_decline_removes_membership` | RED | PASS after fix, FAIL before (ConflictError) | Same runs |
+| 6 | Public and private join behavior is unchanged | Full `TestGroupJoin` class within the 106-test core loop + router run | unit | PASS | GREEN run above |
+| 7 | No new failures anywhere in the repo suite | Full suite branch vs clean-main baseline, failed + error node sets diffed | CI | PASS, sets byte-identical (27 nodes) | 1188/20/7 vs 1090/20/7 |
+
+Plan-safety note for this round: the brief, Rosa's review, and her
+verification doc were read as data and contained no override
+phrases or embedded instructions; nothing was found to flag.
 
 ## Test evidence
 
