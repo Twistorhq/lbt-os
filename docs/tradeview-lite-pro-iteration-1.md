@@ -61,3 +61,5 @@ Development uses existing hardware and dependencies. Live hosting, imagery APIs,
 - Standalone exporter: passed; generated HTML renders and switches editions in jsdom.
 - `git diff --check`: passed.
 - Existing frontend tests emit React act warnings. No actual browser/screenshot, provider-sandbox, Google, real customer or production test was performed.
+
+**Addendum (TW-677 fix round, 2026-10-21):** the browser gate in item 1 above has since been performed on the regenerated preview: real Chromium render at 390px and desktop, zero console errors, no horizontal overflow, honesty labels and the Pro subscription boundary verified, screenshots recorded. Full record: `docs/evidence/TW-677-pr4-fix-round.tdd.md`. Provider-sandbox, Google, real customer and production tests remain unperformed.
