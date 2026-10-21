@@ -1,0 +1,387 @@
+<!-- Prepared by Twistor Holdings LLC -->
+
+# TW-651 Evidence: Twistor Social events data layer ingest
+
+Author: Dre Coleman, Senior Backend Engineer and DBA
+Branch: `dre/tw-651-events-ingest` off lbt-os main at `9707fc6`
+Commits: RED `75af7e9` (tests only) then GREEN `4819720`; fix round
+RED `8fd6ae7` (tests only) then GREEN (this round)
+
+Source contracts: TW-646 architecture spec Section 10; merged
+OpenSpec package (tasks.md items 28 and 29); Diego's Denver events
+source map (2026-10-20). API client and organizer OAuth import
+(tasks.md item 29's remaining pipes) are not in this ticket's scope:
+Eventbrite needs its approved developer app and organizer import is
+the claim lane (item 31). Their source kinds exist in the schema and
+their connectors slot into the same registry when approvals land.
+
+## What was built
+
+1. **evt_ schema** (`supabase/migration_events_v1.sql`, runs after
+   migration_social_v1.sql): evt_sources, evt_raw_items (bronze),
+   evt_venues, evt_listings, evt_listing_sources (silver),
+   evt_claims, evt_ingest_runs, evt_dead_letters, evt_publish_log,
+   evt_gold_listings (gold). RLS enabled on all 10; deny-all
+   policies on 9; gold carries the spec 10.3 exception, one
+   SELECT-only policy for the dedicated role evt_public_read.
+2. **Generic ICS importer** (`events_index/ics.py`): unfolding,
+   TZID and UTC and floating and all-day forms, DURATION, recurrence
+   expansion on python-dateutil rrule inside a rolling 90-day window
+   with EXDATE support and DTSTART always counted, STATUS:CANCELLED
+   carried, GEO and LOCATION facts, per-VEVENT splitting so the
+   pipeline isolates poison items.
+3. **Localist connector** (`localist.py`): public JSON API shape,
+   per-instance extraction, cancelled status carried, public filter
+   dropping academic-deadline noise per the source map.
+4. **Tribe Events connector** (`tribe.py`): published events only,
+   UTC date fields preferred with site-timezone fallback, nested
+   venue and organizer facts, HTML entities unescaped in titles.
+5. **Fingerprint dedupe** (`normalize.py`): SHA-256 over normalized
+   title, venue fingerprint (coordinates rounded to 4 decimal
+   places, or the address fingerprint while coordinates are
+   pending), and the start bucketed to 5 minutes. A collision merges
+   provenance (one evt_listing_sources row per carrying source);
+   display facts come from the most authoritative pipe present
+   (organizer import over API over ICS).
+6. **Freshness and cancellation** (`pipeline.py`): unchanged
+   payload hash skips reprocessing but still records the sighting;
+   explicit cancellations cancel in place and tombstone the
+   fingerprint for 90 days (the listing row itself is the
+   tombstone, fingerprint is UNIQUE); a full-sync item missing
+   across two consecutive syncs cancels unless another source still
+   carries the event; the publish step ages active listings to
+   stale past the gate ceiling.
+7. **Fail-closed provenance gate** (`gate.py`): the four spec
+   conditions and nothing else; ratings are not a gate input
+   (unrated fails closed for members under Section 5.9, not here).
+   Every publish decision writes an evt_publish_log line with its
+   reason. Never-store is enforced in three places: no such column
+   exists in the DDL, the extraction shapes have no such field, and
+   `redact.py` strips description, photo, image, excerpt, price,
+   and contact keys from JSON items, and the ICS importer strips
+   DESCRIPTION, image properties, and the contact properties
+   (ORGANIZER, CONTACT, ATTENDEE) from ICS items, before hashing
+   or bronze landing. The fix round section below carries the full
+   audit behind the corrected ICS half of that sentence.
+8. **Self-healing** on the platform's TW-208 primitives
+   (`app.self_healing`): fetch retries with backoff, per-item fault
+   isolation at both parse and merge, dead letters persisted to
+   evt_dead_letters with the in-memory DLQ summary on the run row,
+   and a per-source circuit breaker (3 consecutive failures opens
+   the circuit for 30 minutes, persisted on evt_sources).
+   Geocoding (`geocode.py`) is cache-first behind a provider
+   interface with a rate-limited Nominatim implementation; failures
+   never block a listing.
+
+## Tests
+
+94 new tests, all passing. Per file: migration contract 16,
+normalize 12, ICS 16, connectors 10, gate 10, geocode 7,
+pipeline 19, store wiring 4.
+
+Full backend suite on this branch: 986 passed, 21 failed, 12
+collection errors. Clean main at 9707fc6 re-measured this round in
+a control worktree: 892 passed, 21 failed, 12 collection errors.
+The failed and error node sets are identical between the two runs
+(verified by diff over the full 33-line sets), so the delta is
+exactly the 94 new tests and there are zero regressions. The
+standing failure set is bi_whitelabel 8, missed_call 11,
+pilot_blockers 1, usage_metering 1, plus the known xmlsec/lxml
+collection defect. Ruff check and format are clean on every new
+and touched file.
+
+RED honesty: the RED commit is tests only. Three test adjustments
+landed with GREEN and are disclosed here: the write-policy test now
+encodes the correct invariant (a FOR ALL USING (false) policy is a
+deny, matching the TW-650 pattern; the original draft banned the
+pattern itself); the tombstone test was rebuilt on a daily
+recurrence because the first draft's event fell outside the
+90-day window before its tombstone could expire; the ICS location
+test caught a real parser bug (escaped commas are literal text in
+ICS, so unescaping precedes the formatting split).
+
+## Live execution
+
+Both migrations in the dependency position were not re-run; the new
+file was executed verbatim, fresh and a second time, against a
+throwaway PostgreSQL 16.2 cluster (pgserver wheel in a scratch
+venv, stub idn_users and rsn_groups as the only prerequisites).
+Both runs clean, proving idempotency by execution. Live catalog:
+10 evt_ tables, 10 RLS-enabled, 10 policies (9 deny-all with qual
+false, 1 gold SELECT with qual true for evt_public_read), role
+present. Behavioral probes, 10 of 10 as designed: duplicate
+fingerprint rejected; half-coordinate venue rejected by CHECK;
+bogus terms posture rejected; bogus age band rejected; the read
+role sees the gold row; the read role sees 0 silver rows even with
+a table grant (deny-all); the read role cannot insert into gold; a
+granted non-owner role's silver insert is rejected by RLS; bronze
+accepts a NULL payload and rejects a NULL payload hash. Harness
+disclosure: the pgserver tree ships no pgcrypto, and the
+migration's only pgcrypto-adjacent call is gen_random_uuid()
+(server core since PostgreSQL 13), so a no-op pgcrypto extension
+shim was registered in the scratch tree only. No repository file
+was touched for the harness; Supabase ships real pgcrypto.
+Harness scratch was deleted after the run.
+
+Live smoke (optional, not in the suite): the LibCal ICS endpoint
+pattern answers but reports an invalid calendar id for the generic
+parameter, so the real per-calendar feed id remains an onboarding
+step, exactly as the source map frames LibCal onboarding. The CU
+Denver Localist API path returned 404 from this sandbox. Both
+connectors are therefore fixture-verified only; the fixtures encode
+the documented payload shapes.
+
+## Design calls for Rosa
+
+1. **Gold RLS shape.** Spec 10.3 names gold as the one public evt_
+   surface served through a read-only role, so gold gets a
+   SELECT-only policy for evt_public_read instead of the deny-all
+   used everywhere else. The role is created NOLOGIN by the
+   migration; ops grants login. No write policy exists anywhere.
+2. **Ops tables beyond the spec's five.** evt_ingest_runs,
+   evt_dead_letters, and evt_publish_log are additive: the spec's
+   gate already requires a publish-log line per withheld listing,
+   and the self-healing rule requires a persisted DLQ the standup
+   can read. evt_claims ships now per tasks.md item 28; its flow is
+   item 31.
+3. **Fingerprint storage.** No separate fingerprint table: the
+   fingerprint is UNIQUE on evt_listings and the cancelled row,
+   held for its 90-day tombstone_until, is the tombstone record.
+4. **Bronze redaction before landing.** Spec 10.3 calls bronze the
+   raw payload exactly as fetched, retained where posture allows.
+   The never-store list is the brighter line, so connectors strip
+   expression fields before hashing and landing; bronze is the
+   fetched item minus those fields. Payload hashes are computed
+   over the redacted form, so change detection is unaffected.
+5. **ICS organizer refs are never extracted.** An ICS ORGANIZER is
+   an email address in practice; source_organizer_ref stays NULL
+   for ICS and carries names and ids from API sources only.
+6. **Source operational columns.** evt_sources carries feed_url,
+   connector, config, and circuit state beyond the spec's listed
+   fields; connectors are configuration, not code (source map:
+   Tribe sites onboard one config entry at a time). Full-sync
+   behavior is a per-source config flag because Localist queries a
+   window while an ICS feed is the whole calendar.
+7. **No sources seeded.** Launch source rows are operator
+   configuration created at onboarding; seeding invented feed URLs
+   into a migration would be worse than an empty table. DPL's
+   per-calendar feed id (see smoke note) is the first onboarding
+   input.
+8. **Hand-rolled ICS surface, dateutil recurrence.** The repo has
+   no icalendar dependency; parsing is a bounded module and
+   recurrence rides python-dateutil, already a platform dependency.
+   RECURRENCE-ID override blocks parse as standalone items and
+   merge by fingerprint; full override semantics are a documented
+   limitation, not silent.
+9. **Fingerprint-change collision.** If an edited event's new
+   fingerprint collides with a different listing, the fingerprint
+   match wins and gains the provenance row; the vacated listing
+   ages out through the gate. Deliberate, and noted here rather
+   than hidden.
+10. **SupabaseStore timestamp assembly.** As originally filed:
+    the production store passed Supabase timestamp strings through
+    the same dataclasses the pipeline compares, with parsing noted
+    for the wiring ticket. Rosa accepted the scoping and named the
+    concrete failure (string timestamps raise TypeError in gate
+    arithmetic). The fix round below closes it now instead:
+    assembly parses timestamps into aware datetimes, gold writes
+    serialize through the same helper, and a fake-client contract
+    file (test_events_store.py) proves the wiring end to end. The
+    runner ticket still owns the first live run.
+
+## Fix round (Rosa review: REQUEST CHANGES, 1 major, 3 minors, 2 nits)
+
+RED `8fd6ae7` is tests only: 13 new tests, and all 13 failed
+against the round 1 implementation before GREEN (verified by
+running them pre-fix; the 36 pre-existing tests in the touched
+files stayed green). No schema changed this round, so the live
+migration execution from round 1 stands and was not re-run.
+
+**M1 (major): ICS contact properties reached bronze.** The ICS
+redaction set held only DESCRIPTION plus the ATTACH/IMAGE rule;
+ORGANIZER and CONTACT lines passed into evt_raw_items verbatim,
+organizer email and phone included. Fix: the redaction set is now
+DESCRIPTION, ORGANIZER, CONTACT, ATTENDEE. Matching is on the
+property name before any ";" parameter, so parameterized forms
+(ORGANIZER;CN=..., ATTENDEE;RSVP=TRUE:) are covered, and lines
+nested inside VALARM blocks are covered because redaction runs per
+line over the whole block. The contract test builds its VEVENT
+inline (no fixture dependency, which is how the gap slipped
+through) and asserts no property name, person name, email, or
+phone reaches the bronze payload or any extracted field.
+
+M1 audit trail, as requested. What was checked, connector by
+connector and then along the merge path:
+
+- ICS properties, against RFC 5545: the contact carriers in a
+  VEVENT are ORGANIZER (a mailto address with a CN name), CONTACT
+  (free-form contact text), and ATTENDEE (the attendee list spec
+  10.6 names outright). All three are now dropped. The retained
+  properties (UID, DTSTART, DTEND, DURATION, RRULE, EXDATE,
+  RDATE, SUMMARY, LOCATION, GEO, URL, STATUS, CATEGORIES,
+  RECURRENCE-ID, SEQUENCE, CREATED, LAST-MODIFIED) are facts,
+  schedule data, or opaque identifiers; none carries contact data
+  in any feed profile in the source map (LibCal, Lu.ma, Google
+  exports). X- proprietary properties are retained for change
+  detection and never read by extraction; no profile in the
+  source map places contact data in an X- VEVENT property.
+  Disclosed as the residual: a future feed inventing a contact
+  bearing X- property would need a redaction entry, and the
+  contract test pattern now exists to pin it.
+- Localist: contact data in the payload shape rides the event
+  object itself. The exact-name set already caught email and
+  phone at any nesting depth, but compound keys did not drop:
+  organizer_phone, contact_email, venue_phone, and telephone all
+  survived round 1 redaction (proven by the new test failing
+  pre-fix). redact_json now also drops any key whose name
+  tokenizes (snake, kebab, or camel case) to a contact token:
+  email, phone, telephone, mobile, cell, fax, contact. Both
+  fixture key inventories were enumerated and checked: no
+  retained key tokenizes to a contact token, so the rule costs
+  no legitimate field.
+- Tribe: the organizer object carries phone and email keys
+  (caught by exact match at nesting, now also by token), and a
+  top-level contact_phone survived round 1 (proven pre-fix).
+  source_organizer_ref takes only the published display name from
+  that object; the new test pins that the name is kept and the
+  contact values are not.
+- Merge and persistence path: put_raw receives only connector
+  bronze, which is redacted at the boundary before hashing; the
+  extracted shapes in models.py have no contact field by
+  construction; gold rows are assembled from silver facts only;
+  the publish log carries a listing id and a reason, never item
+  content; the run failure detail carries an exception class and
+  message, never a payload; venue facts sent to the geocoder are
+  the venue's published name and address, never organizer data;
+  dead letters are key-only after m3 below.
+
+**m1: vanish sweep co-carrier freshness.** The sweep judged a
+co-carrying source by missed_syncs, a counter only full-sync
+sources maintain, so a non-full-sync co-carrier suppressed
+cancellation forever. The sweep now judges co-carriers by
+last_seen_at against that source's gate staleness ceiling
+(gate.staleness_ceiling), the freshness definition the rest of the
+layer already uses. Two tests pin both directions: a co-carrier
+never re-seen stops suppressing once its sighting ages past the
+ceiling, and a fresh co-carrier still suppresses until it ages
+out. Silver now reaches cancelled and takes its 90-day tombstone;
+gold was already protected by gate staleness.
+
+**m2: fingerprint oscillation on update.** _merge_item reassigned
+the listing fingerprint from the arriving item unconditionally,
+before the authority check, so a lower-authority variant spelling
+flipped the fingerprint on every poll and the display source
+flipped it back. The fingerprint now reassigns only when the
+arriving item's facts are taken (or at creation, unchanged).
+Pinned by a test where the ICS pipe re-spells the venue (no GEO,
+longer street name) after the API pipe set the display facts: one
+listing, fingerprint and venue unmoved.
+
+**m3: dead-letter payloads carried item content.** The pipeline
+persisted the self-healing 120-character preview into
+evt_dead_letters and the run's DLQ summary; for an early-keyed
+JSON item that preview is the head of a description value. All
+three isolation points (ICS parse, JSON convert, merge) now pass
+key-only preview callables: the UID line for ICS blocks, the item
+id for JSON items, the source item key for extracted events. The
+persisted payload can therefore never contain item content, and
+the parse-stage dead letter now records the real item key for
+JSON pipes too (round 1 recorded None there). Choice disclosed:
+pipeline log lines carry the same key-only preview, which is
+stricter than the platform default; other pipelines keep the
+redacted content preview.
+
+**n1: three-part ICS location mapping.** "Venue, City, ST ZIP"
+put the city in the street slot. The three-part form now maps to
+name plus city with no street, and a house number in the first
+part marks the street form instead ("Street, City, ST ZIP").
+Both shapes are pinned; the four-part form is unchanged.
+
+**n2 plus design call 10: SupabaseStore timestamp wiring.**
+finish_run stamped finished_at from a naive local clock; it now
+uses an aware UTC clock. Assembly parses PostgREST timestamp
+strings into aware datetimes (_parse_ts) for listing rows,
+listing source rows, and source rows, so gate arithmetic and the
+circuit check compare datetimes to datetimes instead of raising
+TypeError on first live use. gold_put serializes datetimes
+through _ts. test_events_store.py proves all of it against a fake
+client, including a gate decision computed on assembled values
+end to end.
+
+## Fix round 2 (Rosa re-review: REQUEST CHANGES, 1 minor, 2 nits)
+
+RED `13b646e` is tests only: 3 new tests, and all 3 failed
+against the fix round implementation before GREEN (verified by
+running them pre-fix; the 26 pre-existing tests in the two
+touched test files stayed green). No schema changed this round
+either, so the round 1 live migration execution still stands.
+All three findings are edges of the never-store boundary that
+the re-review's adversarial probes reached and the fix round's
+enumerated shapes had not.
+
+**m4 (minor): X-ALT-DESC carried the description body into
+bronze.** Outlook and Exchange publish the description twice:
+DESCRIPTION in plain text and X-ALT-DESC as the HTML twin. The
+redaction set named only DESCRIPTION, so the HTML body landed in
+evt_raw_items verbatim. Fix: X-ALT-DESC joins the ICS redaction
+set; matching already splits the head on ";", so the
+parameterized form (X-ALT-DESC;FMTTYPE=text/html:) is covered.
+The contract test builds an Outlook-shaped VEVENT inline and
+asserts neither the property name nor the HTML body (nor the
+email inside it) reaches the bronze payload or any extracted
+field. Disclosure note: the round 1 X- property residual covered
+contact-bearing X- properties retained for change detection.
+X-ALT-DESC is a description body, a different never-store class,
+so it is dropped by name, not retained.
+
+**n3 (nit): group-prefixed ICS property names bypassed the
+redaction match.** RFC 5545 content lines are [group "."] name,
+so item1.ORGANIZER computed the head ITEM1.ORGANIZER and missed
+the set, landing the organizer name and mailto address in
+bronze. Fix: _redact_block strips the optional group prefix
+when computing the head, so the match sees the property name.
+Pinned by a contract test beside the m4 test: a grouped
+ORGANIZER and a grouped CONTACT reach neither bronze nor any
+extracted field.
+
+**n4 (nit): un-separated JSON compound keys survived
+tokenization.** The token rule splits on separators and camel
+humps, so a compound written as one word never produced a
+contact token: phonenumber, emailaddress, e_mail, and tel were
+all retained by redact_json. Fix, three layers: the four probed
+spellings are pinned in NEVER_STORE_KEYS; tel and mail join the
+contact token set (e_mail tokenizes to e plus mail); and a stem
+pass drops any token starting or ending with a contact stem
+(email, phone, telephone, mobile, cell, fax, contact), which
+closes unseen compounds of the same class (probed clean after
+the fix: cellphone, contactinfo, faxnumber, organizerPhone, and
+a nested host_tel). Legitimate keys verified retained by the
+same probe: the organizer display name, website, mailing
+address, and cancellation policy. The connector contract test
+extends the Localist audit with the four spellings, keys and
+values both asserted absent from bronze.
+
+Verification for this round: events tests 97 of 97 (migration
+16, normalize 12, ICS 18, connectors 11, gate 10, geocode 7,
+pipeline 19, store 4). Full suite under the established
+methodology (pytest tests/ --continue-on-collection-errors):
+baseline at d549df5 in this environment 1087 passed, 20 failed,
+7 errors; after the fix 1090 passed, 20 failed, 7 errors, the
+delta exactly the 3 new tests, and the failed and error node
+sets byte-identical by diff, so zero regressions. The absolute
+counts differ from the re-review's control (986/21/12) because
+this sandbox collects some modules that error on collection in
+the review environment; the before and after runs here used
+identical methodology on both sides, which is what the
+node-set comparison rests on. Ruff check and format clean on
+all four touched files.
+
+## Not in scope (by ticket)
+
+Public index surface and gold read API (tasks.md item 30, Sofia's
+TW-652 lane consumes gold), claim-a-listing flow (item 31),
+Eventbrite API client (needs the approved developer app), organizer
+OAuth import (item 31's pipe), the ingest scheduler wiring (the
+pipeline is invoked per source with an injected fetcher; cron
+wiring rides the launch phase), and age rating of indexed listings
+(ratings arrive per Section 5.9 and at claim time).
