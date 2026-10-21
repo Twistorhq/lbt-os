@@ -223,6 +223,33 @@ class MemberContext:
         return not self.can_write or self.band_rank == 0
 
 
+def _live_band(attestations: list[dict]) -> str | None:
+    """Resolve the one live age band deterministically.
+
+    The verify schema keys attestations by anchor, so a single live
+    row is the contract. If an engine fault ever leaves two, the
+    newest band_as_of governs (computed_at breaks that tie), never
+    storage order: a safety input must not depend on which row a
+    query happened to return first. Two live rows tied on both
+    timestamps with different bands are ambiguous and fail closed
+    to no band."""
+    if not attestations:
+        return None
+
+    def _key(row: dict) -> tuple[str, str]:
+        return (
+            str(row.get("band_as_of") or ""),
+            str(row.get("computed_at") or ""),
+        )
+
+    ordered = sorted(attestations, key=_key, reverse=True)
+    top = ordered[0]
+    for other in ordered[1:]:
+        if _key(other) == _key(top) and other.get("band") != top.get("band"):
+            return None
+    return top.get("band")
+
+
 def get_member_context(db, user_id: UUID | str) -> MemberContext:
     uid = str(user_id)
     verified = False
@@ -246,7 +273,7 @@ def get_member_context(db, user_id: UUID | str) -> MemberContext:
                 or []
             )
             if attestations:
-                band = attestations[0].get("band")
+                band = _live_band(attestations)
             anchor_row = _fetch_one(db, "vfy_identity_anchors", anchor_hash=anchor)
             if anchor_row is not None and anchor_row.get("is_banned"):
                 banned = True
@@ -539,6 +566,14 @@ def _next_gathering(db, group: dict, now: datetime) -> dict | None:
     upcoming = []
     for event in events:
         if event.get("status") != "published":
+            continue
+        # The shell is public index content (Section 5.11), so only
+        # a group-scope gathering may appear on it. Connections and
+        # close_friends scopes are audience-restricted (Section 8):
+        # neither admits a non-member, and their titles and times
+        # never reach an unverified viewer. The check is a positive
+        # allowlist, so any future stricter scope fails closed here.
+        if (event.get("audience_scope") or "group") != "group":
             continue
         if MIN_BAND_RANK[event["min_age_band"]] > MIN_BAND_RANK["age_16_plus"]:
             continue
@@ -1300,6 +1335,9 @@ def withdraw_rsvp(db, user_id: UUID, rsvp_id: UUID, *, now=None) -> dict:
         raise ConflictError(f"RSVP is {row.get('status')}")
     now = _resolve_now(now)
     was_going = row.get("status") == "going"
+    # The schema has no "withdrawn" status: a member withdrawal
+    # writes "declined" with host_decided_by left null, which is
+    # what distinguishes it from a host decline in the raw rows.
     updated = _update_by_id(db, "rsn_rsvps", row["id"], {"status": "declined"})
     if was_going:
         event = _fetch_one(db, "rsn_events", id=row["event_id"])
