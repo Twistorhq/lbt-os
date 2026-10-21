@@ -19,10 +19,21 @@ Adopted from fx0's durability design (README, "Durability"):
      interrupted_unknown_outcome and the turn is told it was interrupted.
      An interrupted idempotent step re-runs, and ctx.apply_effect() makes
      its side effect land exactly once even if the crash hit after the
-     effect but before the completion journal write.
-  5. Fencing. One worker holds a turn at a time via a lease. A second
-     worker is refused while the lease is live; a dead worker's lease
-     expires and the next worker takes over.
+     effect but before the completion journal write. The JOURNALED
+     declaration governs on resume: a resuming process whose step list
+     disagrees with the journal (renamed step, flipped declaration) is
+     refused with JournalMismatch instead of silently proceeding, and a
+     non-idempotent step also gets exactly one attempt inside a run (a
+     declaration of "not safe to repeat" is never retried in-run either).
+  5. Fencing. One worker holds a turn at a time via a lease. Acquisition
+     is a single conditional UPDATE (compare-and-swap: the row changes
+     only if the lease is free, already ours, or expired) and raises
+     TurnFenced unless exactly one row changed; ownership is revalidated
+     before each step execution and inside apply_effect, so a worker
+     whose lease expired mid-run stops instead of writing. A dead
+     worker's lease expires and the next worker takes over. (The Postgres
+     port still owes the same fencing as one transaction plus a lease
+     heartbeat for long steps; see the pattern doc.)
   6. Step cap. A turn stops after `step_cap` steps (fx0: 64), so a looping
      agent cannot run forever.
 
@@ -56,6 +67,16 @@ class TurnFenced(RuntimeError):
     """Another worker holds this turn's lease."""
 
 
+class JournalMismatch(RuntimeError):
+    """The supplied step list disagrees with the journaled step rows.
+
+    Raised on resume when a step was renamed or its idempotency
+    declaration flipped versus what the original run journaled. The
+    journal is authoritative: proceeding on the caller's word would let
+    a redeployed step list silently re-run a crashed non-idempotent step.
+    """
+
+
 @dataclass
 class StepDef:
     """One step of a turn. `idempotent` must be declared explicitly."""
@@ -65,7 +86,7 @@ class StepDef:
     idempotent: bool
 
     def __post_init__(self):
-        if self.idempotent is None:
+        if not isinstance(self.idempotent, bool):
             raise ValueError(
                 f"step {self.name!r} must declare idempotent=True/False; "
                 "an undeclared tool is never re-run after a crash (fx0 rule)"
@@ -73,10 +94,18 @@ class StepDef:
 
 
 class StepContext:
-    def __init__(self, engine: "DurableTurnEngine", turn_id: str, step: StepDef):
+    def __init__(
+        self,
+        engine: "DurableTurnEngine",
+        turn_id: str,
+        step: StepDef,
+        *,
+        owner: str | None = None,
+    ):
         self._engine = engine
         self.turn_id = turn_id
         self.step_name = step.name
+        self._owner = owner
         self.interrupted = engine.get_turn(turn_id).get("interrupted", 0) == 1
 
     def apply_effect(self, effect_key: str, fn: Callable[[], Any]) -> Any:
@@ -87,7 +116,9 @@ class StepContext:
         idempotent step safe to re-run after a crash that hit between the
         effect and the step-completion journal write.
         """
-        return self._engine._apply_effect(self.turn_id, effect_key, fn)
+        return self._engine._apply_effect(
+            self.turn_id, effect_key, fn, owner=self._owner
+        )
 
 
 _SCHEMA = """
@@ -171,7 +202,7 @@ class DurableTurnEngine:
         turn_id = uuid.uuid5(uuid.NAMESPACE_URL, f"twistor-turn:{message_id}").hex
         now = time.time()
         with self._conn() as c:
-            c.execute(
+            cur = c.execute(
                 "INSERT OR IGNORE INTO durable_turns"
                 " (turn_id, session_id, message_id, prompt, status, created_at, updated_at)"
                 " VALUES (?,?,?,?,'pending',?,?)",
@@ -180,7 +211,13 @@ class DurableTurnEngine:
             row = c.execute(
                 "SELECT turn_id FROM durable_turns WHERE message_id=?", (message_id,)
             ).fetchone()
-            self._event(c, row["turn_id"], "prompt_saved", {"message_id": message_id})
+            # Journal prompt_saved only when the INSERT actually landed:
+            # a retried submit reaches the same turn but is not a second
+            # prompt (TW-665 review m3).
+            if cur.rowcount == 1:
+                self._event(
+                    c, row["turn_id"], "prompt_saved", {"message_id": message_id}
+                )
         return row["turn_id"]
 
     def get_turn(self, turn_id: str) -> dict[str, Any]:
@@ -209,24 +246,46 @@ class DurableTurnEngine:
 
     # -- fencing ----------------------------------------------------------
     def acquire_lease(self, turn_id: str, *, owner: str) -> None:
+        """Take the turn's lease with a single conditional UPDATE.
+
+        Compare-and-swap: the row changes only when the lease is free,
+        already held by this owner, or expired. SQLite executes one
+        UPDATE atomically under the write lock, so two racing workers
+        cannot both land it; the loser sees rowcount 0 and is fenced.
+        (The previous SELECT-then-UPDATE let both racers win; TW-665
+        review M3.)
+        """
         now = time.time()
         with self._conn() as c:
-            row = c.execute(
-                "SELECT owner, lease_expires_at FROM durable_turns WHERE turn_id=?",
-                (turn_id,),
-            ).fetchone()
-            if (
-                row
-                and row["owner"]
-                and row["owner"] != owner
-                and row["lease_expires_at"]
-                and row["lease_expires_at"] > now
-            ):
-                raise TurnFenced(f"turn {turn_id} held by {row['owner']}")
-            c.execute(
+            cur = c.execute(
                 "UPDATE durable_turns SET owner=?, lease_expires_at=?, updated_at=?"
-                " WHERE turn_id=?",
-                (owner, now + self.lease_seconds, now, turn_id),
+                " WHERE turn_id=? AND (owner IS NULL OR owner=?"
+                " OR lease_expires_at IS NULL OR lease_expires_at<=?)",
+                (owner, now + self.lease_seconds, now, turn_id, owner, now),
+            )
+            if cur.rowcount != 1:
+                row = c.execute(
+                    "SELECT owner FROM durable_turns WHERE turn_id=?", (turn_id,)
+                ).fetchone()
+                holder = row["owner"] if row else None
+                raise TurnFenced(f"turn {turn_id} held by {holder}")
+
+    def _assert_lease(self, turn_id: str, owner: str) -> None:
+        """Revalidate that `owner` still holds a live lease on the turn.
+
+        A worker whose lease expired mid-run (a zombie the resumer has
+        already replaced) must stop before its next write instead of
+        racing the new owner.
+        """
+        turn = self.get_turn(turn_id)
+        if (
+            turn.get("owner") != owner
+            or not turn.get("lease_expires_at")
+            or turn["lease_expires_at"] <= time.time()
+        ):
+            raise TurnFenced(
+                f"turn {turn_id} lease no longer held by {owner}"
+                f" (held by {turn.get('owner')})"
             )
 
     def _release_lease(self, turn_id: str, owner: str) -> None:
@@ -239,27 +298,65 @@ class DurableTurnEngine:
 
     # -- effects ----------------------------------------------------------
     def _apply_effect(
-        self, turn_id: str, effect_key: str, fn: Callable[[], Any]
+        self,
+        turn_id: str,
+        effect_key: str,
+        fn: Callable[[], Any],
+        *,
+        owner: str | None = None,
     ) -> Any:
-        with self._conn() as c:
-            row = c.execute(
-                "SELECT result_json FROM durable_effects WHERE turn_id=? AND effect_key=?",
-                (turn_id, effect_key),
-            ).fetchone()
-        if row:
-            return json.loads(row["result_json"] or "null")
-        result = fn()
-        with self._conn() as c:
-            c.execute(
-                "INSERT OR IGNORE INTO durable_effects (turn_id, effect_key, result_json)"
-                " VALUES (?,?,?)",
-                (turn_id, effect_key, json.dumps(result, default=str)),
-            )
-            row = c.execute(
-                "SELECT result_json FROM durable_effects WHERE turn_id=? AND effect_key=?",
-                (turn_id, effect_key),
-            ).fetchone()
-        return json.loads(row["result_json"] or "null")
+        """Land an effect exactly once, atomically.
+
+        The existence check, the fn() call, and the journal insert run
+        inside one BEGIN IMMEDIATE transaction, which takes the write
+        lock up front: two live workers cannot both pass the check and
+        both run fn before either journals it (the old check-then-insert
+        across two connections had exactly that window; TW-665 review
+        M3). When `owner` is known, lease ownership is revalidated
+        inside the same transaction.
+        """
+        conn = sqlite3.connect(self.db_path, timeout=30, isolation_level=None)
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                if owner is not None:
+                    t = conn.execute(
+                        "SELECT owner, lease_expires_at FROM durable_turns"
+                        " WHERE turn_id=?",
+                        (turn_id,),
+                    ).fetchone()
+                    if (
+                        t is None
+                        or t["owner"] != owner
+                        or not t["lease_expires_at"]
+                        or t["lease_expires_at"] <= time.time()
+                    ):
+                        raise TurnFenced(
+                            f"turn {turn_id} lease no longer held by {owner}"
+                        )
+                row = conn.execute(
+                    "SELECT result_json FROM durable_effects"
+                    " WHERE turn_id=? AND effect_key=?",
+                    (turn_id, effect_key),
+                ).fetchone()
+                if row:
+                    conn.execute("COMMIT")
+                    return json.loads(row["result_json"] or "null")
+                result = fn()
+                conn.execute(
+                    "INSERT INTO durable_effects (turn_id, effect_key, result_json)"
+                    " VALUES (?,?,?)",
+                    (turn_id, effect_key, json.dumps(result, default=str)),
+                )
+                conn.execute("COMMIT")
+                return result
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
+        finally:
+            conn.close()
 
     def count_effects(self, turn_id: str) -> int:
         with self._conn() as c:
@@ -293,6 +390,44 @@ class DurableTurnEngine:
             (status, 1 if interrupted else 0, time.time(), turn_id),
         )
 
+    def _validate_against_journal(
+        self, turn_id: str, steps: list[StepDef]
+    ) -> dict[int, Any]:
+        """Check the supplied step list against the journaled step rows.
+
+        The journal is authoritative on resume (TW-665 review M1): a
+        supplied step whose name or idempotency declaration disagrees
+        with the row the original run journaled raises JournalMismatch
+        instead of silently proceeding on the caller's word. Returns the
+        journaled rows by step index for the run loop.
+        """
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT * FROM durable_steps WHERE turn_id=? ORDER BY step_index",
+                (turn_id,),
+            ).fetchall()
+        journaled: dict[int, Any] = {}
+        for row in rows:
+            idx = row["step_index"]
+            journaled[idx] = row
+            if idx >= len(steps):
+                raise JournalMismatch(
+                    f"turn {turn_id}: journal has step {idx} ({row['name']!r})"
+                    f" but the supplied list has only {len(steps)} steps"
+                )
+            supplied = steps[idx]
+            if supplied.name != row["name"] or bool(supplied.idempotent) != bool(
+                row["idempotent"]
+            ):
+                raise JournalMismatch(
+                    f"turn {turn_id}: step {idx} journaled as"
+                    f" {row['name']!r} idempotent={bool(row['idempotent'])}"
+                    f" but supplied as {supplied.name!r}"
+                    f" idempotent={bool(supplied.idempotent)};"
+                    " the journaled declaration governs"
+                )
+        return journaled
+
     def _run(self, turn_id: str, steps: list[StepDef], owner: str) -> dict[str, Any]:
         with self._conn() as c:
             turn = dict(
@@ -300,6 +435,30 @@ class DurableTurnEngine:
                     "SELECT * FROM durable_turns WHERE turn_id=?", (turn_id,)
                 ).fetchone()
             )
+        if turn["status"] == "completed":
+            # A completed turn is final. Re-running returns the stored
+            # result WITHOUT flipping status or journaling a phantom
+            # second turn_started / turn_completed pair (review m2).
+            with self._conn() as c:
+                rows = c.execute(
+                    "SELECT * FROM durable_steps WHERE turn_id=? ORDER BY step_index",
+                    (turn_id,),
+                ).fetchall()
+            stored: list[Any] = []
+            for row in rows:
+                if row["status"] == "completed":
+                    stored.append(json.loads(row["result_json"] or "null"))
+                elif row["status"] == "ambiguous":
+                    stored.append({"interrupted_unknown_outcome": True})
+            return {
+                "status": "completed",
+                "results": stored,
+                "interrupted": turn["interrupted"] == 1,
+            }
+        # Refuse a step list that disagrees with the journal BEFORE any
+        # state changes (review M1).
+        self._validate_against_journal(turn_id, steps)
+        with self._conn() as c:
             was_interrupted = False
             if turn["status"] in ("running",):
                 was_interrupted = True
@@ -333,7 +492,15 @@ class DurableTurnEngine:
             if row and row["status"] == "ambiguous":
                 results.append({"interrupted_unknown_outcome": True})
                 continue
-            if row and row["status"] == "started" and not step.idempotent:
+            # The JOURNALED declaration decides this step's fate, never
+            # the resuming caller's word (review M1). Validation above
+            # has already proven supplied == journaled when a row
+            # exists; reading the journal here keeps that true by
+            # construction, not by trust.
+            declared_idempotent = (
+                bool(row["idempotent"]) if row else bool(step.idempotent)
+            )
+            if row and row["status"] == "started" and not declared_idempotent:
                 # Crash cut this step off and it is not safe to repeat:
                 # never re-run it; tell the turn it may have happened.
                 with self._conn() as c:
@@ -350,6 +517,9 @@ class DurableTurnEngine:
                 results.append({"interrupted_unknown_outcome": True})
                 executed += 1
                 continue
+            # Refuse to execute if our lease died mid-run and a resumer
+            # has taken over (review M3 ownership revalidation).
+            self._assert_lease(turn_id, owner)
             # Journal the start BEFORE the handler runs.
             with self._conn() as c:
                 c.execute(
@@ -361,15 +531,35 @@ class DurableTurnEngine:
                 self._event(
                     c, turn_id, "step_started", {"step": step.name, "index": idx}
                 )
-            ctx = StepContext(self, turn_id, step)
+            ctx = StepContext(self, turn_id, step, owner=owner)
+
+            def attempt() -> Any:
+                # The journal's attempts column must state reality: one
+                # increment per actual handler execution (review m1).
+                with self._conn() as c:
+                    c.execute(
+                        "UPDATE durable_steps SET attempts=attempts+1"
+                        " WHERE turn_id=? AND step_index=?",
+                        (turn_id, idx),
+                    )
+                return step.handler(ctx)
+
             try:
                 result = sh.retry_with_backoff(
-                    lambda: step.handler(ctx),
-                    attempts=self.retry_attempts,
+                    attempt,
+                    # A step that declared itself not safe to repeat gets
+                    # exactly one attempt in-run too (review M2):
+                    # retrying it on a transient classification repeats a
+                    # side effect the declaration exists to protect.
+                    attempts=self.retry_attempts if declared_idempotent else 1,
                     base_delay=self.base_delay,
                     max_delay=1.0,
                     sleep=self._sleep,
                 )
+            except TurnFenced:
+                # Lease lost mid-step (raised via apply_effect): stop
+                # without journaling a failure over the new owner's run.
+                raise
             except Exception as exc:  # permanent, or retries exhausted
                 with self._conn() as c:
                     c.execute(
@@ -402,6 +592,9 @@ class DurableTurnEngine:
             results.append(result)
             executed += 1
 
+        # Do not journal completion over a lease we no longer hold; the
+        # journaled steps let the rightful owner finish the turn itself.
+        self._assert_lease(turn_id, owner)
         with self._conn() as c:
             self._set_status(c, turn_id, "completed", interrupted=was_interrupted)
             self._event(c, turn_id, "turn_completed", {"steps": len(results)})

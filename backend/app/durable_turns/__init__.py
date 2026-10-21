@@ -7,6 +7,7 @@ no Vercel Workflow World, no Vercel Queues, no AI Gateway.
 from app.durable_turns.engine import (
     DEFAULT_STEP_CAP,
     DurableTurnEngine,
+    JournalMismatch,
     StepContext,
     StepDef,
     TurnFenced,
@@ -15,6 +16,7 @@ from app.durable_turns.engine import (
 __all__ = [
     "DEFAULT_STEP_CAP",
     "DurableTurnEngine",
+    "JournalMismatch",
     "StepContext",
     "StepDef",
     "TurnFenced",
