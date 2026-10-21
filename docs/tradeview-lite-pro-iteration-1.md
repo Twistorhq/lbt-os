@@ -1,6 +1,6 @@
 # Trade View Lite / Pro — iteration 1
 
-Prepared by Twistor. Checked 2026-10-11 UTC.
+Prepared by Twistor Holdings LLC. Checked 2026-10-11 UTC.
 
 ## What this iteration delivers
 

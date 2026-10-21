@@ -31,7 +31,9 @@ try {
   await rm(temporary, { recursive: true, force: true })
 }
 await mkdir(out, { recursive: true })
-const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'"><title>Trade View Lite — Interactive sample</title><style>${css}</style></head><body><p id="preview-mode-note" class="bg-[#09111f] p-4 text-white">Trade View Lite visual preview. Interactive controls require opening this file in a browser with JavaScript enabled.</p><div id="root">${markup}</div><script>${js.replaceAll('</script', '<\\/script')}</script></body></html>`
+const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'"><title>Trade View Lite: Interactive sample</title><style>${css}</style></head><body><p id="preview-mode-note" class="bg-[#09111f] p-4 text-white">Trade View Lite visual preview. Interactive controls require opening this file in a browser with JavaScript enabled.</p><div id="root">${markup}</div><script>${js.replaceAll('</script', '<\\/script')}</script></body></html>`
+// TW-677 (Rosa PR4 m2): a single preview artifact. The generator previously
+// wrote the identical string to v1 and v2, two byte-identical copies of one
+// artifact; the iteration doc only ever referenced v1.
 await writeFile(resolve(out, 'tradeview-lite-v1.html'), html)
-await writeFile(resolve(out, 'tradeview-lite-v2.html'), html)
-console.log('Exported v1 and v2 previews with visible pre-rendered UI (no network access)')
+console.log('Exported v1 preview with visible pre-rendered UI (no network access)')
