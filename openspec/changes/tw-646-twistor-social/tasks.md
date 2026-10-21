@@ -49,8 +49,14 @@ merge. A phase does not start until its gates clear.
       deny-all, idempotent (with TW-650). Done 2026-10-20:
       supabase/migration_verify_v1.sql, 8 tables; evidence in
       docs/evidence/TW-650-social-schema.tdd.md.
-- [ ] 10. Pipeline stages 1 to 5 with human review queue; verdict-only API
-      per design; images destroyed on decision, 72-hour ceiling.
+- [x] 10. Pipeline stages 1 to 5 with human review queue; verdict-only API
+      per design; images destroyed on decision, 72-hour ceiling. Built
+      2026-10-20 (TW-658): backend/app/verify/engine/ + verdict API in
+      backend/app/verify/router.py; review verdicts land in the TW-650
+      session states for the human-review surface. School ID class shape
+      exists; teen capture does not build in this phase. Production
+      capture stays behind the D3 flag, default off. Evidence:
+      docs/evidence/TW-658-verify-engine.tdd.md.
 - [ ] 10a. Retention schedule alignment (TW-654 change list in full;
       Rosa verifies against counsel's text): destruction jobs implement
       Angela's three-trigger rule for biometric identifiers (face
@@ -70,7 +76,12 @@ merge. A phase does not start until its gates clear.
       from the pointer.
 - [ ] 12. GATE: Angela consent and retention sign-off (TW-654) before any
       production capture. Benchmark and staging work proceed without it;
-      production faces do not move.
+      production faces do not move. Status 2026-10-20: TW-654 decisions
+      D1 to D3 approved (BIPA-standard consent flow adopted, retention
+      schedule adopted, production capture flag stays OFF until
+      counsel's written review is filed to TW-654). The engine build
+      (TW-658) proceeded benchmark-facing under D3; this gate stays
+      open until the filed counsel review lands.
 
 ## Phase 3: Schema and service skeletons (TW-650, Dre)
 
