@@ -361,7 +361,10 @@ def test_ban_landing_mid_transaction_still_finalizes_not_valid():
     # after creation still bites at match time.
     service, door_store, _ = _service()
     txn = _reliance_txn(service)
-    service.verify_store.upsert_anchor("anchor-ama", user_id="ama", is_banned=True)
+    # The ban lands on the anchor row after creation (upsert_anchor
+    # is insert once, so the test flips the stored row, exactly what
+    # the ban write does in the database).
+    service.verify_store.anchors["anchor-ama"]["is_banned"] = True
     result = service.submit_selfie(txn.id, AMA_SELFIE, _answering_frames())
     assert result.result == "not_valid"
     (scan,) = door_store.scans

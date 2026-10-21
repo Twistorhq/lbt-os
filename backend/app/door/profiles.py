@@ -39,6 +39,22 @@ LANE_CLAIM_KEYS = (
     "lane_physical_id_required",
 )
 
+# Enrollment requirement handlers the TW-658 build actually has.
+# A profile may name only handlers from this set; naming anything
+# else disables the profile (the spec Section 3 rule: a profile
+# that needs a handler the build does not have cannot activate).
+# "secondary_identity_check" is deliberately absent: Angela's
+# TW-672 Finding 2 records that the engine has no secondary
+# identity proofing stage today (commercial data or government
+# records check, A.R.S. 4-101 condition (b)); the build item is
+# decision TW-672-D2. Until that stage exists, an Arizona profile
+# naming it cannot activate, which is the honest state of Arizona.
+BUILT_ENROLLMENT_HANDLERS = (
+    "document_auth_electronic",
+    "contemporaneous_biometric_link",
+    "seller_agent_registration",
+)
+
 
 @dataclass(frozen=True)
 class StateProfile:
@@ -63,6 +79,27 @@ class StateProfile:
     contract_pack_key: str | None
     proof_bundle_key: str | None
     scan_retention_days: int
+    # Whether the state's legal basis permits ENTRY reliance at
+    # all. Arizona (4-241(W)) and California (25660(b)(1) reaching
+    # 25665) permit it; North Carolina does not, because
+    # G.S. 18B-302(d)(3) is a sales only defense (TW-657 legal
+    # specifications Section 2.3, TW-672 Section 5). The resolver
+    # refuses to activate a profile that authors entry reliance
+    # this flag does not permit.
+    entry_reliance_permitted: bool = False
+    # The legal effect an alcohol service scan carries, kept
+    # separate from the entry effect: North Carolina service scans
+    # are protected even though its entry reliance does not exist.
+    alcohol_service_legal_effect: str = "none"
+    # Enrollment requirement handlers the profile names (TW-671
+    # spec Section 3); every one must be in
+    # BUILT_ENROLLMENT_HANDLERS for the profile to activate.
+    enrollment_requirement_handlers: tuple[str, ...] = ()
+    # Whether a reliance transaction at a venue requires a
+    # registered venue agreement reference (the seller agent
+    # agreement in NC; the venue agreement in AZ and CA, TW-672
+    # Section 4.3 item 1), re-checked at finalization.
+    venue_agreement_required: bool = False
     canonical_hash: str = ""
 
     def authored_payload(self) -> dict:
@@ -85,6 +122,12 @@ class StateProfile:
             "contract_pack_key": self.contract_pack_key,
             "proof_bundle_key": self.proof_bundle_key,
             "scan_retention_days": self.scan_retention_days,
+            "entry_reliance_permitted": self.entry_reliance_permitted,
+            "alcohol_service_legal_effect": self.alcohol_service_legal_effect,
+            "enrollment_requirement_handlers": list(
+                self.enrollment_requirement_handlers
+            ),
+            "venue_agreement_required": self.venue_agreement_required,
         }
 
 
@@ -127,7 +170,9 @@ class ProfileDecision:
     entry_flow_mode: str | None = None
     alcohol_service_flow_mode: str | None = None
     entry_legal_effect: str = "none"
+    alcohol_service_legal_effect: str = "none"
     alcohol_service_reliance_enabled: bool = False
+    venue_agreement_required: bool = False
     claim_key_set: tuple[str, ...] = ()
     contract_pack_key: str | None = None
     proof_bundle_key: str | None = None
@@ -208,10 +253,43 @@ class ProfileResolver:
                 profile_hash=profile.canonical_hash,
             )
 
+        missing_handlers = set(profile.enrollment_requirement_handlers) - set(
+            BUILT_ENROLLMENT_HANDLERS
+        )
+        if missing_handlers:
+            # The spec Section 3 rule, enforced: a profile that
+            # needs an enrollment handler the build does not have
+            # cannot activate. This is the gate that keeps Arizona
+            # off until the secondary identity proofing stage exists
+            # (TW-672 Finding 2, decision TW-672-D2).
+            return ProfileDecision(
+                state_code,
+                "disabled",
+                "enrollment_handler_unavailable",
+                profile_version=profile.version,
+                profile_hash=profile.canonical_hash,
+            )
+
         if profile.alcohol_service_reliance_enabled and (
             profile.mode != "full"
             or profile.alcohol_service_flow_mode != RELIANCE_BIOMETRIC
         ):
+            return ProfileDecision(
+                state_code,
+                "disabled",
+                "profile_incoherent",
+                profile_version=profile.version,
+                profile_hash=profile.canonical_hash,
+            )
+        if not profile.entry_reliance_permitted and (
+            profile.entry_flow_mode == RELIANCE_BIOMETRIC
+            or profile.entry_legal_effect == "protected"
+        ):
+            # A sales only legal basis (North Carolina) cannot
+            # author entry reliance, in flow or in effect. Authoring
+            # it anyway is a profile defect, not a runtime choice:
+            # the profile disables rather than letting a venue be
+            # told it holds entry protection the law does not give.
             return ProfileDecision(
                 state_code,
                 "disabled",
@@ -245,7 +323,9 @@ class ProfileResolver:
                 else None
             ),
             entry_legal_effect=profile.entry_legal_effect,
+            alcohol_service_legal_effect=profile.alcohol_service_legal_effect,
             alcohol_service_reliance_enabled=(profile.alcohol_service_reliance_enabled),
+            venue_agreement_required=profile.venue_agreement_required,
             claim_key_set=profile.claim_key_set,
             contract_pack_key=profile.contract_pack_key,
             proof_bundle_key=profile.proof_bundle_key,
@@ -305,6 +385,11 @@ def build_fixture_profiles(
     full_claims = ("reliance_age_result", "protected_entry")
     profiles: dict[str, tuple[StateProfile, list[ApprovalRecord]]] = {}
 
+    # Arizona models its legally current state, not the end state:
+    # DLLC authorization has not been granted (status pending), and
+    # the profile names the secondary identity proofing handler the
+    # 4-101 device definition requires, which the engine does not
+    # have yet (TW-672 Finding 2). Either ground disables it today.
     az = author_profile(
         state_code="AZ",
         version=1,
@@ -313,12 +398,20 @@ def build_fixture_profiles(
         entry_lane_enabled=True,
         entry_flow_mode=RELIANCE_BIOMETRIC,
         entry_legal_effect="protected",
+        entry_reliance_permitted=True,
         alcohol_service_reliance_enabled=True,
         alcohol_service_flow_mode=RELIANCE_BIOMETRIC,
+        alcohol_service_legal_effect="protected",
         minimum_age_band="age_21_plus",
         authorization_required=True,
-        authorization_status="obtained",
+        authorization_status="pending",
         liveness_required=True,
+        enrollment_requirement_handlers=(
+            "document_auth_electronic",
+            "secondary_identity_check",
+            "contemporaneous_biometric_link",
+        ),
+        venue_agreement_required=True,
         claim_key_set=full_claims,
         contract_pack_key="az_reliance_v1",
         proof_bundle_key="az_transaction_proof_v1",
@@ -334,12 +427,19 @@ def build_fixture_profiles(
         entry_lane_enabled=True,
         entry_flow_mode=RELIANCE_BIOMETRIC,
         entry_legal_effect="protected",
+        entry_reliance_permitted=True,
         alcohol_service_reliance_enabled=True,
         alcohol_service_flow_mode=RELIANCE_BIOMETRIC,
+        alcohol_service_legal_effect="protected",
         minimum_age_band="age_21_plus",
         authorization_required=False,
         authorization_status="not_required",
         liveness_required=True,
+        enrollment_requirement_handlers=(
+            "document_auth_electronic",
+            "contemporaneous_biometric_link",
+        ),
+        venue_agreement_required=True,
         claim_key_set=full_claims,
         contract_pack_key="ca_reliance_v1",
         proof_bundle_key="ca_evidence_record_v1",
@@ -347,20 +447,32 @@ def build_fixture_profiles(
     )
     profiles["CA"] = (ca, _chain(ca, now))
 
+    # North Carolina authors NO entry reliance: G.S. 18B-302(d)(3)
+    # is a defense to subsection (a) sales only (TW-657 legal
+    # Section 2.3, TW-672 Section 5, spec Section 8.3). Service
+    # reliance is protected; entry is not authored at all.
     nc = author_profile(
         state_code="NC",
         version=1,
         mode="full",
         diego_score=77,
-        entry_lane_enabled=True,
-        entry_flow_mode=RELIANCE_BIOMETRIC,
-        entry_legal_effect="protected",
+        entry_lane_enabled=False,
+        entry_flow_mode=None,
+        entry_legal_effect="none",
+        entry_reliance_permitted=False,
         alcohol_service_reliance_enabled=True,
         alcohol_service_flow_mode=RELIANCE_BIOMETRIC,
+        alcohol_service_legal_effect="protected",
         minimum_age_band="age_21_plus",
         authorization_required=False,
         authorization_status="not_required",
         liveness_required=True,
+        enrollment_requirement_handlers=(
+            "document_auth_electronic",
+            "contemporaneous_biometric_link",
+            "seller_agent_registration",
+        ),
+        venue_agreement_required=True,
         claim_key_set=("reliance_age_result",),
         contract_pack_key="nc_seller_agent_v1",
         proof_bundle_key="nc_two_prong_proof_v1",
@@ -386,7 +498,10 @@ def build_fixture_profiles(
             claim_key_set=LANE_CLAIM_KEYS,
             contract_pack_key=f"{state.lower()}_lane_no_reliance_v1",
             proof_bundle_key="lane_non_reliance_log_v1",
-            scan_retention_days=395,
+            # 365, not the 13 month member visible figure TW-654
+            # flagged as an unsettled planning number; spec Section
+            # 7 does not treat that figure as settled anywhere.
+            scan_retention_days=365,
         )
         profiles[state] = (lane, _chain(lane, now))
 
@@ -421,12 +536,19 @@ def build_fixture_profiles(
         entry_lane_enabled=True,
         entry_flow_mode=RELIANCE_BIOMETRIC,
         entry_legal_effect="protected",
+        entry_reliance_permitted=True,
         alcohol_service_reliance_enabled=True,
         alcohol_service_flow_mode=RELIANCE_BIOMETRIC,
+        alcohol_service_legal_effect="protected",
         minimum_age_band="age_21_plus",
         authorization_required=False,
         authorization_status="not_required",
         liveness_required=True,
+        enrollment_requirement_handlers=(
+            "document_auth_electronic",
+            "contemporaneous_biometric_link",
+        ),
+        venue_agreement_required=True,
         claim_key_set=full_claims,
         contract_pack_key="wa_reliance_v1",
         proof_bundle_key="wa_transaction_proof_v1",
@@ -439,6 +561,7 @@ def build_fixture_profiles(
 
 __all__ = [
     "APPROVAL_KINDS",
+    "BUILT_ENROLLMENT_HANDLERS",
     "LANE_CLAIM_KEYS",
     "LANE_QR_PHOTO",
     "RELIANCE_BIOMETRIC",

@@ -12,9 +12,14 @@ One transaction, one purpose, one server derived flow:
   and matched 1 to 1 against the enrollment template the TW-658
   pipeline persisted at onboarding (document portrait vs the ID
   the member uploaded, sealed encrypted in the verify store).
-  The door service receives a verdict, a match band, and an age
-  result. It never receives or stores the template, a raw match
-  score, a document image, a name, or a birthdate.
+  The venue receives a verdict and an age result, nothing more.
+  The service never receives or stores the template, a document
+  image, a name, or a birthdate. The raw match score is computed
+  inside this boundary and preserved only in the server side
+  evidence record, with the threshold in force and the engine
+  version, because TW-672 Section 4.3 item 5 makes that preserved
+  record the defense package; the score never crosses to a venue
+  facing surface (TW-657 Section 2.1 governs that boundary).
 - lane_qr_photo (PARTIAL states): the surviving TW-647 lane. No
   biometric step exists in this flow, and a selfie submitted to a
   lane transaction is refused: the flows never blend, and a failed
@@ -34,9 +39,15 @@ is read from TW-658's EngineConfig, never reinvented here.
 Every finalized transaction writes its evidence record (the dps_
 scan shape) before it answers: profile id, version and hash,
 purpose, flow, claim keys, proof bundle key, authorization status
-at scan, match band, and two one way reference hashes. California's
-defense is proven after the fact, so the record is a product
-requirement, not a log line.
+at scan, match band, the server side match score and threshold,
+the engine version, venue identity and the venue agreement
+reference the transaction ran under, the session initiation
+record, and two one way reference hashes. The evidentiary
+identity fields are snapshotted on the transaction at creation,
+so an abort path record still names the profile and pack the
+transaction was created under. California's defense is proven
+after the fact, so the record is a product requirement, not a
+log line.
 """
 
 from __future__ import annotations
@@ -48,7 +59,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from app.verify.benchmark.stages import StageUnavailable
-from app.verify.engine.config import EngineConfig
+from app.verify.engine.config import ENGINE_VERSION, EngineConfig
 from app.verify.engine.crypto import Encryptor
 from app.verify.engine.face import band_for_similarity, cosine_similarity
 from app.verify.engine.liveness import evaluate_challenges, generate_challenges
@@ -67,13 +78,15 @@ from .errors import (
 from .profiles import (
     LANE_QR_PHOTO,
     RELIANCE_BIOMETRIC,
-    ProfileDecision,
     ProfileResolver,
 )
 from .store import InMemoryDoorStore, active_door_consent
 
 PURPOSES = ("entry", "alcohol_service")
-REVIEW_FAILURES = {"face_review_band", "liveness_passive_weak", "multiple_faces"}
+
+# The staff actions TW-672 Section 4.3 item 7 names: what the
+# venue did with the result, recorded on the scan at the time.
+STAFF_ACTIONS = ("served", "admitted", "fell_back_to_physical_id", "denied")
 
 
 @dataclass(frozen=True)
@@ -82,6 +95,7 @@ class TransactionView:
     flow_mode: str
     purpose: str
     venue_state: str
+    venue_id: str
     profile_version: int | None
     profile_hash: str
     challenges: list = field(default_factory=list)
@@ -91,7 +105,10 @@ class TransactionView:
 class DoorResult:
     """One finalized transaction. `failure_class` is internal only:
     the external shape renders every failure identically (TW-647
-    Section 3.2), so as_dict never carries it."""
+    Section 3.2), so as_dict never carries it. The external shape
+    never carries the match score, the threshold, the engine
+    version, or the venue identity either: those live in the
+    server side evidence record only."""
 
     result: str  # valid | not_valid | unavailable
     flow_mode: str
@@ -180,9 +197,28 @@ class DoorPassService:
             raise DoorRefused("member standing is not verified T2")
         if facts["band"] != "age_21_plus":
             raise DoorRefused("member age band is not age_21_plus")
+        if facts["banned"]:
+            # Spec Section 3 step 3: standing at creation includes
+            # the ban. A banned member never gets a transaction;
+            # the match time check stays as defense in depth for a
+            # ban that lands mid transaction.
+            raise DoorRefused("member identity anchor is banned")
         if facts["template_row"] is None:
             raise DoorRefused("member has no live enrollment template")
         return facts
+
+    def _agreement_current(self, txn: dict) -> bool:
+        """The finalization re-check of the venue agreement binding
+        (spec Section 8.3): the agreement the transaction was
+        created under must still be registered and active for that
+        venue."""
+        agreement = self.door_store.get_venue_agreement(txn["venue_agreement_ref"])
+        return (
+            agreement is not None
+            and agreement["status"] == "active"
+            and agreement["venue_id"] == txn["venue_id"]
+            and agreement["state_code"] == txn["venue_state"]
+        )
 
     # ------------------------------------------------------------ creation
 
@@ -190,8 +226,12 @@ class DoorPassService:
         self,
         *,
         venue_state: str,
+        venue_id: str,
         purpose: str,
         user_id: str,
+        venue_agreement_ref: str | None = None,
+        session_initiated_by: str = "member_device",
+        staff_ref: str | None = None,
         flow_mode: str | None = None,
     ) -> TransactionView:
         if flow_mode is not None:
@@ -214,7 +254,27 @@ class DoorPassService:
                 f"purpose {purpose} is not enabled in {venue_state} "
                 f"under profile v{decision.profile_version}"
             )
-        self._check_member_for_creation(user_id)
+        facts = self._check_member_for_creation(user_id)
+        if flow == RELIANCE_BIOMETRIC and decision.venue_agreement_required:
+            # The record must be able to prove the transaction ran
+            # at a venue, under that venue's agreement (TW-672
+            # Section 4.3 item 1; in NC the seller agent agreement
+            # is the registration prong itself, spec Section 8.3).
+            if venue_agreement_ref is None:
+                raise DoorRefused(
+                    f"reliance in {venue_state} requires a venue "
+                    "agreement reference for the venue"
+                )
+            candidate = {
+                "venue_id": venue_id,
+                "venue_state": venue_state,
+                "venue_agreement_ref": venue_agreement_ref,
+            }
+            if not self._agreement_current(candidate):
+                raise DoorRefused(
+                    f"venue agreement {venue_agreement_ref!r} is not "
+                    f"registered and active for venue {venue_id!r}"
+                )
         if active_door_consent(self.door_store, user_id) is None:
             raise DoorConsentRequired(
                 "no current door capture consent for this member "
@@ -225,15 +285,44 @@ class DoorPassService:
             challenges = generate_challenges(
                 self.rng, self.config.liveness_challenge_count
             )
+        anchor = facts["anchor"]
+        # Snapshot the evidentiary identity at creation: the
+        # profile, pack, bundle, authorization status, legal
+        # effect, venue, and agreement this transaction runs under.
+        # Finalization reads the snapshot, so an abort path record
+        # still names what the transaction was created under, even
+        # when the profile has since been downgraded or disabled.
         row = self.door_store.create_transaction(
             {
                 "user_id": user_id,
                 "venue_state": venue_state,
+                "venue_id": venue_id,
+                "venue_agreement_ref": venue_agreement_ref,
+                "session_initiated_by": session_initiated_by,
+                "session_staff_ref": staff_ref,
                 "purpose": purpose,
                 "flow_mode": flow,
                 "profile_version": decision.profile_version,
                 "profile_hash": decision.profile_hash,
                 "claim_keys": list(decision.claim_key_set),
+                "legal_effect": (
+                    decision.entry_legal_effect
+                    if purpose == "entry"
+                    else decision.alcohol_service_legal_effect
+                ),
+                "contract_pack_key": (
+                    f"{decision.contract_pack_key}:{venue_id}"
+                    if decision.contract_pack_key
+                    else None
+                ),
+                "proof_bundle_key": decision.proof_bundle_key,
+                "authorization_status": decision.authorization_status,
+                "enrollment_ref_hash": (
+                    self._ref_hash("enrollment", anchor) if anchor else None
+                ),
+                "enrollment_auth_summary_ref": (
+                    self._ref_hash("enrollment-auth", anchor) if anchor else None
+                ),
                 "status": (
                     "awaiting_capture"
                     if flow == RELIANCE_BIOMETRIC
@@ -243,11 +332,20 @@ class DoorPassService:
                 "created_at": now,
             }
         )
+        self.door_store.update_transaction(
+            row["id"],
+            biometric_ref_hash=(
+                self._ref_hash("door-txn", row["id"], anchor or "")
+                if flow == RELIANCE_BIOMETRIC
+                else None
+            ),
+        )
         return TransactionView(
             id=row["id"],
             flow_mode=flow,
             purpose=purpose,
             venue_state=venue_state,
+            venue_id=venue_id,
             profile_version=decision.profile_version,
             profile_hash=decision.profile_hash,
             challenges=challenges,
@@ -258,15 +356,14 @@ class DoorPassService:
     def _finalize(
         self,
         txn: dict,
-        decision: ProfileDecision,
         *,
         result: str,
         failure_class: str | None,
         decision_code: str,
         match_band: str | None = None,
+        match_score: float | None = None,
+        match_threshold: float | None = None,
         liveness_active_ok: bool | None = None,
-        biometric_ref_hash: str | None = None,
-        enrollment_ref_hash: str | None = None,
         age_result: str | None = None,
     ) -> DoorResult:
         claim_keys = tuple(txn["claim_keys"])
@@ -274,26 +371,41 @@ class DoorPassService:
             {
                 "transaction_id": txn["id"],
                 "venue_state_code": txn["venue_state"],
+                "venue_id": txn["venue_id"],
+                "venue_agreement_ref": txn["venue_agreement_ref"],
+                "session_initiated_by": txn["session_initiated_by"],
+                "session_staff_ref": txn["session_staff_ref"],
                 "state_profile_id": (f"{txn['venue_state']}-v{txn['profile_version']}"),
                 "state_profile_version": txn["profile_version"],
                 "state_profile_hash": txn["profile_hash"],
                 "purpose": txn["purpose"],
                 "flow_mode": txn["flow_mode"],
-                "legal_effect": decision.entry_legal_effect,
+                "legal_effect": txn["legal_effect"],
                 "result": result,
                 "failure_class": failure_class,
                 "decision_code": decision_code,
                 "match_band": match_band,
+                # Server side evidence only (TW-672 Section 4.3
+                # item 5): the preserved record carries the score,
+                # the threshold in force, and the engine version.
+                # None of the three ever crosses to a venue surface.
+                "match_score": match_score,
+                "match_threshold": match_threshold,
+                "engine_version": ENGINE_VERSION,
                 "liveness_active_ok": liveness_active_ok,
-                "biometric_transaction_ref_hash": biometric_ref_hash,
-                "enrollment_ref_hash": enrollment_ref_hash,
+                "biometric_transaction_ref_hash": txn["biometric_ref_hash"],
+                "enrollment_ref_hash": txn["enrollment_ref_hash"],
+                "enrollment_auth_summary_ref": txn["enrollment_auth_summary_ref"],
                 "claim_keys": list(claim_keys),
                 "claim_key_set_hash": hashlib.sha256(
                     ",".join(sorted(claim_keys)).encode("utf-8")
                 ).hexdigest(),
-                "contract_pack_key": decision.contract_pack_key,
-                "proof_bundle_key": decision.proof_bundle_key,
-                "authorization_status_at_scan": decision.authorization_status,
+                "contract_pack_key": txn["contract_pack_key"],
+                "proof_bundle_key": txn["proof_bundle_key"],
+                "authorization_status_at_scan": txn["authorization_status"],
+                # Recorded when the venue acts on the result, via
+                # record_staff_action (TW-672 Section 4.3 item 7).
+                "staff_action": None,
                 "created_at": self.clock().isoformat(),
             }
         )
@@ -307,9 +419,22 @@ class DoorPassService:
             scan_id=scan["id"],
             claim_keys=claim_keys,
             age_result=age_result,
-            legal_effect=decision.entry_legal_effect,
+            legal_effect=txn["legal_effect"],
             profile_version=txn["profile_version"],
         )
+
+    def record_staff_action(self, scan_id: str, action: str) -> dict:
+        """Record what venue staff did with a result (served,
+        admitted, fell back to physical ID, denied) on its scan
+        record, at the time they did it."""
+        if action not in STAFF_ACTIONS:
+            raise ValueError(
+                f"unknown staff action {action!r}; expected one of {STAFF_ACTIONS}"
+            )
+        scan = self.door_store.set_scan_staff_action(scan_id, action)
+        if scan is None:
+            raise ValueError(f"no door scan {scan_id!r}")
+        return scan
 
     def _ref_hash(self, *parts: str) -> str:
         return hashlib.sha256(":".join(parts).encode("utf-8")).hexdigest()
@@ -333,45 +458,45 @@ class DoorPassService:
         now = self.clock()
         decision = self.resolver.resolve(txn["venue_state"], now)
         facts = self._member_facts(txn["user_id"])
-        enrollment_ref = (
-            self._ref_hash("enrollment", facts["anchor"]) if facts["anchor"] else None
-        )
-        biometric_ref = self._ref_hash("door-txn", txn["id"], facts["anchor"] or "")
 
         if decision.mode in ("kill", "disabled") or (
             decision.profile_hash != txn["profile_hash"]
         ):
             # A downgrade mid transaction aborts it (TW-657 S4.3).
+            # The record finalizes from the creation snapshot, so it
+            # still names the profile and pack it ran under.
             return self._finalize(
                 txn,
-                decision,
                 result="unavailable",
                 failure_class="profile_changed",
                 decision_code="unavailable",
-                biometric_ref_hash=biometric_ref,
-                enrollment_ref_hash=enrollment_ref,
             )
         if active_door_consent(self.door_store, txn["user_id"]) is None:
             return self._finalize(
                 txn,
-                decision,
                 result="not_valid",
                 failure_class="consent_not_current",
                 decision_code="not_valid",
-                biometric_ref_hash=biometric_ref,
-                enrollment_ref_hash=enrollment_ref,
+            )
+        if txn["venue_agreement_ref"] is not None and not self._agreement_current(txn):
+            # Spec Section 8.3: the agreement binding is re-checked
+            # at scan finalization. No current agreement, no reliance
+            # record for that venue.
+            return self._finalize(
+                txn,
+                result="not_valid",
+                failure_class="agreement_not_current",
+                decision_code="not_valid",
             )
 
         ref = self.staging.put(image_bytes)
         try:
             return self._run_match(
                 txn,
-                decision,
                 facts=facts,
                 ref=ref,
                 frames=frames,
-                biometric_ref=biometric_ref,
-                enrollment_ref=enrollment_ref,
+                liveness_required=decision.liveness_required,
             )
         finally:
             # The door capture is destroyed on decision, every
@@ -381,13 +506,11 @@ class DoorPassService:
     def _run_match(
         self,
         txn: dict,
-        decision: ProfileDecision,
         *,
         facts: dict,
         ref: str,
         frames: list,
-        biometric_ref: str,
-        enrollment_ref: str | None,
+        liveness_required: bool,
     ) -> DoorResult:
         path = self.staging.local_path(ref)
         try:
@@ -397,43 +520,31 @@ class DoorPassService:
         except StageUnavailable:
             return self._finalize(
                 txn,
-                decision,
                 result="unavailable",
                 failure_class="stage_unavailable",
                 decision_code="unavailable",
-                biometric_ref_hash=biometric_ref,
-                enrollment_ref_hash=enrollment_ref,
             )
 
         if facts["banned"]:
             return self._finalize(
                 txn,
-                decision,
                 result="not_valid",
                 failure_class="banned_anchor",
                 decision_code="not_valid",
-                biometric_ref_hash=biometric_ref,
-                enrollment_ref_hash=enrollment_ref,
             )
         if face_count == 0:
             return self._finalize(
                 txn,
-                decision,
                 result="not_valid",
                 failure_class="no_face_captured",
                 decision_code="not_valid",
-                biometric_ref_hash=biometric_ref,
-                enrollment_ref_hash=enrollment_ref,
             )
         if face_count > 1:
             return self._finalize(
                 txn,
-                decision,
                 result="not_valid",
                 failure_class="multiple_faces",
                 decision_code="review",
-                biometric_ref_hash=biometric_ref,
-                enrollment_ref_hash=enrollment_ref,
             )
 
         template = json.loads(
@@ -450,7 +561,7 @@ class DoorPassService:
             failure, code = "face_no_match", "not_valid"
         elif band == "review":
             failure, code = "face_review_band", "review"
-        elif decision.liveness_required and not active_ok:
+        elif liveness_required and not active_ok:
             failure, code = "liveness_failed", "not_valid"
         elif passive is not None and passive < self.config.liveness_review_floor:
             # Passive liveness is one signal, never a sole gate in
@@ -460,26 +571,24 @@ class DoorPassService:
         else:
             return self._finalize(
                 txn,
-                decision,
                 result="valid",
                 failure_class=None,
                 decision_code="valid",
                 match_band=band,
+                match_score=similarity,
+                match_threshold=self.config.match_threshold,
                 liveness_active_ok=active_ok,
-                biometric_ref_hash=biometric_ref,
-                enrollment_ref_hash=enrollment_ref,
                 age_result="age_21_plus",
             )
         return self._finalize(
             txn,
-            decision,
             result="not_valid",
             failure_class=failure,
             decision_code=code,
             match_band=band,
+            match_score=similarity,
+            match_threshold=self.config.match_threshold,
             liveness_active_ok=active_ok,
-            biometric_ref_hash=biometric_ref,
-            enrollment_ref_hash=enrollment_ref,
         )
 
     # ----------------------------------------------------------------- lane
@@ -504,16 +613,26 @@ class DoorPassService:
         ):
             return self._finalize(
                 txn,
-                decision,
                 result="unavailable",
                 failure_class="profile_changed",
                 decision_code="unavailable",
+            )
+        if active_door_consent(self.door_store, txn["user_id"]) is None:
+            # Spec Section 6 states the consent double check without
+            # flow qualification: checked at creation and again at
+            # finalization, on the lane exactly as on reliance. The
+            # production lane shows a door photo per scan, which is
+            # the artifact this consent governs.
+            return self._finalize(
+                txn,
+                result="not_valid",
+                failure_class="consent_not_current",
+                decision_code="not_valid",
             )
         state = facts["state"]
         if not state or state.get("status") != "verified" or facts["banned"]:
             return self._finalize(
                 txn,
-                decision,
                 result="not_valid",
                 failure_class="standing_changed",
                 decision_code="not_valid",
@@ -524,7 +643,6 @@ class DoorPassService:
         # statements the profile was validated to hold.
         return self._finalize(
             txn,
-            decision,
             result="valid",
             failure_class=None,
             decision_code="valid",

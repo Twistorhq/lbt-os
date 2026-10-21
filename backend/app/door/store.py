@@ -1,10 +1,20 @@
 """Door Pass store: enrollments, door consents, scans (TW-671).
 
 Prototype in-memory shape of the dps_ tables TW-657 designs. The
-scan rows written here are the transaction evidence records: they
-carry references and hashes only. No raw image, no biometric
-template, no match score, no name, no birthdate ever lands in a
-scan row, by construction of the service that writes them.
+scan rows written here are the server side transaction evidence
+records. No raw image, no biometric template, no name, and no
+birthdate ever lands in a scan row, by construction of the service
+that writes them. The match score, the threshold in force, and the
+engine version DO land here, because TW-672 Section 4.3 item 5
+makes the preserved record the defense package; they are server
+side only and never cross to a venue facing surface, which
+receives verdicts and reference hashes only (TW-657 Section 2.1).
+
+The store also holds the venue agreement registry: the agreement
+reference under which Twistor operates the system for a venue
+(the seller agent agreement in North Carolina). A reliance
+transaction binds to one registered agreement for its venue at
+creation, and the binding is re-checked at finalization.
 
 Door consent is its own instrument. The onboarding biometric
 consent (vfy_consents, consent type biometric_capture) authorizes
@@ -35,6 +45,7 @@ class InMemoryDoorStore:
         self.consents: list[dict] = []
         self.transactions: dict[str, dict] = {}
         self.scans: list[dict] = []
+        self.venue_agreements: dict[str, dict] = {}
 
     # -- enrollments ---------------------------------------------------
 
@@ -90,6 +101,39 @@ class InMemoryDoorStore:
         row = {"id": uuid.uuid4().hex, **row}
         self.scans.append(row)
         return row
+
+    def set_scan_staff_action(self, scan_id: str, action: str) -> dict | None:
+        """Record the staff action taken on a result (TW-672
+        Section 4.3 item 7) on the scan it belongs to."""
+        for scan in self.scans:
+            if scan["id"] == scan_id:
+                scan["staff_action"] = action
+                return scan
+        return None
+
+    # -- venue agreements ----------------------------------------------
+
+    def register_venue_agreement(
+        self, agreement_ref: str, *, venue_id: str, state_code: str
+    ) -> dict:
+        """Register the agreement under which Twistor operates the
+        system for one venue (the seller agent agreement in NC)."""
+        row = {
+            "agreement_ref": agreement_ref,
+            "venue_id": venue_id,
+            "state_code": state_code,
+            "status": "active",
+        }
+        self.venue_agreements[agreement_ref] = row
+        return row
+
+    def get_venue_agreement(self, agreement_ref: str) -> dict | None:
+        return self.venue_agreements.get(agreement_ref)
+
+    def revoke_venue_agreement(self, agreement_ref: str) -> None:
+        agreement = self.venue_agreements.get(agreement_ref)
+        if agreement is not None:
+            agreement["status"] = "revoked"
 
 
 def grant_door_consent(
