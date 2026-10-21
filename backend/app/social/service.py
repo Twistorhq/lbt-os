@@ -1,4 +1,4 @@
-"""TW-650/TW-660 Twistor Social — service layer.
+"""TW-650/TW-660 Twistor Social: service layer.
 
 Phase 4 core loop (TW-660) is implemented here: groups, events,
 recurring series, RSVPs, and the location reveal, over the merged

@@ -1,4 +1,4 @@
-"""TW-650 Twistor Social (RSN) — groups-first social product with a
+"""TW-650 Twistor Social (RSN): groups-first social product with a
 verified-identity safety core (TW-646).
 
 Phase 3 skeleton landed the fail-loud models, pure trust/geo/safety

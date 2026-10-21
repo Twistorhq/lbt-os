@@ -1,4 +1,4 @@
-"""TW-650 Twistor Social — fail-loud Pydantic models.
+"""TW-650 Twistor Social: fail-loud Pydantic models.
 
 These mirror the rsn_ schema contract (spec Section 4 + the TW-648
 fix-round deltas). Fail-loud rules:
@@ -25,7 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from . import geo
 
-# Enum vocabularies — kept in lockstep with the CHECK constraints in
+# Enum vocabularies, kept in lockstep with the CHECK constraints in
 # supabase/migration_social_v1.sql and migration_verify_v1.sql.
 AGE_BANDS = ("under_16", "age_16_17", "age_18_20", "age_21_plus")
 MIN_AGE_BANDS = ("age_16_plus", "age_18_plus", "age_21_plus")

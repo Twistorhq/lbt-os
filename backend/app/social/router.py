@@ -1,4 +1,4 @@
-"""TW-650/TW-660 Twistor Social — HTTP API.
+"""TW-650/TW-660 Twistor Social: HTTP API.
 
 Routes are live and authenticated. TW-660 implemented the core loop
 (groups, events, series, RSVPs, location reveal, gold listings);
@@ -9,7 +9,7 @@ work.
 Auth: Twistor Identity JWT (RS256), verified through the identity
 service exactly as Telemetry does. The member's user_id is the token
 subject; it is never taken from a request body. Ghost-town scopes
-(no passed T2 verdict, no voice — spec Section 5.11) are enforced in
+(no passed T2 verdict, no voice; spec Section 5.11) are enforced in
 the service layer, which re-reads verification state per request;
 token minting keeps its own scope discipline Identity-side.
 

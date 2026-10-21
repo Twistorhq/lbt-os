@@ -1,4 +1,4 @@
-"""TW-660 Twistor Social core loop (Phase 4, first slice) — TDD.
+"""TW-660 Twistor Social core loop (Phase 4, first slice): TDD.
 
 Service-layer behavior over the merged rsn_ schema (TW-650) plus the
 TW-651 gold index, with the TW-646 spec's cross-cutting rules enforced
