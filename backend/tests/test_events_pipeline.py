@@ -348,6 +348,137 @@ def test_publish_removes_cancelled_from_gold():
     assert store.gold_rows() == []
 
 
+# ------------------------------------------------------------------
+# Fix round (Rosa TW-651 review): m1 vanish freshness, m2 fingerprint
+# pinning, m3 key-only dead letters.
+# ------------------------------------------------------------------
+
+EMPTY_ICS = "BEGIN:VCALENDAR\nVERSION:2.0\nEND:VCALENDAR\n"
+
+
+def _tribe_market_source(**overrides) -> SourceConfig:
+    base = dict(
+        id="src-rino",
+        name="RiNo Art District",
+        kind="api",
+        connector="tribe_events",
+        terms_posture="index_facts",
+        attribution_label="RiNo Art District",
+        feed_url="https://thisisrinodenver.com/wp-json/tribe/events/v1/events",
+        config={},
+    )
+    base.update(overrides)
+    return SourceConfig(**base)
+
+
+def test_non_full_sync_co_carrier_does_not_suppress_vanish_cancellation():
+    # m1: the Tribe co-carrier is NOT full-sync, so it never maintains
+    # missed_syncs. Its staleness must be judged by last_seen_at, or
+    # its mere presence suppresses the vanish cancellation forever.
+    store = MemoryStore()
+    store.add_source(_source())  # ICS, full_sync
+    store.add_source(_tribe_market_source())  # not full-sync
+    feeds = {
+        "ics_generic": lambda s: MARKET_ICS,
+        "tribe_events": lambda s: json.dumps(MARKET_TRIBE),
+    }
+    pipe = _pipeline(store, feeds)
+    pipe.run_source("src-dpl", NOW)
+    pipe.run_source("src-rino", NOW)
+    assert len(store.all_listings()) == 1
+    empty = _pipeline(store, {"ics_generic": lambda s: EMPTY_ICS})
+    empty.run_source("src-dpl", NOW + timedelta(days=8))
+    listing = store.all_listings()[0]
+    assert listing.status == "active", "one missed sync is still a flake"
+    empty.run_source("src-dpl", NOW + timedelta(days=8, hours=6))
+    listing = store.all_listings()[0]
+    assert listing.status == "cancelled"
+    assert listing.tombstone_until is not None
+
+
+def test_co_carrier_suppression_follows_last_seen_freshness():
+    # m1, the other direction: while the co-carrier IS fresh under
+    # the gate ceiling it still suppresses the cancellation; once its
+    # last_seen_at ages past the ceiling, it stops suppressing.
+    store = MemoryStore()
+    store.add_source(_source())
+    store.add_source(_tribe_market_source())
+    feeds = {
+        "ics_generic": lambda s: MARKET_ICS,
+        "tribe_events": lambda s: json.dumps(MARKET_TRIBE),
+    }
+    pipe = _pipeline(store, feeds)
+    pipe.run_source("src-dpl", NOW)
+    pipe.run_source("src-rino", NOW)
+    empty = _pipeline(store, {"ics_generic": lambda s: EMPTY_ICS})
+    empty.run_source("src-dpl", NOW + timedelta(hours=6))
+    pipe.run_source("src-rino", NOW + timedelta(hours=11))  # co-carrier re-seen
+    empty.run_source("src-dpl", NOW + timedelta(hours=12))
+    listing = store.all_listings()[0]
+    assert listing.status == "active", "a fresh co-carrier still carries it"
+    empty.run_source("src-dpl", NOW + timedelta(days=8))
+    listing = store.all_listings()[0]
+    assert listing.status == "cancelled"
+
+
+def test_lower_authority_variant_does_not_move_fingerprint():
+    # m2: the ICS pipe re-spells the venue (no GEO, longer street
+    # name), which computes a different fingerprint variant. Its
+    # facts are not taken (the API pipe is the display source), so
+    # the listing's fingerprint must stay pinned to the display
+    # source's variant instead of oscillating between the two.
+    store = MemoryStore()
+    store.add_source(_tribe_market_source())
+    store.add_source(_source(config={"default_timezone": "America/Denver"}))
+    pipe = _pipeline(store, {"tribe_events": lambda s: json.dumps(MARKET_TRIBE)})
+    pipe.run_source("src-rino", NOW)
+    pipe2 = _pipeline(store, {"ics_generic": lambda s: MARKET_ICS})
+    pipe2.run_source("src-dpl", NOW)
+    listings = store.all_listings()
+    assert len(listings) == 1
+    pinned = listings[0].fingerprint
+    pinned_venue_id = listings[0].venue_id
+    variant = MARKET_ICS.replace(
+        "LOCATION:Mercado Hall\\, 2901 Inca St\\, Denver\\, CO\n"
+        "GEO:39.75891;-104.99988\n",
+        "LOCATION:Mercado Hall\\, 2901 Inca Street\\, Denver\\, Colorado\n",
+    )
+    assert variant != MARKET_ICS
+    pipe3 = _pipeline(store, {"ics_generic": lambda s: variant})
+    pipe3.run_source("src-dpl", NOW + timedelta(hours=6))
+    listings = store.all_listings()
+    assert len(listings) == 1
+    assert listings[0].fingerprint == pinned
+    assert listings[0].venue_id == pinned_venue_id
+
+
+def test_dead_letter_payload_is_key_only_for_feed_items():
+    # m3: a poison JSON item whose early keys carry never-store
+    # content must dead-letter as its item key and nothing else; the
+    # persisted payload can never contain item content.
+    poison = {
+        "id": "poison-7",
+        "description": "quixotic-lynx-marker expression that must not persist",
+        "title": "Broken Event",
+        "status": "publish",
+    }
+    feed = {"events": [poison, MARKET_TRIBE["events"][0]]}
+    store = MemoryStore()
+    store.add_source(_tribe_market_source())
+    pipe = _pipeline(store, {"tribe_events": lambda s: json.dumps(feed)})
+    report = pipe.run_source("src-rino", NOW)
+    assert report.dead_lettered == 1
+    assert len(store.dead_letters) == 1
+    letter = store.dead_letters[0]
+    assert letter["source_item_key"] == "poison-7"
+    payload_text = str(letter["payload"])
+    assert "poison-7" in payload_text
+    assert "quixotic-lynx-marker" not in payload_text
+    assert "description" not in payload_text
+    # The run's persisted DLQ summary carries the same key-only shape.
+    assert "quixotic-lynx-marker" not in json.dumps(store.runs, default=str)
+
+
 def test_organizer_only_ingests_but_never_publishes():
     store = MemoryStore()
     store.add_source(_source(terms_posture="organizer_only"))

@@ -162,3 +162,78 @@ def test_split_vevents_supports_per_item_isolation(source):
     for block in blocks:
         reparsed.extend(ics.parse_vevent(block, source, NOW))
     assert len(reparsed) == len(good)
+
+
+# ------------------------------------------------------------------
+# Fix round (Rosa TW-651 review): M1 never-store contract, n1 location
+# ------------------------------------------------------------------
+
+CONTACT_VEVENT = """BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:hosted-1@example.org
+DTSTART;TZID=America/Denver:20261028T190000
+DTEND;TZID=America/Denver:20261028T210000
+SUMMARY:Hosted Gathering
+ORGANIZER;CN=Jane Host:mailto:jane.host@example.org
+CONTACT:Questions\\, jane.host@example.org\\, 303-555-1212
+ATTENDEE;CN=Bob Guest;RSVP=TRUE:mailto:bob.guest@example.org
+END:VEVENT
+END:VCALENDAR
+"""
+
+CONTACT_MARKERS = (
+    "ORGANIZER",
+    "CONTACT",
+    "ATTENDEE",
+    "mailto",
+    "Jane Host",
+    "jane.host@example.org",
+    "bob.guest@example.org",
+    "303-555-1212",
+)
+
+
+def test_organizer_contact_attendee_never_reach_bronze_or_silver(source):
+    # Fixture-independent contract (Rosa M1): a VEVENT carrying
+    # ORGANIZER, CONTACT, and ATTENDEE lines is built inline here, so
+    # the never-store line (spec 10.6) cannot slip through on a
+    # fixture that happens to lack those properties again.
+    events = ics.parse_ics(CONTACT_VEVENT, source, NOW)
+    assert len(events) == 1
+    e = events[0]
+    assert e.bronze_payload is not None
+    for marker in CONTACT_MARKERS:
+        assert marker not in e.bronze_payload, f"{marker} reached bronze"
+        assert marker not in repr(e), f"{marker} reached silver"
+    assert e.source_organizer_ref is None
+
+
+def _one_event_with_location(source, location: str):
+    text = (
+        "BEGIN:VCALENDAR\nVERSION:2.0\nBEGIN:VEVENT\nUID:loc-1@example.org\n"
+        "DTSTART;TZID=America/Denver:20261028T190000\n"
+        "DTEND;TZID=America/Denver:20261028T210000\n"
+        "SUMMARY:Location Mapping\n"
+        f"LOCATION:{location}\n"
+        "END:VEVENT\nEND:VCALENDAR\n"
+    )
+    return ics.parse_ics(text, source, NOW)[0]
+
+
+def test_location_three_part_venue_city_state(source):
+    # "Venue, City, ST ZIP": the city belongs in the city slot, and no
+    # street was published, so the street slot stays empty (Rosa n1).
+    e = _one_event_with_location(source, "Mercado Hall\\, Denver\\, CO 80204")
+    assert e.venue.name == "Mercado Hall"
+    assert e.venue.city == "Denver"
+    assert e.venue.street_address is None
+
+
+def test_location_three_part_street_city_state(source):
+    # "Street, City, ST ZIP": a street-shaped first part (it carries a
+    # house number) is the street, not a venue name.
+    e = _one_event_with_location(source, "2901 Inca St\\, Denver\\, CO 80204")
+    assert e.venue.street_address == "2901 Inca St"
+    assert e.venue.city == "Denver"
+    assert e.venue.name is None

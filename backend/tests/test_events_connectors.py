@@ -125,3 +125,100 @@ def test_tribe_never_stores_description_or_image(tribe_source):
         bronze_text = json.dumps(e.bronze_payload).lower()
         assert "description" not in bronze_text
         assert "image" not in bronze_text
+
+
+# ------------------------------------------------------------------
+# Fix round (Rosa TW-651 review): M1 audit of the JSON boundary.
+# Contact data hides under compound keys (organizer_phone,
+# contact_email) as often as under the exact keys; the boundary must
+# catch the whole class, not a list of spellings.
+# ------------------------------------------------------------------
+
+
+def test_localist_compound_contact_keys_never_reach_bronze(localist_source):
+    payload = {
+        "events": [
+            {
+                "event": {
+                    "id": 777,
+                    "name": "Contact Key Audit Night",
+                    "status": "live",
+                    "localist_url": "https://calendar.ucdenver.edu/event/777",
+                    "address": "1201 Larimer St, Denver",
+                    "organizer_email": "host@example.edu",
+                    "organizer_phone": "303-555-0100",
+                    "contact_email": "rsvp@example.edu",
+                    "venue_phone": "303-555-0101",
+                    "telephone": "303-555-0102",
+                    "event_instances": [
+                        {
+                            "event_instance": {
+                                "id": 1,
+                                "start": "2026-10-29T17:30:00Z",
+                                "end": "2026-10-29T19:00:00Z",
+                            }
+                        }
+                    ],
+                }
+            }
+        ]
+    }
+    events = localist.parse_localist(payload, localist_source, NOW)
+    assert len(events) == 1
+    bronze_text = json.dumps(events[0].bronze_payload).lower()
+    for marker in (
+        "organizer_phone",
+        "contact_email",
+        "venue_phone",
+        "telephone",
+        "host@example.edu",
+        "rsvp@example.edu",
+        "303-555-0100",
+        "303-555-0101",
+        "303-555-0102",
+    ):
+        assert marker not in bronze_text, f"{marker} reached bronze"
+
+
+def test_tribe_organizer_contact_never_reaches_bronze(tribe_source):
+    payload = {
+        "events": [
+            {
+                "id": 555,
+                "title": "Organizer Contact Audit",
+                "status": "publish",
+                "url": "https://example.org/event/555",
+                "start_date": "2026-10-30 19:00:00",
+                "end_date": "2026-10-30 21:00:00",
+                "utc_start_date": "2026-10-31 01:00:00",
+                "utc_end_date": "2026-10-31 03:00:00",
+                "timezone": "America/Denver",
+                "contact_phone": "303-555-0199",
+                "organizer": [
+                    {
+                        "id": 9,
+                        "organizer": "Audit Hosts",
+                        "phone": "303-555-0198",
+                        "email": "hosts@example.org",
+                        "website": "https://example.org",
+                    }
+                ],
+                "venue": {},
+                "categories": [],
+            }
+        ]
+    }
+    events = tribe.parse_tribe(payload, tribe_source, NOW)
+    assert len(events) == 1
+    e = events[0]
+    # The published display name is the organizer ref; contact details
+    # riding the same object are not.
+    assert e.source_organizer_ref == "Audit Hosts"
+    bronze_text = json.dumps(e.bronze_payload).lower()
+    for marker in (
+        "contact_phone",
+        "303-555-0199",
+        "303-555-0198",
+        "hosts@example.org",
+    ):
+        assert marker not in bronze_text, f"{marker} reached bronze"
