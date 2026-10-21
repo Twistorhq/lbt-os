@@ -1,0 +1,284 @@
+/**
+ * Twistor Social component styles (TW-652).
+ * Components consume the --soc-* tokens only; no hex is hardcoded here.
+ * Token source: frontend/design-system/social/tokens.css (the Social
+ * design foundation). Schemes switch on [data-social-scheme]; the
+ * consent flow is a day-scheme surface (pattern 01: it happens at home,
+ * in daylight, before the first night out).
+ *
+ * Prepared by Twistor Holdings LLC
+ */
+@import '../../../design-system/social/tokens.css';
+
+.soc-screen {
+  background: var(--soc-canvas);
+  color: var(--soc-ink);
+  font-family: var(--soc-font-body);
+  font-size: var(--soc-text-body);
+  line-height: 1.5;
+  min-height: 100%;
+  padding: 24px var(--soc-thumb-pad) var(--soc-action-bar-clearance);
+  box-sizing: border-box;
+}
+
+.soc-screen__inner {
+  max-width: 560px;
+  margin: 0 auto;
+}
+
+.soc-step {
+  color: var(--soc-ink-dim);
+  font-size: var(--soc-text-caption);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin: 0 0 8px;
+}
+
+.soc-badge-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--soc-accent);
+  font-weight: 600;
+  font-size: var(--soc-text-lede);
+  margin: 0 0 12px;
+}
+
+.soc-badge-line svg {
+  flex: none;
+}
+
+.soc-title {
+  font-family: var(--soc-font-display);
+  font-size: var(--soc-text-title);
+  font-weight: 600;
+  line-height: 1.2;
+  margin: 0 0 12px;
+}
+
+.soc-lede {
+  font-size: var(--soc-text-lede);
+  margin: 0 0 24px;
+}
+
+.soc-body {
+  margin: 0 0 16px;
+}
+
+.soc-body--dim {
+  color: var(--soc-ink-dim);
+}
+
+.soc-section-title {
+  font-size: var(--soc-text-lede);
+  font-weight: 700;
+  margin: 28px 0 8px;
+}
+
+/* Fact and schedule rows: label in ink, explanation below. Rows sit on
+   the canvas; the schedule screen groups them on a Crema surface. */
+.soc-fact {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--soc-line);
+}
+
+.soc-fact:last-child {
+  border-bottom: none;
+}
+
+.soc-fact__label {
+  font-weight: 700;
+  margin: 0 0 4px;
+}
+
+.soc-fact__text {
+  color: var(--soc-ink-dim);
+  margin: 0;
+}
+
+.soc-panel {
+  background: var(--soc-surface);
+  border-radius: var(--soc-radius-card);
+  padding: 4px 20px;
+  margin: 0 0 8px;
+}
+
+.soc-panel .soc-fact__text {
+  /* Muted Clay on Crema: 4.74 to 1, AA (computed 2026-10-20). */
+  color: var(--soc-ink-dim);
+}
+
+.soc-link {
+  color: var(--soc-accent);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.soc-link:focus-visible,
+.soc-btn:focus-visible,
+.soc-attest input:focus-visible {
+  outline: none;
+  box-shadow: var(--soc-focus-ring);
+  border-radius: 6px;
+}
+
+/* Attestation: the written-release equivalent (TW-654 Section 1.4,
+   item 1a). A real checkbox, unchecked by default, in a thumb-height
+   row; the grant button stays disabled until it is checked. */
+.soc-attest {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  min-height: var(--soc-touch-primary);
+  padding: 14px 0;
+  cursor: pointer;
+}
+
+.soc-attest input {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  margin: 2px 0 0;
+  accent-color: var(--soc-action);
+}
+
+.soc-version-line {
+  color: var(--soc-ink-dim);
+  font-size: var(--soc-text-caption);
+  margin: 16px 0 0;
+}
+
+/* Bottom action bar (pattern 00): one filled primary, one text-weight
+   secondary. The decline action is always rendered, always labeled,
+   never hidden behind a menu or a greyed state. */
+.soc-action-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--soc-canvas);
+  border-top: 1px solid var(--soc-line);
+  padding: 12px var(--soc-thumb-pad) calc(12px + env(safe-area-inset-bottom));
+  box-sizing: border-box;
+  z-index: 20;
+}
+
+.soc-action-bar__inner {
+  max-width: 560px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.soc-btn {
+  font-family: var(--soc-font-body);
+  font-size: var(--soc-text-body);
+  border: none;
+  cursor: pointer;
+  border-radius: var(--soc-radius-card);
+  transition: opacity var(--soc-motion-fast) var(--soc-ease);
+}
+
+.soc-btn--primary {
+  background: var(--soc-action);
+  color: var(--soc-action-text);
+  font-weight: 700;
+  min-height: var(--soc-touch-primary);
+  padding: 0 24px;
+  width: 100%;
+}
+
+.soc-btn--primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.soc-btn--text {
+  background: transparent;
+  color: var(--soc-accent);
+  font-weight: 600;
+  min-height: var(--soc-touch-min);
+  padding: 0 16px;
+  align-self: center;
+}
+
+/* State banner: icon shape plus words, never color alone (pattern 00). */
+.soc-banner {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  border-radius: var(--soc-radius-card);
+  padding: 16px 20px;
+  margin: 0 0 20px;
+}
+
+.soc-banner svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.soc-banner--valid {
+  background: var(--soc-valid);
+  color: var(--soc-valid-text);
+}
+
+.soc-banner--caution {
+  background: var(--soc-surface);
+  color: var(--soc-ink);
+  border: 1.5px solid var(--soc-caution);
+}
+
+.soc-banner__text {
+  margin: 0;
+  font-weight: 600;
+}
+
+/* Age band chip (pattern 00, SocBandChip): exactly three variants.
+   There is deliberately no variant for restriction or sanction state:
+   punishment is never displayed anywhere in the product. */
+.soc-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 8px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: var(--soc-text-caption);
+}
+
+.soc-chip--glance {
+  min-height: 36px;
+  padding: 0 14px;
+  font-size: 1rem;
+}
+
+.soc-chip--21 {
+  background: var(--soc-chip-21-bg);
+  color: var(--soc-chip-21-text);
+}
+
+.soc-chip--18 {
+  background: var(--soc-chip-18-bg);
+  color: var(--soc-chip-18-text);
+  border: 1.5px solid var(--soc-chip-18-line);
+}
+
+.soc-chip--teen {
+  background: transparent;
+  color: var(--soc-chip-teen-text);
+  border: 1.5px solid var(--soc-chip-teen-line);
+}
+
+.soc-approved-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 0 0 12px;
+}
