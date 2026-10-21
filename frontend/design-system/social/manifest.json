@@ -1,0 +1,30 @@
+{
+  "brandContract": "./README.md",
+  "colorScheme": "Arroz con Leche day scheme (warm paper, ink, indigo-violet structure) + Medianoche venue scheme (near-black, boosted type) for door, live session, and verify surfaces",
+  "description": "Twistor Social design-system package (TW-652): mobile-first member surfaces on Astryx with shared Twistor brand tokens. Pattern shape mirrors the Twistor Trades package (TW-175). Prepared by Twistor Holdings LLC.",
+  "name": "twistor-social",
+  "parentTokens": "../tokens.css",
+  "patterns": [
+    "patterns/00-mobile-primitives.md",
+    "patterns/01-verification-capture.md",
+    "patterns/02-ghost-town.md",
+    "patterns/03-feed-celebrations.md",
+    "patterns/04-event-rsvp.md",
+    "patterns/05-checkin-loop.md",
+    "patterns/06-standing-rewards.md",
+    "patterns/07-door-pass.md",
+    "patterns/08-operator-desktop.md",
+    "patterns/09-close-friends-home.md"
+  ],
+  "specs": [
+    "TW-646",
+    "TW-647",
+    "twistor-social-reward-catalog"
+  ],
+  "tokens": "./tokens.css",
+  "typography": {
+    "body": "Inter, system-ui, sans-serif",
+    "display": "\"Fraunces\", Georgia, serif"
+  },
+  "version": "0.1.0"
+}
