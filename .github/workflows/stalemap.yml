@@ -1,0 +1,47 @@
+# TW-668 PROPOSAL (Jalen, DevEx) - not yet approved for merge.
+# Prepared by Twistor Holdings LLC.
+#
+# Purpose: keep the stalemap block in frontend/AGENTS.md fresh. The job
+# fails when dependency pins change after the coding model's training
+# cutoff without a `stalemap sync`, so agents never silently code
+# against stale APIs. Uses the upstream GitHub Action from
+# Umair/stalemap (MIT, Copyright (c) 2026 Umair Ejaz and stalemap
+# contributors). The action's own code is pinned by full commit SHA
+# in the step below; the npm tool it downloads is pinned by the
+# `version` input (0.4.1, the version we run locally).
+#
+# Apply: merge this file as-is. No secrets needed in check mode.
+# Refresh flow when it fails: run
+#   cd frontend && npx stalemap@0.4.1 sync --model claude-sonnet-4-5 --all
+# and commit the updated frontend/AGENTS.md.
+name: stalemap
+
+# Check mode writes nothing; it only reads the checkout.
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    paths:
+      - "frontend/package.json"
+      - "frontend/package-lock.json"
+      - "frontend/AGENTS.md"
+  push:
+    branches: [main]
+    paths:
+      - "frontend/package.json"
+      - "frontend/package-lock.json"
+      - "frontend/AGENTS.md"
+
+jobs:
+  stalemap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Umair/stalemap@e3eb54bfde3f27875188f51a3bfb46bd0b27e306 # main 2026-10-21
+        with:
+          mode: check
+          model: claude-sonnet-4-5
+          working-directory: frontend
+          args: --all
+          version: 0.4.1
