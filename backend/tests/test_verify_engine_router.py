@@ -86,6 +86,7 @@ class TestRoutes:
         }
         assert ("POST", "/verify/sessions") in found
         assert ("POST", "/verify/sessions/{session_id}/document") in found
+        assert ("POST", "/verify/sessions/{session_id}/liveness") in found
         assert ("POST", "/verify/sessions/{session_id}/selfie") in found
         assert ("GET", "/verify/sessions/{session_id}") in found
         assert ("POST", "/verify/anchors/lookup") in found
@@ -133,7 +134,13 @@ class TestVerdictFlow:
         )
         assert doc.status_code == 200
 
-        challenges = pipeline.begin_liveness(session_id)
+        # Challenges come from the HTTP surface (Rosa's M8): a real
+        # client has no out-of-band pipeline to ask.
+        live = client.post(f"/api/v1/verify/sessions/{session_id}/liveness")
+        assert live.status_code == 200
+        challenges = live.json()["challenges"]
+        assert len(challenges) == 3
+
         from tests.test_verify_engine_pipeline import _frames_for
 
         selfie = client.post(
@@ -167,3 +174,119 @@ class TestVerdictFlow:
         )
         assert resp.status_code == 200
         assert resp.json() == {"exists": False, "banned": False}
+
+
+def _app_for(pipeline, sub: str) -> FastAPI:
+    """An app over an existing pipeline, authenticated as `sub`."""
+    app = FastAPI()
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    app.include_router(verify_router.router, prefix="/api/v1")
+    app.dependency_overrides[get_db] = lambda: MagicMock()
+    app.dependency_overrides[verify_router.get_pipeline] = lambda: pipeline
+    app.dependency_overrides[verify_router._verified_claims] = lambda: {"sub": sub}
+    return app
+
+
+class TestOwnership:
+    def test_verdict_read_and_liveness_require_ownership(self, app_on):
+        from app.verify.engine.consent import grant_consent
+        from tests.test_verify_engine_pipeline import (
+            AMA_DOC,
+            AMA_SELFIE,
+            _frames_for,
+        )
+
+        pipeline = app_on.state.test_pipeline
+        grant_consent(pipeline.store, USER, "passport")
+        client = TestClient(app_on, raise_server_exceptions=False)
+        created = client.post(
+            "/api/v1/verify/sessions", json={"document_type": "passport"}
+        )
+        session_id = created.json()["verification_id"]
+        assert (
+            client.post(
+                f"/api/v1/verify/sessions/{session_id}/document",
+                json={"image_b64": _b64(AMA_DOC)},
+            ).status_code
+            == 200
+        )
+        live = client.post(f"/api/v1/verify/sessions/{session_id}/liveness")
+        selfie = client.post(
+            f"/api/v1/verify/sessions/{session_id}/selfie",
+            json={
+                "image_b64": _b64(AMA_SELFIE),
+                "frames": _frames_for(live.json()["challenges"]),
+            },
+        )
+        assert selfie.json()["status"] == "passed"
+
+        # A second member, same pipeline: the verdict (age band
+        # included) is not theirs to read (Rosa's M7 probe), and
+        # liveness on their session is refused the same way.
+        other = TestClient(_app_for(pipeline, "u-kofi"), raise_server_exceptions=False)
+        assert other.get(f"/api/v1/verify/sessions/{session_id}").status_code == 403
+        assert (
+            other.post(f"/api/v1/verify/sessions/{session_id}/liveness").status_code
+            == 403
+        )
+        # The owner still reads it fine.
+        assert client.get(f"/api/v1/verify/sessions/{session_id}").status_code == 200
+
+
+class TestSessionCreateRefs:
+    def test_device_and_network_refs_reach_velocity(self, app_on):
+        from app.verify.engine.consent import grant_consent
+        from tests.test_verify_engine_pipeline import (
+            AMA_DOC,
+            AMA_SELFIE,
+            _frames_for,
+        )
+
+        pipeline = app_on.state.test_pipeline
+        grant_consent(pipeline.store, USER, "passport")
+        client = TestClient(app_on, raise_server_exceptions=False)
+        created = client.post(
+            "/api/v1/verify/sessions",
+            json={
+                "document_type": "passport",
+                "device_ref": "dev-hash-1",
+                "network_ref": "net-hash-1",
+            },
+        )
+        session_id = created.json()["verification_id"]
+        client.post(
+            f"/api/v1/verify/sessions/{session_id}/document",
+            json={"image_b64": _b64(AMA_DOC)},
+        )
+        live = client.post(f"/api/v1/verify/sessions/{session_id}/liveness")
+        client.post(
+            f"/api/v1/verify/sessions/{session_id}/selfie",
+            json={
+                "image_b64": _b64(AMA_SELFIE),
+                "frames": _frames_for(live.json()["challenges"]),
+            },
+        )
+        # m2: two of the three velocity dimensions were silently
+        # dead over HTTP. The refs are pre-hashed by the caller;
+        # the service never sees a raw identifier.
+        kinds = {a.kind for a in pipeline.store.attempts}
+        assert {"document", "device", "network"} <= kinds
+
+
+class TestPipelineFactory:
+    def test_flag_off_without_keys_answers_403_not_500(self, monkeypatch):
+        from fastapi import HTTPException
+
+        for var in (
+            "VFY_TEMPLATE_KEY_B64",
+            "VFY_HMAC_KEY",
+            "VFY_PRODUCTION_CAPTURE_ENABLED",
+        ):
+            monkeypatch.delenv(var, raising=False)
+        # m3: the flag refusal must run ahead of key material, so a
+        # flag-off deployment answers the honest 403 even before
+        # its keys are provisioned.
+        with pytest.raises(HTTPException) as excinfo:
+            verify_router.get_pipeline(db=MagicMock())
+        assert excinfo.value.status_code == 403

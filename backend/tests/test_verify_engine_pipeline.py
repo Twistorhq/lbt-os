@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 import pytest
 
 from app.verify.benchmark.documents import mrz_check_digit
-from app.verify.benchmark.stages import parse_mrz_lines
+from app.verify.benchmark.stages import StageUnavailable, parse_mrz_lines
 from app.verify.engine.config import EngineConfig
 from app.verify.engine.consent import (
     ConsentRequired,
@@ -455,3 +455,176 @@ class TestCrypto:
         assert enc.decrypt(blob) == b"template-bytes"
         with pytest.raises(Exception):
             enc.decrypt(blob[:-1] + b"\x00")
+
+
+# ------------------------------------------------------- fix round (Rosa)
+
+# OCR reads that isolate one missing field each. The document image
+# bytes stay AMA_DOC so the portrait embedding still resolves.
+
+
+class NoDobOcr(FakeOcr):
+    """A license whose birthdate no read can find (Rosa's M1 probe)."""
+
+    def extract_text(self, image_ref: str) -> list[str]:
+        return ["AMA SERWAA", "D1234567"]
+
+
+class NoNumberOcr(FakeOcr):
+    """A document with no readable number (Rosa's m4 shape)."""
+
+    def extract_text(self, image_ref: str) -> list[str]:
+        return ["AMA SERWAA"]
+
+
+class DetectDown:
+    """The partial-stack state: YuNet unconfigured (Rosa's M5 probe)."""
+
+    def detect(self, image_ref: str) -> list[tuple]:
+        raise StageUnavailable("face_detect: model not configured")
+
+
+class TestDecisionPathEdges:
+    def test_dob_less_government_document_reviews_and_destroys(self):
+        store, staging = InMemoryVerifyStore(), InMemoryStaging()
+        pipe = _pipeline(store=store, staging=staging, ports=_ports(ocr=NoDobOcr()))
+        grant_consent(store, "u-ama", "drivers_license")
+        session = pipe.start_session("u-ama", "drivers_license")
+        assert pipe.submit_document(session.id, "u-ama", AMA_DOC) == "document_received"
+        verdict = pipe.submit_selfie(session.id, "u-ama", AMA_SELFIE, _frames_for([]))
+        # No DOB, no pass: the age band is the product's core fact.
+        assert verdict.status == "review"
+        assert store.biometrics == []
+        assert store.age_attestations == []
+        # The decision discipline held on this path too.
+        assert staging.refs() == []
+        doc = store.documents[0]
+        assert doc["match_payload_encrypted"] is None
+        assert doc["image_destroyed_at"] == NOW
+        assert store.sessions[session.id]["status"] == "review"
+
+    def test_mid_session_withdrawal_blocks_the_pass(self):
+        store, staging = InMemoryVerifyStore(), InMemoryStaging()
+        pipe = _pipeline(store=store, staging=staging)
+        grant_consent(store, "u-ama", "passport")
+        session = pipe.start_session("u-ama", "passport")
+        pipe.submit_document(session.id, "u-ama", AMA_DOC)
+        withdraw_consent(store, "u-ama", at=NOW)
+        verdict = pipe.submit_selfie(session.id, "u-ama", AMA_SELFIE, _frames_for([]))
+        # The withdrawal is a legal act; a session that started
+        # before it cannot resurrect standing (Rosa's M2 probe).
+        assert verdict.status == "review"
+        assert store.biometrics == []
+        state = store.verification_states.get("u-ama")
+        assert state is None or state["current_tier"] == 0
+        assert staging.refs() == []
+        assert store.documents[0]["match_payload_encrypted"] is None
+        assert store.sessions[session.id]["status"] == "review"
+
+    def test_detect_unavailable_at_document_stage_wipes_and_refuses(self):
+        staging = InMemoryStaging()
+        pipe = _pipeline(staging=staging, ports=_ports(face_detect=DetectDown()))
+        grant_consent(pipe.store, "u-ama", "passport")
+        session = pipe.start_session("u-ama", "passport")
+        with pytest.raises(StageUnavailable):
+            pipe.submit_document(session.id, "u-ama", AMA_DOC)
+        # A clean stage refusal: nothing staged, nothing recorded,
+        # the session still stands at started for a retry.
+        assert staging.refs() == []
+        assert pipe.store.documents == []
+        assert pipe.store.sessions[session.id]["status"] == "started"
+
+    def test_detect_unavailable_at_selfie_stage_wipes_the_selfie(self):
+        class FlakyDetect(FakeDetect):
+            def __init__(self):
+                super().__init__()
+                self.calls = 0
+
+            def detect(self, image_ref: str) -> list[tuple]:
+                self.calls += 1
+                if self.calls > 1:
+                    raise StageUnavailable("face_detect went down mid-session")
+                return [(0, 0, 10, 10)]
+
+        staging = InMemoryStaging()
+        pipe = _pipeline(staging=staging, ports=_ports(face_detect=FlakyDetect()))
+        grant_consent(pipe.store, "u-ama", "passport")
+        session = pipe.start_session("u-ama", "passport")
+        pipe.submit_document(session.id, "u-ama", AMA_DOC)
+        staged_before = staging.refs()
+        with pytest.raises(StageUnavailable):
+            pipe.submit_selfie(session.id, "u-ama", AMA_SELFIE, _frames_for([]))
+        # The selfie is gone; the document stays with its live
+        # session, bounded by decision or the staging sweep.
+        assert staging.refs() == staged_before
+
+    def test_mid_stage_exception_never_leaves_the_selfie_staged(self):
+        class ExplodingEmbed(FakeEmbed):
+            def embed(self, image_path: str):
+                from pathlib import Path
+
+                if Path(image_path).read_bytes() == AMA_SELFIE:
+                    raise RuntimeError("model died")
+                return super().embed(image_path)
+
+        staging = InMemoryStaging()
+        pipe = _pipeline(staging=staging, ports=_ports(embed=ExplodingEmbed()))
+        grant_consent(pipe.store, "u-ama", "passport")
+        session = pipe.start_session("u-ama", "passport")
+        pipe.submit_document(session.id, "u-ama", AMA_DOC)
+        staged_before = staging.refs()
+        with pytest.raises(RuntimeError):
+            pipe.submit_selfie(session.id, "u-ama", AMA_SELFIE, _frames_for([]))
+        assert staging.refs() == staged_before
+
+    def test_numberless_documents_never_share_a_velocity_bucket(self):
+        store = InMemoryVerifyStore()
+        pipe = _pipeline(store=store, ports=_ports(ocr=NoNumberOcr()))
+        for user in ("u-ama", "u-kofi"):
+            grant_consent(store, user, "drivers_license")
+            session = pipe.start_session(user, "drivers_license")
+            pipe.submit_document(session.id, user, AMA_DOC)
+            verdict = pipe.submit_selfie(session.id, user, AMA_SELFIE, _frames_for([]))
+            assert verdict.status == "review"
+        # Design call 7's empty-string hash is inert for identity;
+        # it must never become a platform-wide velocity key (m4).
+        assert [a for a in store.attempts if a.kind == "document"] == []
+
+
+class TestStagingLifecycle:
+    def test_inmemory_refs_are_unique_per_put(self):
+        staging = InMemoryStaging()
+        first = staging.put(b"same-bytes")
+        second = staging.put(b"same-bytes")
+        assert first != second
+        staging.wipe(first)
+        assert staging.get(second) == b"same-bytes"
+
+    def test_sweep_destroys_only_expired_refs(self):
+        staging = InMemoryStaging()
+        old = staging.put(b"old-capture")
+        fresh = staging.put(b"fresh-capture")
+        staging._put_at[old] -= 73 * 3600
+        assert staging.sweep_expired(72) == [old]
+        assert staging.refs() == [fresh]
+
+    def test_file_staging_sweep_uses_file_age(self, tmp_path):
+        import os
+        import time
+
+        from app.verify.engine.staging import EncryptedFileStaging
+
+        staging = EncryptedFileStaging(tmp_path, AesGcmEncryptor(ENC_KEY))
+        ref = staging.put(b"ama-bytes")
+        aged = time.time() - 73 * 3600
+        os.utime(tmp_path / ref, (aged, aged))
+        assert staging.sweep_expired(72) == [ref]
+        assert staging.refs() == []
+
+    def test_pipeline_sweep_applies_the_configured_ttl(self):
+        staging = InMemoryStaging()
+        pipe = _pipeline(staging=staging)
+        ref = staging.put(b"orphaned-capture")
+        staging._put_at[ref] -= (pipe.config.staging_ttl_hours + 1) * 3600
+        assert pipe.sweep_staging() == [ref]
+        assert staging.refs() == []

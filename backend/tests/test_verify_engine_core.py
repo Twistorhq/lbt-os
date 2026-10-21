@@ -241,6 +241,38 @@ class TestCrosschecks:
         )
         assert ev.expired(TODAY) is True
 
+    def test_passport_front_mrz_disagreement_is_a_tamper_signal(self):
+        # Rosa's M6 probe: the printed front says 1985, the MRZ
+        # says 1990. The MRZ stays canonical, but the disagreement
+        # must be named, never silently resolved.
+        ev = evaluate_document(
+            document_type="passport",
+            ocr_fields={"doc_number": "P12345678", "dob": "01/01/1985"},
+            mrz=_td3_mrz(),
+            pdf417_fields=None,
+            today=TODAY,
+        )
+        assert ev.fields["dob"] == "1990-07-27"
+        assert ev.mrz_agreement["dob"] is False
+        assert "front_mrz_disagreement:dob" in ev.tamper_signals
+
+    def test_passport_front_mrz_agreement_is_recorded(self):
+        ev = evaluate_document(
+            document_type="passport",
+            ocr_fields={"doc_number": "P12345678", "dob": "07/27/1990"},
+            mrz=_td3_mrz(),
+            pdf417_fields=None,
+            today=TODAY,
+        )
+        assert ev.mrz_agreement["doc_number"] is True
+        assert ev.mrz_agreement["dob"] is True
+        assert not any(
+            s.startswith("front_mrz_disagreement") for s in ev.tamper_signals
+        )
+        # Expiry is MRZ-only evidence here (the front read carries
+        # none): absence on one side is not a disagreement.
+        assert "expiry" not in ev.mrz_agreement
+
 
 # ------------------------------------------------------------------ face
 
@@ -511,3 +543,11 @@ class TestVerdict:
     def test_unreadable_document_routes_to_review(self):
         v = decide(_clean_inputs(document_extracted=False), EngineConfig())
         assert v.status == "review"
+
+    def test_missing_dob_band_can_never_pass(self):
+        # Rosa's M1: a government document with a number but no
+        # readable birthdate reached PASS, then crashed mid-persist.
+        # The age band is the product's core fact; no band, no pass.
+        v = decide(_clean_inputs(dob_band=None), EngineConfig())
+        assert v.status == "review"
+        assert "dob_unreadable" in v.reasons
