@@ -125,6 +125,114 @@ order requires. Scratch deleted after the run.
   settles lazily per event, and the function accepts a NULL event
   id for the future sweep job.
 
+## Fix round (Rosa REQUEST CHANGES, 2026-10-21)
+
+Rosa's review (docs/reviews/TW-661-review.md) reproduced every
+claim above and returned one major plus two minors. All addressed;
+checkpoints RED `28ec3c1`, GREEN `5ce73d1`, this section follows.
+
+**M1: the couple path never checked the partner's wave window,
+and labeled the partner's row with the requester's wave.** Her
+probe: event opens at NOW + 24h, Keyholder requester, Verified
+partner; solo the partner is refused at NOW, yet through the
+couple path the partner's row landed as ('going', 'keyholder').
+Fix, exactly her shape:
+- `request_rsvp` computes the partner's opening from `partner_ctx`
+  through the same `_rsvp_opening`; while `now` is before the
+  partner's opening the pair is refused (409 ConflictError) with
+  zero rows written. Both partners eligible or neither row: the
+  eligibility gate is now atomic with the write, like the write
+  itself.
+- Each row records its own admitting wave (Section 7.7) in both
+  paths: the RPC takes a new `p_partner_rsvp_window` parameter
+  spent on the partner's row only, and the service fallback passes
+  `partner_window` to the partner's `_create_rsvp_row`.
+- Signature change handled as Rosa required: the migration drops
+  the original 9-argument overload explicitly
+  (`DROP FUNCTION IF EXISTS rsn_rsvp_couple(UUID, UUID, UUID,
+  UUID, TEXT, TEXT, TEXT, UUID, TIMESTAMPTZ)`) before CREATE OR
+  REPLACE, so the old overload cannot linger callable.
+
+**m1: `_try_couple_rpc` swallowed every exception silently.** It
+now logs a warning (with traceback) on exception, and a warning
+on a non-2-row result, before the fallback runs; the fallback is
+unchanged. A `log = logging.getLogger(__name__)` was added to the
+service module, the codebase's dominant convention.
+
+**m2: the migration header overclaimed the advisory lock.** The
+header and the in-function comment now state precisely what the
+lock does (serializes pair writes per event so two couples'
+inserts cannot interleave) and what it does not do (the rows'
+capacity statuses are computed at the service layer before the
+RPC is called, so two racing couples' capacity decisions are not
+made atomic; capacity stays service-advisory, consistent with the
+rest of the core loop).
+
+Regression tests (RED first, quoting Rosa's probe; the
+`_RpcDb` double was updated to the two-window contract, resolving
+both windows before any write so the double stays atomic like the
+real RPC):
+- Pair refused before the partner's window, zero rows, fallback
+  path; same refusal on the RPC path with the RPC never invoked.
+- Solo-refusal parity is asserted inside the fallback test (the
+  partner refused alone at the same moment).
+- Per-row labels: Keyholder requester + Regular partner at +13h
+  land 'keyholder' / 'regular' in both paths; the RPC test also
+  pins the two window parameters on the recorded call.
+- Rosa's probe pair after the general opening: both rows land,
+  both labeled 'general'.
+- m1: a broken-RPC double still lands the pair via the fallback
+  AND emits a warning naming rsn_rsvp_couple (caplog-pinned).
+- Migration contract: `p_partner_rsvp_window` present and the
+  explicit DROP of the 9-argument overload present.
+
+RED (fix-round tests at `28ec3c1`, before the fix): 6 failed /
+25 passed. The 6 failures are exactly the new behavior tests (5)
+and the new migration contract test (1); the general-opening
+labels test passed pre-fix by design (behavior pin for the
+post-window half of the probe), as did all 24 original tests.
+
+GREEN: TW-661 test files 31/31. Scoped suites (social + verify +
+events) 554 passed (547 before, +7 new). Full suite: branch
+1361 passed / 20 failed / 7 errors vs a same-environment
+clean-main control (0beb8e2, temporary worktree) at 1330 / 20 / 7:
+failed-plus-error node sets byte-identical (27 nodes, diff
+empty), zero new failures; the passed delta is exactly +31
+(24 TW-661 originals + 7 fix-round). Ruff check and format clean
+on every touched file.
+
+Live PostgreSQL 16.2 probes (same harness discipline as above:
+pgserver tree copied to /tmp with its psutil/fasteners imports so
+it runs under the system python as `nobody`, pgcrypto no-op shim
+in the copied tree only, stub `idn_users`, scratch deleted after;
+service-level probes drive the real `app.social.service` through
+a psql adapter implementing the client's query vocabulary with
+row_to_json reads):
+- Fresh path: verify v1 + social v1 + new v2 apply clean; new v2
+  applied a second time clean; exactly one rsn_rsvp_couple
+  overload exists, 10 args, including p_partner_rsvp_window.
+- Upgrade path: old v2 (at `4c3f788`) leaves the 9-arg overload;
+  applying new v2 replaces it: exactly one overload (10 args),
+  9-arg count 0; re-applying new v2 on the upgraded database is
+  clean and leaves one overload.
+- Service level, 10/10 checks: Rosa's probe on the real DB (solo
+  partner refused at NOW; pair refused; zero rows in rsn_rsvps);
+  Keyholder + Regular pair at +13h admitted through the real RPC
+  with rows labeled 'keyholder' / 'regular' in the table itself;
+  Pillar + Fixture pair through the service fallback on the real
+  DB labeled 'pillar' / 'fixture' (the Fixture boundary instant,
+  opening exactly at NOW, admits); the new RPC's atomicity
+  re-checked (pairing a fresh user with an already-RSVP'd partner
+  errors inside the RPC and leaves the requester with 0 rows).
+
+Recorded requirements, confirmed already on TW-661 (Rosa's review
+comment, 2026-10-21 16:25 UTC), not duplicated: the G2 follow-up
+(host hold create/convert API) must carry Section 7.7's
+20-percent-of-capacity cap and 24h-before-start auto-release; and
+the future event-cancel slice must settle an event's holds when
+an event is cancelled (the holds table's ON DELETE CASCADE covers
+hard deletes only). Neither is a fix item in this round.
+
 ## Plan-safety notes
 
 None. No untrusted plan content was encountered; all direction
