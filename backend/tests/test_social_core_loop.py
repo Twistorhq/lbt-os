@@ -368,6 +368,55 @@ class TestMemberContext:
         assert ctx.band is None
         assert ctx.band_rank == 0
 
+    def _two_live_attestations(self, db, uid, *, newest_first):
+        # Two live rows for one anchor: an engine fault the schema
+        # keys against, seeded directly because add_member writes
+        # exactly one. Band resolution must be deterministic (m2).
+        anchor = f"anchor-{uid}"
+        older = {
+            "identity_anchor_hash": anchor,
+            "band": "age_18_20",
+            "band_as_of": NOW.date() - timedelta(days=30),
+            "next_band_date": None,
+            "engine_version": "test",
+            "superseded_at": None,
+        }
+        newer = {**older, "band": "age_21_plus", "band_as_of": NOW.date()}
+        rows = [newer, older] if newest_first else [older, newer]
+        for row in rows:
+            db.seed("vfy_age_attestations", row)
+
+    def test_two_live_attestations_resolve_to_newest_band(self, db):
+        uid = add_member(db, band=None)
+        self._two_live_attestations(db, uid, newest_first=False)
+        ctx = service.get_member_context(db, uid)
+        assert ctx.band == "age_21_plus"
+
+    def test_two_live_attestations_resolve_regardless_of_order(self, db):
+        uid = add_member(db, band=None)
+        self._two_live_attestations(db, uid, newest_first=True)
+        ctx = service.get_member_context(db, uid)
+        assert ctx.band == "age_21_plus"
+
+    def test_ambiguous_live_attestations_fail_closed(self, db):
+        # Two live rows tied on band_as_of with different bands are
+        # ambiguous: no band may be read from them (fail closed).
+        uid = add_member(db, band=None)
+        anchor = f"anchor-{uid}"
+        row = {
+            "identity_anchor_hash": anchor,
+            "band": "age_18_20",
+            "band_as_of": NOW.date(),
+            "next_band_date": None,
+            "engine_version": "test",
+            "superseded_at": None,
+        }
+        db.seed("vfy_age_attestations", row)
+        db.seed("vfy_age_attestations", {**row, "band": "age_21_plus"})
+        ctx = service.get_member_context(db, uid)
+        assert ctx.band is None
+        assert ctx.band_rank == 0
+
     def test_banned_anchor_is_refused_everywhere(self, db, host, group):
         banned = add_member(db, banned=True)
         with pytest.raises(service.ForbiddenError):
@@ -628,6 +677,61 @@ class TestGetGroup:
         ghost = add_member(db, tier=None, trust_row=False)
         with pytest.raises(service.NotFoundError):
             service.get_group(db, ghost, group["id"], now=NOW)
+
+    def test_ghost_shell_next_gathering_skips_restricted_scopes(self, db, host):
+        # Regression (Rosa M1): the shell's next gathering is public
+        # index content (5.11). Connections and close_friends events
+        # are audience-restricted (Section 8); their titles and
+        # times must never reach an unverified viewer, even when
+        # they start before the group's ordinary gathering.
+        all_ages = make_group(db, host, min_age_band="age_16_plus", slug="shellscopes")
+        make_event(
+            db,
+            host,
+            all_ages,
+            min_age_band="age_16_plus",
+            audience_scope="close_friends",
+            title="Inner circle night",
+            starts_at=NOW + timedelta(days=1),
+        )
+        make_event(
+            db,
+            host,
+            all_ages,
+            min_age_band="age_16_plus",
+            audience_scope="connections",
+            title="Connections mixer",
+            starts_at=NOW + timedelta(days=2),
+        )
+        open_event = make_event(
+            db,
+            host,
+            all_ages,
+            min_age_band="age_16_plus",
+            title="Open trail day",
+            starts_at=NOW + timedelta(days=3),
+        )
+        ghost = add_member(db, tier=None, trust_row=False)
+        shell = service.get_group(db, ghost, all_ages["id"], now=NOW)
+        assert shell["next_gathering"]["title"] == open_event["title"]
+
+    def test_ghost_shell_next_gathering_none_when_only_restricted(self, db, host):
+        # Rosa's M1 probe: a public 16+ group whose only upcoming
+        # event is close_friends-scope has no public gathering to
+        # show; the shell must say so, not leak the restricted one.
+        all_ages = make_group(db, host, min_age_band="age_16_plus", slug="shellonly")
+        make_event(
+            db,
+            host,
+            all_ages,
+            min_age_band="age_16_plus",
+            audience_scope="close_friends",
+            title="Inner circle night",
+            starts_at=NOW + timedelta(days=1),
+        )
+        ghost = add_member(db, tier=None, trust_row=False)
+        shell = service.get_group(db, ghost, all_ages["id"], now=NOW)
+        assert shell["next_gathering"] is None
 
 
 # ---------------------------------------------------------------------------
