@@ -7,9 +7,10 @@ facts. Recurrence expansion rides python-dateutil's rrule engine
 (already a platform dependency); DTSTART is always counted as the
 first instance, as calendar clients do.
 
-Never-store (spec 10.6) at this boundary: DESCRIPTION and image
-properties are stripped from the item before it is hashed or landed
-in bronze, and no extracted shape carries them at all. The contact
+Never-store (spec 10.6) at this boundary: DESCRIPTION (and its
+Outlook HTML twin X-ALT-DESC) and image properties are stripped
+from the item before it is hashed or landed in bronze, and no
+extracted shape carries them at all. The contact
 properties are stripped the same way: ORGANIZER and ATTENDEE lines
 carry mailto addresses and CONTACT carries free-form contact text,
 and spec 10.6 bars organizer contact details and attendee lists
@@ -34,13 +35,15 @@ WINDOW_DAYS = 90
 MAX_INSTANCES_PER_EVENT = 200
 
 # Properties stripped from a VEVENT before hashing or bronze
-# landing: DESCRIPTION and ATTACH/IMAGE below are the source's
-# expression; ORGANIZER, CONTACT, and ATTENDEE are the contact
-# carriers (spec 10.6). _redact_block matches on the property name
-# before any ";" parameter, so parameterized forms (ORGANIZER;CN=,
+# landing: DESCRIPTION, X-ALT-DESC, and ATTACH/IMAGE below are the
+# source's expression (X-ALT-DESC is the HTML twin of DESCRIPTION
+# that Outlook and Exchange publish alongside it); ORGANIZER,
+# CONTACT, and ATTENDEE are the contact carriers (spec 10.6).
+# _redact_block matches on the property name before any ";"
+# parameter, so parameterized forms (ORGANIZER;CN=,
 # ATTENDEE;RSVP=TRUE:) are covered, as are lines nested inside
 # VALARM blocks, because redaction runs per line over the block.
-_REDACTED_PROPS = ("DESCRIPTION", "ORGANIZER", "CONTACT", "ATTENDEE")
+_REDACTED_PROPS = ("DESCRIPTION", "X-ALT-DESC", "ORGANIZER", "CONTACT", "ATTENDEE")
 _DURATION_RE = re.compile(
     r"^P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$"
 )
@@ -164,6 +167,11 @@ def _redact_block(block: str) -> str:
     kept = []
     for line in block.split("\n"):
         head = line.split(":", 1)[0].split(";", 1)[0].upper()
+        # RFC 5545 content lines are [group "."] name: a group
+        # prefix (item1.ORGANIZER) does not change the property,
+        # so match on the name after the optional prefix.
+        if "." in head:
+            head = head.split(".", 1)[1]
         if head in _REDACTED_PROPS or "IMAGE" in head or head == "ATTACH":
             continue
         kept.append(line)

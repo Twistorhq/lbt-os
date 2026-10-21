@@ -308,6 +308,74 @@ through _ts. test_events_store.py proves all of it against a fake
 client, including a gate decision computed on assembled values
 end to end.
 
+## Fix round 2 (Rosa re-review: REQUEST CHANGES, 1 minor, 2 nits)
+
+RED `13b646e` is tests only: 3 new tests, and all 3 failed
+against the fix round implementation before GREEN (verified by
+running them pre-fix; the 26 pre-existing tests in the two
+touched test files stayed green). No schema changed this round
+either, so the round 1 live migration execution still stands.
+All three findings are edges of the never-store boundary that
+the re-review's adversarial probes reached and the fix round's
+enumerated shapes had not.
+
+**m4 (minor): X-ALT-DESC carried the description body into
+bronze.** Outlook and Exchange publish the description twice:
+DESCRIPTION in plain text and X-ALT-DESC as the HTML twin. The
+redaction set named only DESCRIPTION, so the HTML body landed in
+evt_raw_items verbatim. Fix: X-ALT-DESC joins the ICS redaction
+set; matching already splits the head on ";", so the
+parameterized form (X-ALT-DESC;FMTTYPE=text/html:) is covered.
+The contract test builds an Outlook-shaped VEVENT inline and
+asserts neither the property name nor the HTML body (nor the
+email inside it) reaches the bronze payload or any extracted
+field. Disclosure note: the round 1 X- property residual covered
+contact-bearing X- properties retained for change detection.
+X-ALT-DESC is a description body, a different never-store class,
+so it is dropped by name, not retained.
+
+**n3 (nit): group-prefixed ICS property names bypassed the
+redaction match.** RFC 5545 content lines are [group "."] name,
+so item1.ORGANIZER computed the head ITEM1.ORGANIZER and missed
+the set, landing the organizer name and mailto address in
+bronze. Fix: _redact_block strips the optional group prefix
+when computing the head, so the match sees the property name.
+Pinned by a contract test beside the m4 test: a grouped
+ORGANIZER and a grouped CONTACT reach neither bronze nor any
+extracted field.
+
+**n4 (nit): un-separated JSON compound keys survived
+tokenization.** The token rule splits on separators and camel
+humps, so a compound written as one word never produced a
+contact token: phonenumber, emailaddress, e_mail, and tel were
+all retained by redact_json. Fix, three layers: the four probed
+spellings are pinned in NEVER_STORE_KEYS; tel and mail join the
+contact token set (e_mail tokenizes to e plus mail); and a stem
+pass drops any token starting or ending with a contact stem
+(email, phone, telephone, mobile, cell, fax, contact), which
+closes unseen compounds of the same class (probed clean after
+the fix: cellphone, contactinfo, faxnumber, organizerPhone, and
+a nested host_tel). Legitimate keys verified retained by the
+same probe: the organizer display name, website, mailing
+address, and cancellation policy. The connector contract test
+extends the Localist audit with the four spellings, keys and
+values both asserted absent from bronze.
+
+Verification for this round: events tests 97 of 97 (migration
+16, normalize 12, ICS 18, connectors 11, gate 10, geocode 7,
+pipeline 19, store 4). Full suite under the established
+methodology (pytest tests/ --continue-on-collection-errors):
+baseline at d549df5 in this environment 1087 passed, 20 failed,
+7 errors; after the fix 1090 passed, 20 failed, 7 errors, the
+delta exactly the 3 new tests, and the failed and error node
+sets byte-identical by diff, so zero regressions. The absolute
+counts differ from the re-review's control (986/21/12) because
+this sandbox collects some modules that error on collection in
+the review environment; the before and after runs here used
+identical methodology on both sides, which is what the
+node-set comparison rests on. Ruff check and format clean on
+all four touched files.
+
 ## Not in scope (by ticket)
 
 Public index surface and gold read API (tasks.md item 30, Sofia's

@@ -11,7 +11,11 @@ exact-name set below covers the expression and price keys; any key
 whose name tokenizes to a contact token (organizer_phone,
 contact_email, venue_phone, telephone) drops too, because real API
 payloads hide contact data under compound keys as often as under
-the plain ones. The ICS boundary makes the matching cut by property
+the plain ones. Compounds written as one word (phonenumber,
+emailaddress, e_mail, tel) cannot be split by tokenization, so
+the exact set pins those spellings and a stem pass catches the
+rest of the class: a token starting or ending with a contact stem
+drops too. The ICS boundary makes the matching cut by property
 name in ics.py (ORGANIZER, CONTACT, ATTENDEE).
 """
 
@@ -37,12 +41,23 @@ NEVER_STORE_KEYS = frozenset(
         "organizer_email",
         "email",
         "phone",
+        "phonenumber",
+        "emailaddress",
+        "e_mail",
+        "tel",
     }
 )
 
 # A key carrying any of these name tokens carries personal contact
 # data, whatever the surrounding words are.
 CONTACT_KEY_TOKENS = frozenset(
+    {"email", "phone", "telephone", "mobile", "cell", "fax", "contact", "tel", "mail"}
+)
+
+# A token starting or ending with one of these stems is a contact
+# carrier written as one word (phonenumber, emailaddress,
+# cellphone), which separator tokenization alone cannot split.
+CONTACT_KEY_STEMS = frozenset(
     {"email", "phone", "telephone", "mobile", "cell", "fax", "contact"}
 )
 
@@ -55,10 +70,18 @@ def _key_tokens(key: str) -> set[str]:
     return {t for t in _TOKEN_SPLIT_RE.split(spaced.lower()) if t}
 
 
+def _token_carries_contact(token: str) -> bool:
+    if token in CONTACT_KEY_TOKENS:
+        return True
+    return any(
+        token.startswith(stem) or token.endswith(stem) for stem in CONTACT_KEY_STEMS
+    )
+
+
 def _is_never_store_key(key: str) -> bool:
     if key.lower() in NEVER_STORE_KEYS:
         return True
-    return bool(_key_tokens(key) & CONTACT_KEY_TOKENS)
+    return any(_token_carries_contact(t) for t in _key_tokens(key))
 
 
 def redact_json(value: Any) -> Any:
