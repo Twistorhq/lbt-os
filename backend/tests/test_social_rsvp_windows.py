@@ -26,9 +26,9 @@ from datetime import timedelta
 from uuid import uuid4
 
 import pytest
+from test_social_core_loop import NOW, FakeDb, add_member, make_event, make_group, rsvp
 
 from app.social import models, service
-from test_social_core_loop import NOW, FakeDb, add_member, make_event, make_group, rsvp
 
 
 @pytest.fixture()
@@ -44,6 +44,11 @@ def host(db):
 @pytest.fixture()
 def group(db, host):
     return make_group(db, host)
+
+
+def _join(db, group, user_id):
+    service.join_group(db, user_id, group["id"], now=NOW)
+    return user_id
 
 
 def _set_opens_at(db, event, opens_at):
@@ -77,20 +82,20 @@ def _seed_hold(db, event, host_id, *, seats, release_at, status="held"):
 class TestRsvpWaves:
     def test_verified_member_refused_before_general_open(self, db, host, group):
         event = _set_opens_at(db, make_event(db, host, group), NOW + timedelta(days=1))
-        member = add_member(db)
+        member = _join(db, group, add_member(db))
         with pytest.raises(service.ConflictError):
             rsvp(db, member, event)
 
     def test_keyholder_rsvps_in_early_window(self, db, host, group):
         event = _set_opens_at(db, make_event(db, host, group), NOW + timedelta(days=1))
-        keyholder = add_member(db, standing="keyholder")
+        keyholder = _join(db, group, add_member(db, standing="keyholder"))
         out = rsvp(db, keyholder, event)
         assert out["status"] == "going"
         assert out["rsvp_window"] == "keyholder"
 
     def test_regular_window_is_12h_early_not_more(self, db, host, group):
         event = _set_opens_at(db, make_event(db, host, group), NOW + timedelta(days=1))
-        regular = add_member(db, standing="regular")
+        regular = _join(db, group, add_member(db, standing="regular"))
         with pytest.raises(service.ConflictError):
             rsvp(db, regular, event)
         out = service.request_rsvp(
@@ -104,7 +109,7 @@ class TestRsvpWaves:
 
     def test_general_opening_records_general_window(self, db, host, group):
         event = _set_opens_at(db, make_event(db, host, group), NOW + timedelta(days=1))
-        member = add_member(db)
+        member = _join(db, group, add_member(db))
         out = service.request_rsvp(
             db,
             member,
@@ -116,7 +121,7 @@ class TestRsvpWaves:
 
     def test_no_opens_at_behaves_like_tw660(self, db, host, group):
         event = make_event(db, host, group)
-        member = add_member(db)
+        member = _join(db, group, add_member(db))
         out = rsvp(db, member, event)
         assert out["status"] == "going"
         assert out["rsvp_window"] == "general"
@@ -152,15 +157,15 @@ class TestHeldSeats:
     def test_active_hold_reduces_available_seats(self, db, host, group):
         event = make_event(db, host, group, capacity=2)
         _seed_hold(db, event, host, seats=1, release_at=NOW + timedelta(hours=6))
-        first = add_member(db)
-        second = add_member(db)
+        first = _join(db, group, add_member(db))
+        second = _join(db, group, add_member(db))
         assert rsvp(db, first, event)["status"] == "going"
         assert rsvp(db, second, event)["status"] == "waitlist"
 
     def test_expired_hold_releases_and_stops_counting(self, db, host, group):
         event = make_event(db, host, group, capacity=1)
         hold = _seed_hold(db, event, host, seats=1, release_at=NOW - timedelta(hours=1))
-        member = add_member(db)
+        member = _join(db, group, add_member(db))
         assert rsvp(db, member, event)["status"] == "going"
         stored = [r for r in db.rows("rsn_event_seat_holds") if r["id"] == hold["id"]]
         assert stored[0]["status"] == "expired"
@@ -175,15 +180,20 @@ class TestHeldSeats:
             release_at=NOW + timedelta(hours=6),
             status="released",
         )
-        member = add_member(db)
+        member = _join(db, group, add_member(db))
         assert rsvp(db, member, event)["status"] == "going"
 
     def test_hold_counts_against_host_approval(self, db, host, group):
         event = make_event(
-            db, host, group, capacity=1, venue_type="home", min_tier_rsvp="host_approved"
+            db,
+            host,
+            group,
+            capacity=1,
+            venue_type="home",
+            min_tier_rsvp="host_approved",
         )
         _seed_hold(db, event, host, seats=1, release_at=NOW + timedelta(hours=6))
-        member = add_member(db)
+        member = _join(db, group, add_member(db))
         requested = rsvp(db, member, event)
         assert requested["status"] == "requested"
         out = service.decide_rsvp(
@@ -216,9 +226,7 @@ class _RpcDb(FakeDb):
             def execute(self):
                 if name != "rsn_rsvp_couple":
                     raise ValueError(name)
-                existing = {
-                    (r["event_id"], r["user_id"]) for r in db.rows("rsn_rsvps")
-                }
+                existing = {(r["event_id"], r["user_id"]) for r in db.rows("rsn_rsvps")}
                 pair = [
                     (params["p_user_id"], params["p_user_status"]),
                     (params["p_partner_id"], params["p_partner_status"]),
@@ -236,9 +244,7 @@ class _RpcDb(FakeDb):
                                 "user_id": user_id,
                                 "status": status,
                                 "couple_link_id": params["p_couple_link_id"],
-                                "plus_one_of_rsvp_id": params.get(
-                                    "p_user_plus_one_of"
-                                )
+                                "plus_one_of_rsvp_id": params.get("p_user_plus_one_of")
                                 if user_id == params["p_user_id"]
                                 else None,
                                 "rsvp_window": params["p_rsvp_window"],

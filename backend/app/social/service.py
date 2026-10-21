@@ -111,6 +111,16 @@ HOST_CAPACITY = {
     "pillar": 50,
     "keyholder": 100,
 }
+# RSVP early-access waves (Section 7.7 + reward catalog): how long
+# before the general opening (rsn_events.rsvp_opens_at, TW-661) each
+# standing tier may RSVP. Verified is the general opening itself.
+RSVP_WAVE_EARLY_ACCESS = {
+    "verified": timedelta(hours=0),
+    "regular": timedelta(hours=12),
+    "fixture": timedelta(hours=24),
+    "pillar": timedelta(hours=48),
+    "keyholder": timedelta(hours=72),
+}
 # Waitlist promotion order (Section 7.5): band, then RSVP time.
 TRUST_BAND_PROMOTION_ORDER = {
     "trusted": 0,
@@ -733,6 +743,57 @@ def _going_count(db, event_id) -> int:
     return sum(1 for r in rows if r.get("status") == "going")
 
 
+def _release_expired_holds(db, event_id, now: datetime) -> None:
+    """Lazy half of the TW-661 release rules: a hold whose
+    release_at has passed settles to 'expired' the next time the
+    event's capacity is consulted (the SQL function
+    rsn_release_expired_seat_holds is the sweeper half)."""
+    for hold in _fetch(db, "rsn_event_seat_holds", event_id=str(event_id)):
+        if hold.get("status") != "held":
+            continue
+        release_at = _parse_ts(hold.get("release_at"))
+        if release_at is not None and release_at <= now:
+            _update_by_id(
+                db,
+                "rsn_event_seat_holds",
+                hold["id"],
+                {"status": "expired", "released_at": now},
+            )
+
+
+def _active_held_seats(db, event_id, now: datetime) -> int:
+    """Seats a host is holding against this event right now. Held
+    seats are counted here and nowhere else: they are not RSVPs, so
+    _going_count never sees them, and a seat is never counted
+    twice (TW-661 accounting rule)."""
+    total = 0
+    for hold in _fetch(db, "rsn_event_seat_holds", event_id=str(event_id)):
+        if hold.get("status") != "held":
+            continue
+        release_at = _parse_ts(hold.get("release_at"))
+        if release_at is not None and release_at > now:
+            total += int(hold.get("seats") or 0)
+    return total
+
+
+def _seats_taken(db, event, now: datetime) -> int:
+    """Capacity consumption: going RSVPs + active held seats."""
+    _release_expired_holds(db, event["id"], now)
+    return _going_count(db, event["id"]) + _active_held_seats(db, event["id"], now)
+
+
+def _rsvp_opening(ctx: MemberContext, event: dict, now: datetime):
+    """The member's opening for this event and the window label a
+    row written now must carry (TW-661). No rsvp_opens_at means
+    TW-660 behavior exactly: open at publish, window 'general'."""
+    opens = _parse_ts(event.get("rsvp_opens_at"))
+    if opens is None:
+        return "general", None
+    early = RSVP_WAVE_EARLY_ACCESS.get(ctx.standing_tier, timedelta(0))
+    window = ctx.standing_tier if now < opens else "general"
+    return window, opens - early
+
+
 def _can_view_event(db, ctx: MemberContext, event: dict, group: dict) -> bool:
     """Section 5.9 band invisibility (the event's rating and its
     container's, so a low-rated event inside a high-rated group
@@ -782,6 +843,7 @@ def _event_out(db, event: dict, group: dict, ctx: MemberContext) -> dict:
         "description": event.get("description"),
         "starts_at": _iso(event.get("starts_at")),
         "ends_at": _iso(event.get("ends_at")),
+        "rsvp_opens_at": _iso(event.get("rsvp_opens_at")),
         "capacity": event.get("capacity"),
         "going_count": _going_count(db, event["id"]),
         "guests_enabled": event.get("guests_enabled"),
@@ -853,6 +915,7 @@ def create_event(db, user_id: UUID, payload: models.EventCreate, *, now=None) ->
             "min_age_band": payload.min_age_band,
             "venue_type": payload.venue_type,
             "audience_scope": payload.audience_scope,
+            "rsvp_opens_at": payload.rsvp_opens_at,
             "series_id": str(payload.series_id) if payload.series_id else None,
             "status": "published",
             "created_at": now,
@@ -927,6 +990,7 @@ def _series_out(db, series: dict) -> dict:
         "default_min_tier_view": series["default_min_tier_view"],
         "default_min_tier_rsvp": series["default_min_tier_rsvp"],
         "default_min_age_band": series["default_min_age_band"],
+        "default_rsvp_opens_at": _iso(series.get("default_rsvp_opens_at")),
         "venue_ref": series.get("venue_ref"),
         "status": series["status"],
         "instance_count": len(instances),
@@ -991,6 +1055,7 @@ def create_series(db, user_id: UUID, payload: models.SeriesCreate, *, now=None) 
             "default_min_tier_view": payload.default_min_tier_view,
             "default_min_tier_rsvp": payload.default_min_tier_rsvp,
             "default_min_age_band": payload.default_min_age_band,
+            "default_rsvp_opens_at": payload.default_rsvp_opens_at,
             "venue_ref": None,
             "status": "active",
             "created_at": now,
@@ -1145,6 +1210,7 @@ def materialize_series(
                 "min_age_band": series["default_min_age_band"],
                 "venue_type": venue_type,
                 "audience_scope": audience_scope,
+                "rsvp_opens_at": series.get("default_rsvp_opens_at"),
                 "series_id": series["id"],
                 "status": "published",
                 "created_at": now,
@@ -1193,19 +1259,28 @@ def _rsvp_out(row: dict) -> dict:
     }
 
 
-def _initial_status(db, event: dict, user_id: str) -> str:
+def _initial_status(db, event: dict, user_id: str, now: datetime) -> str:
     needs_request = (
         event["venue_type"] == "home" or event["min_tier_rsvp"] == "host_approved"
     ) and not _is_close_friend(db, event["host_user_id"], user_id)
     if needs_request:
         return "requested"
     capacity = event.get("capacity")
-    if capacity is not None and _going_count(db, event["id"]) >= capacity:
+    if capacity is not None and _seats_taken(db, event, now) >= capacity:
         return "waitlist"
     return "going"
 
 
-def _create_rsvp_row(db, event, user_id, now, *, couple_link_id=None, plus_one_of=None):
+def _create_rsvp_row(
+    db,
+    event,
+    user_id,
+    now,
+    *,
+    couple_link_id=None,
+    plus_one_of=None,
+    rsvp_window="general",
+):
     row = _insert(
         db,
         "rsn_rsvps",
@@ -1213,20 +1288,39 @@ def _create_rsvp_row(db, event, user_id, now, *, couple_link_id=None, plus_one_o
             "id": str(uuid4()),
             "event_id": event["id"],
             "user_id": user_id,
-            "status": _initial_status(db, event, user_id),
+            "status": _initial_status(db, event, user_id, now),
             "couple_link_id": couple_link_id,
             "plus_one_of_rsvp_id": plus_one_of,
-            # RSVP waves and the host-held pool (Section 7.7) need
-            # schema this slice does not have (no opens-at or held
-            # seat columns); the windows this slice can truthfully
-            # record are the general opening and waitlist promotion.
-            "rsvp_window": "general",
+            # TW-661: rsvp_opens_at now anchors the Section 7.7
+            # standing waves, so the window recorded is the one the
+            # caller actually entered through (its standing tier in
+            # an early wave, 'general' at/after the general opening);
+            # waitlist promotion still relabels its own rows.
+            "rsvp_window": rsvp_window,
             "host_decided_by": None,
             "host_decided_at": None,
             "created_at": now,
         },
     )
     return row
+
+
+def _try_couple_rpc(db, params: dict) -> list[dict] | None:
+    """The rsn_rsvp_couple RPC (TW-661): both rows in one database
+    transaction, or neither. Returns the two written rows, or None
+    when the RPC is unavailable (client without rpc, function not
+    yet deployed): the caller then runs the TW-660 service path,
+    which validates both partners before either row exists, so
+    the observable behavior is the same."""
+    rpc = getattr(db, "rpc", None)
+    if rpc is None:
+        return None
+    try:
+        data = rpc("rsn_rsvp_couple", params).execute().data
+    except Exception:
+        return None
+    rows = [r for r in (data or []) if isinstance(r, dict)]
+    return rows if len(rows) == 2 else None
 
 
 def request_rsvp(db, user_id: UUID, payload: models.RsvpCreate, *, now=None) -> dict:
@@ -1246,6 +1340,9 @@ def request_rsvp(db, user_id: UUID, payload: models.RsvpCreate, *, now=None) -> 
     starts = _parse_ts(event.get("starts_at"))
     if starts is not None and starts <= now:
         raise ConflictError("event has already started")
+    rsvp_window, member_opens = _rsvp_opening(ctx, event, now)
+    if member_opens is not None and now < member_opens:
+        raise ConflictError("RSVP has not opened for your standing tier yet")
     existing = _fetch_one(db, "rsn_rsvps", event_id=event["id"], user_id=ctx.user_id)
     if existing is not None:
         if existing.get("status") in ("going", "waitlist", "requested"):
@@ -1264,7 +1361,14 @@ def request_rsvp(db, user_id: UUID, payload: models.RsvpCreate, *, now=None) -> 
             )
         plus_one_of = anchor["id"]
     if payload.couple_link_id is None:
-        row = _create_rsvp_row(db, event, ctx.user_id, now, plus_one_of=plus_one_of)
+        row = _create_rsvp_row(
+            db,
+            event,
+            ctx.user_id,
+            now,
+            plus_one_of=plus_one_of,
+            rsvp_window=rsvp_window,
+        )
         return _rsvp_out(row)
     # A couple RSVP is two first-class rows (spec Section 4), and it
     # is atomic here: both partners must independently pass every
@@ -1291,10 +1395,39 @@ def request_rsvp(db, user_id: UUID, payload: models.RsvpCreate, *, now=None) -> 
     )
     if partner_existing is not None:
         raise ConflictError("couple partner already holds an RSVP on this event")
-    own = _create_rsvp_row(
-        db, event, ctx.user_id, now, couple_link_id=link["id"], plus_one_of=plus_one_of
+    # Both partners validated above; the write itself now prefers
+    # the rsn_rsvp_couple RPC so the pair lands in one database
+    # transaction (TW-661), falling back to the two service inserts
+    # when the RPC is unavailable.
+    rpc_rows = _try_couple_rpc(
+        db,
+        {
+            "p_event_id": event["id"],
+            "p_user_id": ctx.user_id,
+            "p_partner_id": partner_id,
+            "p_couple_link_id": link["id"],
+            "p_user_status": _initial_status(db, event, ctx.user_id, now),
+            "p_partner_status": _initial_status(db, event, partner_id, now),
+            "p_rsvp_window": rsvp_window,
+            "p_user_plus_one_of": plus_one_of,
+            "p_now": now,
+        },
     )
-    _create_rsvp_row(db, event, partner_id, now, couple_link_id=link["id"])
+    if rpc_rows is not None:
+        own = next((r for r in rpc_rows if r["user_id"] == ctx.user_id), rpc_rows[0])
+        return _rsvp_out(own)
+    own = _create_rsvp_row(
+        db,
+        event,
+        ctx.user_id,
+        now,
+        couple_link_id=link["id"],
+        plus_one_of=plus_one_of,
+        rsvp_window=rsvp_window,
+    )
+    _create_rsvp_row(
+        db, event, partner_id, now, couple_link_id=link["id"], rsvp_window=rsvp_window
+    )
     return _rsvp_out(own)
 
 
@@ -1323,7 +1456,7 @@ def decide_rsvp(
     else:
         capacity = event.get("capacity")
         status = "going"
-        if capacity is not None and _going_count(db, event["id"]) >= capacity:
+        if capacity is not None and _seats_taken(db, event, now) >= capacity:
             status = "waitlist"
         patch = {
             "status": status,
@@ -1364,7 +1497,7 @@ def _promote_waitlist(db, event: dict, now: datetime) -> None:
     capacity = event.get("capacity")
     if capacity is None:
         return
-    while _going_count(db, event["id"]) < capacity:
+    while _seats_taken(db, event, now) < capacity:
         waiters = [
             r
             for r in _fetch(db, "rsn_rsvps", event_id=event["id"])

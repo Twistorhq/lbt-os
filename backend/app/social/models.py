@@ -148,6 +148,9 @@ class EventCreate(_Strict):
     venue_type: Literal["venue", "home"] = "venue"
     audience_scope: AudienceScope = "group"
     series_id: UUID | None = None
+    # TW-661: the general RSVP opening the standing waves anchor to.
+    # None = opens at publish (the Section 7.7 default).
+    rsvp_opens_at: datetime | None = None
 
     @field_validator("title")
     @classmethod
@@ -226,6 +229,8 @@ class SeriesCreate(_Strict):
     default_min_age_band: MinAgeBand
     venue_type: Literal["venue", "home"] = "venue"
     audience_scope: AudienceScope = "group"
+    # TW-661: template for each instance's rsvp_opens_at.
+    default_rsvp_opens_at: datetime | None = None
 
     @field_validator("title")
     @classmethod
