@@ -237,3 +237,70 @@ def test_location_three_part_street_city_state(source):
     assert e.venue.street_address == "2901 Inca St"
     assert e.venue.city == "Denver"
     assert e.venue.name is None
+
+
+# ------------------------------------------------------------------
+# Fix round 2 (Rosa TW-651 re-review): m4 X-ALT-DESC, n3 group prefix
+# ------------------------------------------------------------------
+
+OUTLOOK_VEVENT = """BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:outlook-1@example.org
+DTSTART;TZID=America/Denver:20261028T190000
+DTEND;TZID=America/Denver:20261028T210000
+SUMMARY:Outlook Published Social
+DESCRIPTION:Plain twin of the HTML body.
+X-ALT-DESC;FMTTYPE=text/html:<html><body>Secret supper club details, RSVP to outlook.host@example.org</body></html>
+END:VEVENT
+END:VCALENDAR
+"""
+
+
+def test_x_alt_desc_never_reaches_bronze_or_silver(source):
+    # Fixture-independent contract (Rosa m4): Outlook and Exchange
+    # publish the description twice, once as DESCRIPTION and once as
+    # the HTML twin X-ALT-DESC. Both are the source's expression
+    # (spec 10.6 never-store), so neither the property name nor the
+    # HTML body may reach bronze or any extracted field.
+    events = ics.parse_ics(OUTLOOK_VEVENT, source, NOW)
+    assert len(events) == 1
+    e = events[0]
+    assert e.bronze_payload is not None
+    for marker in (
+        "X-ALT-DESC",
+        "Secret supper club",
+        "outlook.host@example.org",
+        "<html>",
+    ):
+        assert marker not in e.bronze_payload, f"{marker} reached bronze"
+        assert marker not in repr(e), f"{marker} reached silver"
+
+
+GROUPED_CONTACT_VEVENT = """BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:grouped-1@example.org
+DTSTART;TZID=America/Denver:20261028T190000
+DTEND;TZID=America/Denver:20261028T210000
+SUMMARY:Grouped Contact Gathering
+item1.ORGANIZER;CN=Jane Host:mailto:jane.host@example.org
+item1.CONTACT:Questions\\, jane.host@example.org\\, 303-555-1212
+END:VEVENT
+END:VCALENDAR
+"""
+
+
+def test_group_prefixed_contact_props_never_reach_bronze(source):
+    # Fixture-independent contract (Rosa n3): RFC 5545 content lines
+    # are [group "."] name, so a group prefix (item1.ORGANIZER) is
+    # still ORGANIZER. The redaction match must see through the
+    # prefix, or the name and email land in bronze untouched.
+    events = ics.parse_ics(GROUPED_CONTACT_VEVENT, source, NOW)
+    assert len(events) == 1
+    e = events[0]
+    assert e.bronze_payload is not None
+    for marker in CONTACT_MARKERS:
+        assert marker not in e.bronze_payload, f"{marker} reached bronze"
+        assert marker not in repr(e), f"{marker} reached silver"
+    assert e.source_organizer_ref is None

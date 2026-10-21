@@ -222,3 +222,50 @@ def test_tribe_organizer_contact_never_reaches_bronze(tribe_source):
         "hosts@example.org",
     ):
         assert marker not in bronze_text, f"{marker} reached bronze"
+
+
+def test_localist_unseparated_contact_keys_never_reach_bronze(localist_source):
+    # Rosa n4: the token rule (snake, kebab, camel) cannot split a
+    # compound written as one word, so phonenumber, emailaddress,
+    # e_mail, and tel all survived round 1. The boundary is pinned
+    # here at the level the re-review probes reached.
+    payload = {
+        "events": [
+            {
+                "event": {
+                    "id": 888,
+                    "name": "Unseparated Key Audit Night",
+                    "status": "live",
+                    "localist_url": "https://calendar.ucdenver.edu/event/888",
+                    "address": "1201 Larimer St, Denver",
+                    "phonenumber": "303-555-0110",
+                    "emailaddress": "plain@example.edu",
+                    "e_mail": "underscored@example.edu",
+                    "tel": "303-555-0111",
+                    "event_instances": [
+                        {
+                            "event_instance": {
+                                "id": 1,
+                                "start": "2026-10-29T17:30:00Z",
+                                "end": "2026-10-29T19:00:00Z",
+                            }
+                        }
+                    ],
+                }
+            }
+        ]
+    }
+    events = localist.parse_localist(payload, localist_source, NOW)
+    assert len(events) == 1
+    bronze_text = json.dumps(events[0].bronze_payload).lower()
+    for marker in (
+        "phonenumber",
+        "emailaddress",
+        "e_mail",
+        "tel",
+        "303-555-0110",
+        "303-555-0111",
+        "plain@example.edu",
+        "underscored@example.edu",
+    ):
+        assert marker not in bronze_text, f"{marker} reached bronze"
