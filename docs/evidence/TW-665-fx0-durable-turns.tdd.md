@@ -53,3 +53,57 @@ completes.
 `docs/TW-665-fx0-durable-turn-pattern.md`: adopted pattern table, the vendor
 paths deliberately not adopted (Vercel Workflow World, Vercel Queues, AI
 Gateway), and next-use lanes (Flows executions, Notify sends, ingestors).
+
+## Fix round: Rosa REQUEST CHANGES (2026-10-21)
+
+Rosa's review (`docs/reviews/TW-665-review.md`, REQUEST CHANGES, 3 majors /
+3 minors / 3 nits) verified the core by her own execution, then proved by
+probe that the guarantees were enforced only on the happy path. Fixes, each
+pinned by a new regression test in `backend/tests/test_durable_turns.py`:
+
+- **M1, journaled declaration governs on resume.** `_run()` validates the
+  supplied step list against the journaled rows before any state change
+  (`_validate_against_journal`): a renamed step or a flipped idempotency
+  declaration raises the new `JournalMismatch`, and the run loop reads the
+  journaled declaration for the ambiguous-outcome decision. Tests:
+  `test_flipped_declaration_on_resume_raises_and_never_reruns` (Rosa's
+  flip probe: no "send-RERUN"), `test_renamed_step_on_resume_raises`.
+- **M2, non-idempotent steps are never retried in-run.** The retry wrapper
+  now gets `attempts=1` for a step whose (journaled) declaration is
+  non-idempotent. Test: `test_non_idempotent_step_is_not_retried_in_run`
+  (transient ConnectionError after the side effect: handler runs once).
+- **M3, lease acquire is an atomic compare-and-swap.** `acquire_lease()`
+  is one conditional UPDATE (owner IS NULL OR owner = caller OR lease
+  expired) and raises `TurnFenced` unless exactly one row changed.
+  Ownership is revalidated before each step execution and before the
+  completion write (`_assert_lease`), and `_apply_effect` now runs its
+  check + effect + insert inside one `BEGIN IMMEDIATE` transaction with
+  ownership revalidated inside it. Tests:
+  `test_concurrent_lease_acquire_has_exactly_one_winner` (barrier race,
+  30 trials, exactly one winner each; Rosa's pre-fix probe had both
+  workers winning 13 of 30), `test_worker_whose_lease_was_taken_over_
+  stops_before_next_step`.
+- **m1, attempts counter is real.** Each handler execution increments
+  `durable_steps.attempts`. Test: `test_attempts_counter_counts_every_
+  handler_run` (flaky handler: 3 runs, journal says 3).
+- **m2, completed turns are final.** Re-running a completed turn returns
+  the stored results without status flips or phantom events. Test:
+  `test_rerun_of_completed_turn_is_a_noop` (event count unchanged).
+- **m3, one prompt_saved per prompt.** `submit()` journals the event only
+  when the INSERT lands (rowcount). Test:
+  `test_duplicate_submit_journals_one_prompt_saved`.
+- **n1, honest BEFORE label.** The demo's BEFORE is a constructed stand-in
+  and now says "representative" in the demo docstring, its printed
+  header, and the pattern doc; it is not a measured legacy baseline.
+- **n2, strict declaration.** `StepDef` rejects any non-bool
+  `idempotent` (was: only None). Test:
+  `test_step_declaration_must_be_a_real_bool`.
+
+Verification after the fix round: durable suite 21/21 (12 original + 9
+new); combined durable_turns + self_healing + flows_executor 60/60; crash
+demo re-run in a fresh workdir, exit 0, VERDICT PASS (SIGKILL mid-turn,
+resume 6/6, 0 duplicate side effects); ruff check clean and
+`ruff format --check` clean on all four touched Python files. The diff
+stays additive in shape: only files created by this branch are modified
+(engine, package exports, tests, demo script, docs); no existing file
+outside the TW-665 module is touched.

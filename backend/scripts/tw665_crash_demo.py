@@ -4,9 +4,12 @@ A real fleet-style workflow (a 6-step dispatch turn) runs in a child
 process. The child is SIGKILLed mid-turn, after a side effect has landed
 but before that step's completion is journaled: the worst crash window.
 
-BEFORE (volatile, today's behavior): the turn lives in process memory.
-Kill the process and the turn, its completed steps, and its place in the
-workflow are gone. A fresh process recovers 0 steps.
+BEFORE (volatile, representative in-memory turn): the turn lives in
+process memory. Kill the process and the turn, its completed steps, and
+its place in the workflow are gone. A fresh process recovers 0 steps.
+The BEFORE worker is a constructed stand-in written for this demo, not
+a run of a pre-existing Twistor system; it represents the in-memory
+shape, it is not a measured legacy baseline.
 
 AFTER (durable, TW-665 engine): the turn was journaled before execution
 and every step was journaled as it ran. A fresh process resumes the same
@@ -120,7 +123,7 @@ def main() -> int:
         if os.path.exists(p):
             os.remove(p)
 
-    print("=== BEFORE: volatile in-memory turn (current behavior) ===")
+    print("=== BEFORE: volatile in-memory turn (representative) ===")
     r = _spawn(["worker-volatile", ledger_before, "1"])
     print(f"worker exit: {r.returncode} (SIGKILL = {-signal.SIGKILL})")
     r2 = _spawn(["resume-volatile"])

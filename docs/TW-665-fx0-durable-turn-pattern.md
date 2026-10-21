@@ -29,9 +29,9 @@ the interrupted turn is told what may have happened.
 | Save the message before answering; a retried request reaches the same turn | `submit()` journals the prompt before execution and dedupes on `message_id` (deterministic turn id) |
 | Per-step journal in a durable store | `durable_steps` table: started, then completed with the result, journaled before/after the handler runs |
 | Turn survives the process dying mid-reply | `run_turn()` is resumable by any new process on the same journal; completed steps are read back, never re-run |
-| Tools declare whether they may re-run | `StepDef.idempotent` is mandatory; an interrupted non-idempotent step is marked `interrupted_unknown_outcome` and never re-run; the turn's `interrupted` flag tells the caller |
-| Side effects in the crash window | `ctx.apply_effect(key, fn)` lands an effect exactly once per turn, even when the crash hit after the effect but before the completion write |
-| One worker holds a session; others are fenced out | Lease with owner + expiry on the turn row; a live lease refuses a second worker (`TurnFenced`); a dead worker's lease expires and the resumer takes over |
+| Tools declare whether they may re-run | `StepDef.idempotent` is mandatory; the JOURNALED declaration governs on resume, so a resuming step list that disagrees with the journal (renamed step, flipped declaration) raises `JournalMismatch` instead of silently proceeding; an interrupted non-idempotent step is marked `interrupted_unknown_outcome` and never re-run; a non-idempotent step also gets exactly one attempt inside a run; the turn's `interrupted` flag tells the caller |
+| Side effects in the crash window | `ctx.apply_effect(key, fn)` lands an effect exactly once per turn, even when the crash hit after the effect but before the completion write; the check, the effect call, and the journal insert run in one `BEGIN IMMEDIATE` transaction with lease ownership revalidated inside it |
+| One worker holds a session; others are fenced out | Lease with owner + expiry on the turn row, acquired by a single conditional UPDATE (compare-and-swap: free, already ours, or expired) that raises `TurnFenced` unless exactly one row changed; ownership revalidated before each step execution; a dead worker's lease expires and the resumer takes over |
 | 64-step turn cap | `DEFAULT_STEP_CAP = 64`; a capped turn ends in status `step_cap` with the results it had |
 | Stream copied with a cursor so each line lands once | `read_events(turn_id, cursor=...)` returns journal events after the cursor; re-reading from the new cursor returns nothing twice |
 | Retries inside the loop | TW-208 self-healing `retry_with_backoff` / `is_transient`: transient failures retry, permanent failures fail the turn at once |
@@ -58,9 +58,10 @@ the interrupted turn is told what may have happened.
 draft, close job) in a child process and SIGKILLs it mid-turn, after the
 notify effect landed but before its completion was journaled.
 
-- Before (volatile in-memory turn, today's behavior): process killed with
-  SIGKILL, fresh process recovers 0 of 6 steps, turn lost, 4 landed side
-  effects orphaned.
+- Before (representative volatile in-memory turn; a constructed stand-in
+  written for the demo, not a measured legacy baseline): process killed
+  with SIGKILL, fresh process recovers 0 of 6 steps, turn lost, 4 landed
+  side effects orphaned.
 - After (this engine): journal after the kill shows 3 steps completed and
   4 effects recorded; a fresh process waits out the dead worker's lease,
   resumes, and completes 6 of 6 steps with 0 duplicate side effects.
@@ -78,5 +79,7 @@ notify effect landed but before its completion was journaled.
    journaling plus the 64-step cap is the default shape.
 
 Production hardening still owed before any of that ships: move the journal
-to Postgres with row-level fencing in one transaction, add a heartbeat so
-long steps extend their lease, and Rosa review (this branch is unmerged).
+to Postgres, carrying the compare-and-swap acquire and the per-step /
+per-effect ownership revalidation over as row-level fencing in one
+transaction; add a heartbeat so long steps extend their lease; and Rosa
+re-verification of the TW-665 fix round (this branch is unmerged).
