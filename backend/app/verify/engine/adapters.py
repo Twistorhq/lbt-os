@@ -42,11 +42,26 @@ class MrzAdapter:
 
 
 class Pdf417Adapter:
-    def __init__(self):
-        self._stage = stages.Pdf417Stage()
+    """PDF417 decode via zxing-cpp, AAMVA parsing via the harness.
+
+    Integration note (found live in TW-658): the TW-649 stage calls
+    zxingcpp.read_barcodes(image_path), but zxing-cpp 3.x takes an
+    image, not a path, and raises TypeError on a string. The stage
+    was only ever exercised against a stubbed module. This adapter
+    loads the image and calls the current API, then reuses the
+    harness's parse_aamva so field semantics stay single-sourced.
+    The harness stage itself is flagged for a follow-up fix.
+    """
 
     def decode_fields(self, image_path: str) -> dict[str, str]:
-        return self._stage.decode_fields(image_path)
+        zxingcpp = stages.Pdf417Stage()._require("zxingcpp")
+        from PIL import Image
+
+        results = zxingcpp.read_barcodes(Image.open(image_path))
+        for result in results:
+            if "PDF417" in str(getattr(result, "format", "")):
+                return stages.parse_aamva(result.text)
+        return {}
 
 
 class FaceDetectAdapter:
