@@ -28,3 +28,28 @@ Verdict: **APPROVE, conditional on the M2 decision landing** (see below). Every 
 1. M2 lands one of the two ways above; if it is the fix commit, I spot-verify it before merge.
 2. Merge still requires Justynn's word. Nothing merges on my say-so.
 3. Standing notes from my review remain in force: future Social slices of this size should stack, and the reveal surface must not ship publicly before the profiles slice closes the watermark gap (n2).
+
+## Addendum (2026-10-20): M2 spot-verification, APPROVE is now unconditional
+
+Justynn decided M2 on 2026-10-20 for the fix. The fix landed as RED `04af18a`, GREEN `0428b7c`, evidence `90449be`. I spot-verified it by my own execution. **The condition on my approval is satisfied; the verdict is APPROVE, unconditional.** Merge still requires Justynn's word, and he has since given the TW-658 merge (main is now at f44d646); TW-660 itself remains unmerged at this writing.
+
+What the fix does, confirmed from the diff and by execution: `join_group` now lands hidden-group joins as `invited`, riding the existing `decide_membership` flow unchanged (approve activates, decline deletes the pending row). Public and private join behavior is unchanged.
+
+**Ruling on the companion change: correct, complete, and necessary.** Zeke tightened the hidden branch of `_group_visible_to_member` to require status `active`, because `list_groups` serves the full group payload and a pending requester could otherwise have read the hidden group's name, description, and member count in the directory, and its detail, before approval. He was right to flag it and right to make it: without it, the M2 acceptance test (no read before approval) cannot pass. Every surface that reads group content routes through this gate or through an active-membership check of its own, and my probes covered each one (below).
+
+My own probes (15, all passing), written for this verification and aimed at paths the fix round's tests did not cover:
+
+- The join response carries no group payload (no name, description, member count, slug, or metro); it returns the membership row only.
+- A pending member cannot self-approve (`decide_membership` as actor: Forbidden) and cannot self-promote (`set_member_role`: refused); the row stays `invited`.
+- A pending member cannot create a series in the group and cannot read the host's series (`get_series`: NotFound); after approval the series reads fine.
+- Close-friend status does not beat hidden visibility: a pending member who is the host's close friend still gets NotFound on a close_friends-scope event, because the visibility gate runs before audience scope in `_can_view_event`.
+- A pending member cannot reveal a location inside the window.
+- A second join while invited is idempotent (one row, still invited); decline followed by a fresh join lands invited again and stays invisible.
+- Regressions around the companion change: private groups are untouched (join lands invited, the card stays in the directory, detail stays members-only); a public host-approved group still shows its card to a pending member with `viewer_membership_status` of invited; a public open group still lands active. The flagged side effect is hidden-only, and it is exactly the decided M2 semantics: a hidden group does not exist for a pending requester while they wait.
+- A removed hidden-group member sees nothing and cannot rejoin.
+- At the HTTP layer, a pending member's group detail returns 404 with a body byte-identical to a nonexistent group id; after approval it returns 200. The full approved flow (join, approve, RSVP going, reveal inside the window) works end to end.
+- Posts: this slice has no post or feed surface (no such routes exist in the router), so there is nothing for a pending member to read or write there; when the feed slice lands it must route through this same gate, and I will hold it to that in review.
+
+Numbers, reproduced by my own execution: core loop + router **106 passed**; all social **280 passed**; social + events **377 passed**; full suite branch **1188 passed / 20 failed / 7 errors** (my run showed 1203 passed with my 15 probe tests temporarily in the tree; excluding them it is exactly 1188) vs a fresh clean-main baseline I measured myself @ 8bed424 (**1090 / 20 / 7**), failed + error node sets **byte-identical (27 nodes, diff empty)**. Zero new failures: TRUE. RED honesty reproduced at `04af18a`: all five new `TestHiddenGroupJoin` tests plus the updated directory test fail against the pre-fix service. `ruff check` and `ruff format --check` are clean on the touched files, run by me. The evidence doc's M2 section matches every number I reproduced (TW-122 verified), including its RED count for the six named tests.
+
+Trial merge onto current main: I also merged this branch onto f44d646 (TW-658 merge) in a scratch worktree. Conflict-free; all 280 social tests and all 146 verify-engine tests pass on the merged tree. The branch is ready to land on current main whenever Justynn gives the word.
