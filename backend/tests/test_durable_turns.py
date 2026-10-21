@@ -10,12 +10,15 @@ an Exception the engine can catch, so recovery must work from the journal
 alone, with a brand-new engine instance on the same store file.
 """
 
+import sqlite3
+import threading
 import time
 
 import pytest
 
 from app.durable_turns import (
     DurableTurnEngine,
+    JournalMismatch,
     StepDef,
     TurnFenced,
 )
@@ -205,3 +208,200 @@ def test_events_cursor_reads_each_event_once(tmp_path):
     assert first and cursor > 0
     second, cursor2 = eng.read_events(tid, cursor=cursor)
     assert second == [] and cursor2 == cursor
+
+
+# --- TW-665 fix round: Rosa REQUEST CHANGES regression pins -----------------
+
+
+def _step_row(db, tid, idx):
+    with sqlite3.connect(db) as c:
+        c.row_factory = sqlite3.Row
+        return dict(
+            c.execute(
+                "SELECT * FROM durable_steps WHERE turn_id=? AND step_index=?",
+                (tid, idx),
+            ).fetchone()
+        )
+
+
+def test_flipped_declaration_on_resume_raises_and_never_reruns(tmp_path):
+    """M1: the journaled declaration governs. A resumer who flips a
+    crashed non-idempotent step to idempotent=True is refused, and the
+    handler does NOT silently re-run (Rosa's probe)."""
+    db = str(tmp_path / "turns.db")
+    eng = DurableTurnEngine(db, lease_seconds=0.1, base_delay=0.001)
+    tid = eng.submit(session_id="s1", message_id="m1", prompt="x")
+    calls = []
+
+    def send_then_crash(ctx):
+        calls.append("send")
+        raise SimulatedCrash()
+
+    steps = [StepDef("send", send_then_crash, idempotent=False)]
+    with pytest.raises(SimulatedCrash):
+        eng.run_turn(tid, steps, owner="w1")
+    time.sleep(0.15)  # dead worker's lease expires
+    eng2 = DurableTurnEngine(db, lease_seconds=0.1, base_delay=0.001)
+    flipped = [
+        StepDef("send", lambda ctx: calls.append("send-RERUN") or "ok", idempotent=True)
+    ]
+    with pytest.raises(JournalMismatch):
+        eng2.run_turn(tid, flipped, owner="w2")
+    assert calls == ["send"]
+
+
+def test_renamed_step_on_resume_raises(tmp_path):
+    """M1: a completed step's stored result must never be returned under
+    a different supplied name; a rename on resume raises."""
+    db = str(tmp_path / "turns.db")
+    eng = DurableTurnEngine(db, lease_seconds=0.1, base_delay=0.001)
+    tid = eng.submit(session_id="s1", message_id="m1", prompt="x")
+    calls = []
+
+    def boom(ctx):
+        calls.append("b")
+        raise SimulatedCrash()
+
+    steps = [
+        StepDef("a", lambda ctx: calls.append("a") or "ra", idempotent=True),
+        StepDef("b", boom, idempotent=True),
+    ]
+    with pytest.raises(SimulatedCrash):
+        eng.run_turn(tid, steps, owner="w1")
+    time.sleep(0.15)
+    eng2 = DurableTurnEngine(db, lease_seconds=0.1, base_delay=0.001)
+    renamed = [
+        StepDef("a-renamed", lambda ctx: "ra", idempotent=True),
+        StepDef("b", lambda ctx: calls.append("b2") or "rb", idempotent=True),
+    ]
+    with pytest.raises(JournalMismatch):
+        eng2.run_turn(tid, renamed, owner="w2")
+    assert calls == ["a", "b"]  # nothing re-ran, nothing proceeded
+
+
+def test_non_idempotent_step_is_not_retried_in_run(tmp_path):
+    """M2: a declared non-idempotent step gets exactly one attempt in a
+    run, even when the failure classifies as transient (Rosa's probe ran
+    the handler 3 times after its raw side effect)."""
+    eng = make_engine(tmp_path)
+    tid = eng.submit(session_id="s1", message_id="m1", prompt="x")
+    calls = []
+
+    def send(ctx):
+        calls.append("send")
+        raise ConnectionError("connection reset")  # transient class
+
+    out = eng.run_turn(tid, [StepDef("send", send, idempotent=False)], owner="w1")
+    assert out["status"] == "failed"
+    assert calls == ["send"]
+
+
+def test_concurrent_lease_acquire_has_exactly_one_winner(tmp_path):
+    """M3: barrier-synchronized racing acquires (Rosa's probe: both
+    workers won 13 of 30 trials before the CAS fix)."""
+    db = str(tmp_path / "turns.db")
+    for trial in range(30):
+        eng = DurableTurnEngine(db, lease_seconds=60)
+        tid = eng.submit(session_id="s", message_id=f"race-{trial}", prompt="x")
+        barrier = threading.Barrier(2)
+        outcomes = []
+
+        def contender(owner):
+            barrier.wait()
+            try:
+                eng.acquire_lease(tid, owner=owner)
+                outcomes.append(owner)
+            except TurnFenced:
+                outcomes.append(None)
+
+        threads = [
+            threading.Thread(target=contender, args=("w1",)),
+            threading.Thread(target=contender, args=("w2",)),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        winners = [o for o in outcomes if o]
+        assert len(winners) == 1, f"trial {trial}: winners={outcomes}"
+
+
+def test_worker_whose_lease_was_taken_over_stops_before_next_step(tmp_path):
+    """M3: ownership is revalidated during a run; a zombie whose lease
+    was taken over mid-run is fenced before it executes another step."""
+    db = str(tmp_path / "turns.db")
+    eng = DurableTurnEngine(db, lease_seconds=60, base_delay=0.001)
+    tid = eng.submit(session_id="s1", message_id="m1", prompt="x")
+    calls = []
+
+    def steal_lease(ctx):
+        calls.append("a")
+        with sqlite3.connect(db) as c:
+            c.execute(
+                "UPDATE durable_turns SET owner='w2', lease_expires_at=?"
+                " WHERE turn_id=?",
+                (time.time() + 60, tid),
+            )
+        return "ra"
+
+    steps = [
+        StepDef("a", steal_lease, idempotent=True),
+        StepDef("b", lambda ctx: calls.append("b") or "rb", idempotent=True),
+    ]
+    with pytest.raises(TurnFenced):
+        eng.run_turn(tid, steps, owner="w1")
+    assert calls == ["a"]  # step b never executed under the stolen lease
+
+
+def test_attempts_counter_counts_every_handler_run(tmp_path):
+    """m1: durable_steps.attempts must state reality (it stayed 0 while
+    a handler ran 3 times before the fix)."""
+    eng = make_engine(tmp_path)
+    tid = eng.submit(session_id="s1", message_id="m1", prompt="x")
+    attempts = {"n": 0}
+
+    def flaky(ctx):
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise ConnectionError("connection reset")
+        return "healed"
+
+    out = eng.run_turn(tid, [StepDef("flaky", flaky, idempotent=True)], owner="w1")
+    assert out["status"] == "completed"
+    row = _step_row(str(tmp_path / "turns.db"), tid, 0)
+    assert row["attempts"] == 3
+
+
+def test_rerun_of_completed_turn_is_a_noop(tmp_path):
+    """m2: re-running a completed turn returns the stored result without
+    journaling a phantom second turn_started / turn_completed pair."""
+    eng = make_engine(tmp_path)
+    tid = eng.submit(session_id="s1", message_id="m1", prompt="x")
+    calls = []
+    steps = [StepDef("a", lambda ctx: calls.append("a") or "ra", idempotent=True)]
+    out1 = eng.run_turn(tid, steps, owner="w1")
+    events_before, _ = eng.read_events(tid)
+    out2 = eng.run_turn(tid, steps, owner="w1")
+    events_after, _ = eng.read_events(tid)
+    assert out2["status"] == "completed"
+    assert out2["results"] == out1["results"] == ["ra"]
+    assert len(events_after) == len(events_before)
+    assert calls == ["a"]  # handler not re-run
+
+
+def test_duplicate_submit_journals_one_prompt_saved(tmp_path):
+    """m3: a retried submit reaches the same turn but does not append a
+    duplicate prompt_saved event."""
+    eng = make_engine(tmp_path)
+    tid = eng.submit(session_id="s1", message_id="m1", prompt="x")
+    assert eng.submit(session_id="s1", message_id="m1", prompt="x") == tid
+    assert eng.submit(session_id="s1", message_id="m1", prompt="x") == tid
+    events, _ = eng.read_events(tid)
+    assert [e["kind"] for e in events].count("prompt_saved") == 1
+
+
+def test_step_declaration_must_be_a_real_bool():
+    """n2: truthy non-bool declarations are not declarations."""
+    for bad in (1, 0, "yes"):
+        with pytest.raises(ValueError):
+            StepDef("x", lambda ctx: None, idempotent=bad)
