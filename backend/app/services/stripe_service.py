@@ -14,7 +14,7 @@ import logging
 import stripe
 from supabase import Client
 
-from ..config import PLAN_PRICE_MAP, settings
+from ..config import PLAN_LIMITS, PLAN_PRICE_MAP, TRIAL_PERIOD_DAYS, settings
 
 log = logging.getLogger(__name__)
 
@@ -51,6 +51,18 @@ def get_or_create_stripe_customer(db: Client, org_id: str, org_name: str, email:
     return customer.id
 
 
+def plan_allows_techs(plan: str, tech_count: int) -> bool:
+    """
+    TW-550: flat tiers carry unlimited technicians as a declared value.
+    max_techs=None means unlimited — never an absent check.
+    """
+    limits = PLAN_LIMITS.get(plan, {})
+    max_techs = limits.get("max_techs")
+    if max_techs is None:
+        return True
+    return tech_count <= max_techs
+
+
 def create_checkout_session(
     db: Client,
     org_id: str,
@@ -75,7 +87,10 @@ def create_checkout_session(
         client_reference_id=org_id,
         allow_promotion_codes=True,
         metadata={"lbt_org_id": org_id, "plan": plan},
-        subscription_data={"metadata": {"lbt_org_id": org_id, "plan": plan}},
+        subscription_data={
+            "metadata": {"lbt_org_id": org_id, "plan": plan},
+            "trial_period_days": TRIAL_PERIOD_DAYS,  # TW-550 land motion: 14-day trial
+        },
     )
     log.info("checkout_session_created", extra={"org_id": org_id, "plan": plan, "session_id": session.id})
     return session.url
@@ -98,7 +113,14 @@ def verify_checkout_session(db: Client, org_id: str, session_id: str) -> dict:
     if subscription:
         if isinstance(subscription, str):
             subscription = stripe.Subscription.retrieve(subscription)
-        sync_subscription(db, subscription)
+        try:
+            sync_subscription(db, subscription)
+        except Exception:
+            # TW-208 self-healing: a transient sync failure must not 500 a
+            # paid checkout. Last-known-good stays in the DB; the Stripe
+            # webhook (checkout.session.completed) performs the authoritative
+            # sync with retries.
+            log.exception("checkout_sync_deferred", extra={"org_id": org_id, "session_id": session.id})
 
     sub_id = getattr(subscription, "id", None) if subscription and not isinstance(subscription, str) else subscription
 

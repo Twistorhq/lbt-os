@@ -1,0 +1,194 @@
+/**
+ * Twistor Social design tokens (TW-652).
+ * Machine-readable companion to design-system/social/README.md.
+ * Package shape mirrors the Twistor Trades package (TW-175):
+ * tokens.css + manifest.json + README, brand contract in prose.
+ *
+ * SCHEME DECISION (Sofia, TW-652): Social is a consumer product with its
+ * own face. It does NOT use the trades-rugged scheme (warm bone, concrete,
+ * safety orange): that language belongs to Twistor Trades jobsite
+ * surfaces. Social runs two schemes built from the two existing brand
+ * palettes in twistor_core.design_intelligence, over one shared spine:
+ *
+ *   DAY   - Arroz con Leche. Warm paper canvas, ink text, indigo-violet
+ *           as structure. The default for every member surface: feed,
+ *           groups, events, profile, ghost town, public index. Consumer
+ *           social products live in daylight and in every lighting
+ *           condition; a clean light scheme is the corporate-clean face
+ *           applied to a consumer app, and it keeps the broadest
+ *           audience (including older members) reading comfortably.
+ *   VENUE - Medianoche. Near-black canvas, warm white text, violet mist
+ *           accents, boosted type sizes. NOT a user theme toggle: the
+ *           app switches by context for the moments that physically
+ *           happen in dark rooms: Door Pass door mode (TW-647 2.3), the
+ *           live check-in session (TW-646 7.1 to 7.4), and the venue
+ *           verify result page (TW-647 3.2). Dark surfaces do not blast
+ *           the member's eyes or light up a room, and the contrast
+ *           headroom is what makes a result glanceable at arm's length.
+ *
+ * SINGLE SOURCE OF TRUTH: every hex below is drawn from the shared
+ * Twistor brand palettes (Medianoche, Arroz con Leche) and the shared
+ * brand tokens in frontend/design-system/tokens.css. Social invents no
+ * hexes. The indigo-violet family is the spine both Twistor faces share;
+ * it is what makes Social and Trades one brand with two faces, never two
+ * brands. Semantic state hues (valid, caution, danger) are the one
+ * extension: functional colors a door result cannot ship without, each
+ * contrast-verified in README.md and always paired with words and icon
+ * shape, never color alone.
+ *
+ * NOTE: like the Trades package, this file is a reference for agents and
+ * tooling generating brand-conformant UI. Runtime styling maps these
+ * tokens through the Astryx theme layer (pinned @astryxdesign/core
+ * 0.6.2, theme-neutral, per the house design split) and Tailwind
+ * utilities. The [data-social-scheme] attribute is the runtime switch.
+ *
+ * Prepared by Twistor Holdings LLC
+ */
+
+/* ------------------------------------------------------------------ */
+/* Shared spine: the brand tokens Social inherits unchanged            */
+/* ------------------------------------------------------------------ */
+:root {
+  /* Brand violet family (shared with every Twistor surface) */
+  --soc-violet: #7c5cff;        /* Indigo Violet: accent, focus on dark */
+  --soc-violet-deep: #4a2fd6;   /* Indigo Deep: primary action, structure */
+  --soc-violet-mist: #b9a8ff;   /* Violet Mist: accent text on dark */
+
+  /* Brand neutrals shared across schemes */
+  --soc-warm-white: #f5f2ea;    /* text on dark, text on violet-deep */
+  --soc-medianoche: #0b0b10;    /* near-black canvas (venue scheme) */
+  --soc-panel: #13131b;         /* raised surface on near-black */
+
+  /* Type: Fraunces for display, Inter for UI. Fraunces is Social's own
+     face (warm, editorial, consumer); Inter is the family body font it
+     shares with Trades. Space Grotesk stays on Trades surfaces. */
+  --soc-font-display: "Fraunces", Georgia, serif;
+  --soc-font-body: Inter, system-ui, -apple-system, sans-serif;
+
+  /* Thumb-first primitives (mobile is the primary surface, TW-646 S.1) */
+  --soc-touch-min: 48px;        /* smallest tappable target, ever */
+  --soc-touch-primary: 56px;    /* primary actions, door and loop CTAs */
+  --soc-touch-door: 72px;       /* door mode exit and confirm targets */
+  --soc-thumb-pad: 16px;        /* screen edge padding inside thumb arc */
+  --soc-action-bar-clearance: calc(76px + env(safe-area-inset-bottom));
+  --soc-radius-card: 16px;
+  --soc-radius-sheet: 24px;     /* bottom sheets, one-handed flows */
+  --soc-radius-pill: 9999px;
+
+  /* Type scale, mobile first (rem, 16px root) */
+  --soc-text-caption: 0.8125rem;  /* 13px: labels, band chips, timestamps */
+  --soc-text-body: 1rem;          /* 16px: never smaller for body copy */
+  --soc-text-lede: 1.125rem;      /* 18px: card titles, list leads */
+  --soc-text-title: 1.5rem;       /* 24px: screen titles */
+  --soc-text-display: 2rem;       /* 32px: Fraunces display moments */
+  /* Venue scheme boosts (glanceable at arm's length, in bar light) */
+  --soc-text-venue-body: 1.1875rem;   /* 19px */
+  --soc-text-venue-title: 1.75rem;    /* 28px */
+  --soc-text-door-band: 4.5rem;       /* 72px: the "21+" on a result page */
+  --soc-text-door-clock: 2.25rem;     /* 36px: tabular, server time */
+
+  /* Motion: 150 to 300ms eases, never bouncy (brand rule). The one
+     exception is functional, not decorative: the Door Pass animated
+     validity element (TW-647 3.2) is a security control whose motion
+     is the proof a screenshot is dead. It runs only on the verify
+     result page and in door mode. */
+  --soc-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --soc-motion-fast: 150ms;
+  --soc-motion-base: 250ms;
+
+  /* Focus: visible everywhere, both schemes (accessibility gate) */
+  --soc-focus-ring: 0 0 0 2px var(--soc-canvas), 0 0 0 5px var(--soc-violet-deep);
+}
+
+/* ------------------------------------------------------------------ */
+/* DAY scheme: Arroz con Leche. Default for all member surfaces.       */
+/* ------------------------------------------------------------------ */
+:root,
+[data-social-scheme="day"] {
+  --soc-canvas: #faf7f0;          /* Paper */
+  --soc-surface: #f1ece1;         /* Crema: cards, sheets, modals
+                                     (separated by line and shadow) */
+  --soc-ink: #1a1712;             /* primary text */
+  --soc-ink-dim: #6e675c;         /* Muted Clay: secondary text */
+  --soc-line: rgba(26, 23, 18, 0.12);
+  --soc-action: #4a2fd6;          /* Indigo Deep fills; warm white text */
+  --soc-action-text: #f5f2ea;
+  --soc-accent: #4a2fd6;          /* links, active states */
+  --soc-chip-bg: rgba(74, 47, 214, 0.08);
+
+  /* Standing (rewards catalog): Ledger Gold is the currency metal.
+     Standing is shown in gold so it never borrows a safety color. */
+  --soc-standing: #8a5a2b;        /* Cafecito: tier text on paper */
+  --soc-standing-fill: #c9a24b;   /* Ledger Gold: marks only, never a
+                                     text color or text background */
+
+  /* Semantic states: always paired with words and icon shape */
+  --soc-valid: #067647;           /* arrived, confirmed, valid */
+  --soc-caution: #b54708;         /* need a minute, expiring, waitlist */
+  --soc-danger: #b42318;          /* need help, not valid, report */
+  --soc-valid-text: #f5f2ea;      /* text on valid fill */
+
+  /* Age band chips (decision: Justynn, 2026-10-20). The chip states a
+     verified fact about the member, like the door check does. 21 plus
+     is green, the 18 to 20 band is black, teen accounts carry the word
+     TEEN on an outlined violet chip. There is deliberately NO chip
+     variant for restriction or sanction state: punishment is never
+     displayed anywhere in the product (pattern 00). */
+  --soc-chip-21-bg: #067647;      /* deep green fill */
+  --soc-chip-21-text: #f5f2ea;
+  --soc-chip-18-bg: #1a1712;      /* Ink: the black chip */
+  --soc-chip-18-text: #f5f2ea;
+  --soc-chip-18-line: transparent; /* day: the fill defines the edge */
+  --soc-chip-teen-line: #4a2fd6;  /* Indigo Deep outline */
+  --soc-chip-teen-text: #4a2fd6;
+}
+
+/* ------------------------------------------------------------------ */
+/* VENUE scheme: Medianoche. Context-switched, never a user toggle.    */
+/* Applies to: door mode, live check-in session, verify result page.   */
+/* ------------------------------------------------------------------ */
+[data-social-scheme="venue"] {
+  --soc-canvas: #0b0b10;          /* Medianoche */
+  --soc-surface: #13131b;         /* Panel: cards, sheets, modals
+                                     (separated by line and shadow) */
+  --soc-ink: #f5f2ea;             /* Warm White */
+  --soc-ink-dim: #a8a29a;         /* Muted Sand */
+  --soc-line: rgba(245, 242, 234, 0.14);
+  --soc-action: #7c5cff;          /* Indigo Violet fills on dark */
+  --soc-action-text: #f5f2ea;
+  --soc-accent: #b9a8ff;          /* Violet Mist */
+  --soc-chip-bg: rgba(185, 168, 255, 0.12);
+
+  --soc-standing: #f2b33d;        /* Chinola: tier text on near-black */
+  --soc-standing-fill: #c9a24b;   /* Ledger Gold holds across schemes */
+
+  --soc-valid: #32d583;           /* bright: reads across a doorway */
+  --soc-caution: #fdb022;
+  --soc-danger: #f97066;
+  --soc-valid-text: #0b0b10;      /* near-black text on the valid banner */
+
+  /* Age band chips, venue scheme (pattern 00). Green brightens for bar
+     light; the black chip keeps its black fill and gains a warm white
+     outline so it stays defined on a near-black canvas; the TEEN chip
+     outline and text move to Violet Mist. */
+  --soc-chip-21-bg: #32d583;
+  --soc-chip-21-text: #0b0b10;
+  --soc-chip-18-bg: #1a1712;
+  --soc-chip-18-text: #f5f2ea;
+  --soc-chip-18-line: #f5f2ea;
+  --soc-chip-teen-line: #b9a8ff;
+  --soc-chip-teen-text: #b9a8ff;
+}
+
+/* ------------------------------------------------------------------ */
+/* Reduced motion: the brand rule, plus the venue exception handled    */
+/* honestly: with motion off, the verify page leans on the ticking     */
+/* server clock and rotating scan word (TW-647 3.2), which are text,   */
+/* not animation, and keep working.                                    */
+/* ------------------------------------------------------------------ */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --soc-motion-fast: 0ms;
+    --soc-motion-base: 0ms;
+  }
+}

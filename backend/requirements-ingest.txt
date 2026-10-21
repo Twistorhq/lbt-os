@@ -1,0 +1,15 @@
+# Prepared by Twistor Holdings LLC
+# TW-612 real-data ingestors: worker dependencies (FOSS, $0).
+# Kept separate from backend/requirements.txt so the API server stays lean;
+# the ingest worker installs both.
+xarray>=2024.1.0          # netCDF/Zarr dataset handling (GEFS GRIB via cfgrib engine needs eccodes)
+zarr>=2.18.0              # WB2 ERA5 cloud-optimized Zarr reads
+gcsfs>=2024.2.0           # gs:// access for the WB2 bucket
+netCDF4>=1.6.0            # 20CRv3 tarballs
+cfgrib>=0.9.10            # GRIB2 parsing (needs system eccodes)
+boto3>=1.34.0             # S3 listing for GEFS bucket walks
+pdfplumber>=0.11.0        # UVM/OSU hemp PDF table extraction
+tabula-py>=2.9.0          # fallback PDF table extraction
+beautifulsoup4>=4.12.0    # Missouri/NC State hemp HTML table scraping
+lxml>=5.0.0               # HTML parser backend
+requests>=2.31.0          # WoSIS GraphQL, Genesys, Figshare

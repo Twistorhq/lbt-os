@@ -66,13 +66,18 @@ class FakeDB:
 ORG = "org-123"
 
 ASSETS = [
-    # 18-year-old furnace: past expected life -> happened
+    # 24-year-old premium furnace: past the ML cohort median life
+    # (L50 ~= 21.4y) -> happened. (TW-213: ML dates replace static floors;
+    # fixture moved from 18y, which was tuned to the old 15y static floor
+    # and is ambiguous under ML semantics.)
     {"id": "a1", "org_id": ORG, "customer_id": "c1", "customer_name": "Smith",
-     "asset_type": "furnace", "brand": "Carrier", "install_date": _days_ago(18 * 365),
+     "asset_type": "furnace", "brand": "Carrier", "install_date": _days_ago(24 * 365),
      "expected_life_years": 18},
-    # 9.5-year-old AC: enters the 10y window within 12 months -> will
+    # 13.5-year-old premium AC: inside one window-year of the ML cohort
+    # median life (L50 ~= 14.1y) -> will. (TW-213: fixture moved from 9.5y,
+    # which was tuned to the old 10y static floor.)
     {"id": "a2", "org_id": ORG, "customer_id": "c2", "customer_name": "Jones",
-     "asset_type": "ac", "brand": "Trane", "install_date": _days_ago(int(9.5 * 365)),
+     "asset_type": "ac", "brand": "Trane", "install_date": _days_ago(int(13.5 * 365)),
      "expected_life_years": 12},
     # 3-year-old furnace: healthy -> no finding
     {"id": "a3", "org_id": ORG, "customer_id": "c3", "customer_name": "Lee",
@@ -172,6 +177,31 @@ class EquipmentGraveyardTest(unittest.TestCase):
         blob = str(brief)
         self.assertNotIn("org-other", blob)
         self.assertNotIn("Rheem", blob)
+
+    def test_ml_rows_carry_provenance_labels(self):
+        # TW-213: every ML-scored row carries its basis — never a bare number.
+        findings = run_leak_scan(_db(), ORG)["what_happened"]
+        grave = [f for f in findings if f["detector"] == "equipment-age-graveyard"]
+        smith = [e for e in grave[0]["entities"] if e.get("name") == "Smith"][0]
+        self.assertEqual(smith["replacement_basis"], "ml")
+        self.assertIn("80% interval", smith["remaining_window"])
+        self.assertIn("synthetic", smith["remaining_window"])
+        self.assertIn("cohort_median_life_years", smith)
+
+    def test_out_of_schema_type_uses_static_floor(self):
+        # TW-213: v1 covers furnace/ac/heat_pump/boiler/air_handler only.
+        # A water heater falls back to the static floor — loudly labeled.
+        db = _db(service_assets=[
+            {"id": "aw", "org_id": ORG, "customer_name": "Heater",
+             "asset_type": "water_heater", "brand": "Rheem",
+             "install_date": _days_ago(10 * 365), "expected_life_years": 8},
+        ])
+        findings = run_leak_scan(db, ORG)["what_happened"]
+        grave = [f for f in findings if f["detector"] == "equipment-age-graveyard"]
+        self.assertEqual(len(grave), 1)  # 10y >= 8y static floor -> past
+        ent = grave[0]["entities"][0]
+        self.assertEqual(ent["replacement_basis"], "static-floor")
+        self.assertNotIn("remaining_window", ent)
 
 
 class PlanChurnTest(unittest.TestCase):
@@ -289,10 +319,12 @@ class HostileCellTest(unittest.TestCase):
             brief["data_status"]["skipped_rows"].get("plan-churn-risk"), 1)
 
     def test_na_expected_life_falls_back_to_default(self):
+        # TW-213: fixture moved 18y -> 24y so the hostile "N/A" cell still
+        # exercises a past-life placement under ML semantics (L50 ~= 21.4y).
         assets = [
             {"id": "ab", "org_id": ORG, "customer_name": "BadCell",
              "asset_type": "furnace", "brand": "Carrier",
-             "install_date": _days_ago(18 * 365), "expected_life_years": "N/A"},
+             "install_date": _days_ago(24 * 365), "expected_life_years": "N/A"},
         ]
         brief = run_leak_scan(_db(service_assets=assets), ORG)
         self.assertNotIn("equipment-age-graveyard",

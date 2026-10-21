@@ -1,0 +1,527 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TW-652 Biometric Consent Screens: Preview</title>
+<style>
+/**
+ * Twistor Social design tokens (TW-652).
+ * Machine-readable companion to design-system/social/README.md.
+ * Package shape mirrors the Twistor Trades package (TW-175):
+ * tokens.css + manifest.json + README, brand contract in prose.
+ *
+ * SCHEME DECISION (Sofia, TW-652): Social is a consumer product with its
+ * own face. It does NOT use the trades-rugged scheme (warm bone, concrete,
+ * safety orange): that language belongs to Twistor Trades jobsite
+ * surfaces. Social runs two schemes built from the two existing brand
+ * palettes in twistor_core.design_intelligence, over one shared spine:
+ *
+ *   DAY   - Arroz con Leche. Warm paper canvas, ink text, indigo-violet
+ *           as structure. The default for every member surface: feed,
+ *           groups, events, profile, ghost town, public index. Consumer
+ *           social products live in daylight and in every lighting
+ *           condition; a clean light scheme is the corporate-clean face
+ *           applied to a consumer app, and it keeps the broadest
+ *           audience (including older members) reading comfortably.
+ *   VENUE - Medianoche. Near-black canvas, warm white text, violet mist
+ *           accents, boosted type sizes. NOT a user theme toggle: the
+ *           app switches by context for the moments that physically
+ *           happen in dark rooms: Door Pass door mode (TW-647 2.3), the
+ *           live check-in session (TW-646 7.1 to 7.4), and the venue
+ *           verify result page (TW-647 3.2). Dark surfaces do not blast
+ *           the member's eyes or light up a room, and the contrast
+ *           headroom is what makes a result glanceable at arm's length.
+ *
+ * SINGLE SOURCE OF TRUTH: every hex below is drawn from the shared
+ * Twistor brand palettes (Medianoche, Arroz con Leche) and the shared
+ * brand tokens in frontend/design-system/tokens.css. Social invents no
+ * hexes. The indigo-violet family is the spine both Twistor faces share;
+ * it is what makes Social and Trades one brand with two faces, never two
+ * brands. Semantic state hues (valid, caution, danger) are the one
+ * extension: functional colors a door result cannot ship without, each
+ * contrast-verified in README.md and always paired with words and icon
+ * shape, never color alone.
+ *
+ * NOTE: like the Trades package, this file is a reference for agents and
+ * tooling generating brand-conformant UI. Runtime styling maps these
+ * tokens through the Astryx theme layer (pinned @astryxdesign/core
+ * 0.6.2, theme-neutral, per the house design split) and Tailwind
+ * utilities. The [data-social-scheme] attribute is the runtime switch.
+ *
+ * Prepared by Twistor Holdings LLC
+ */
+
+/* ------------------------------------------------------------------ */
+/* Shared spine: the brand tokens Social inherits unchanged            */
+/* ------------------------------------------------------------------ */
+:root {
+  /* Brand violet family (shared with every Twistor surface) */
+  --soc-violet: #7c5cff;        /* Indigo Violet: accent, focus on dark */
+  --soc-violet-deep: #4a2fd6;   /* Indigo Deep: primary action, structure */
+  --soc-violet-mist: #b9a8ff;   /* Violet Mist: accent text on dark */
+
+  /* Brand neutrals shared across schemes */
+  --soc-warm-white: #f5f2ea;    /* text on dark, text on violet-deep */
+  --soc-medianoche: #0b0b10;    /* near-black canvas (venue scheme) */
+  --soc-panel: #13131b;         /* raised surface on near-black */
+
+  /* Type: Fraunces for display, Inter for UI. Fraunces is Social's own
+     face (warm, editorial, consumer); Inter is the family body font it
+     shares with Trades. Space Grotesk stays on Trades surfaces. */
+  --soc-font-display: "Fraunces", Georgia, serif;
+  --soc-font-body: Inter, system-ui, -apple-system, sans-serif;
+
+  /* Thumb-first primitives (mobile is the primary surface, TW-646 S.1) */
+  --soc-touch-min: 48px;        /* smallest tappable target, ever */
+  --soc-touch-primary: 56px;    /* primary actions, door and loop CTAs */
+  --soc-touch-door: 72px;       /* door mode exit and confirm targets */
+  --soc-thumb-pad: 16px;        /* screen edge padding inside thumb arc */
+  --soc-action-bar-clearance: calc(76px + env(safe-area-inset-bottom));
+  --soc-radius-card: 16px;
+  --soc-radius-sheet: 24px;     /* bottom sheets, one-handed flows */
+  --soc-radius-pill: 9999px;
+
+  /* Type scale, mobile first (rem, 16px root) */
+  --soc-text-caption: 0.8125rem;  /* 13px: labels, band chips, timestamps */
+  --soc-text-body: 1rem;          /* 16px: never smaller for body copy */
+  --soc-text-lede: 1.125rem;      /* 18px: card titles, list leads */
+  --soc-text-title: 1.5rem;       /* 24px: screen titles */
+  --soc-text-display: 2rem;       /* 32px: Fraunces display moments */
+  /* Venue scheme boosts (glanceable at arm's length, in bar light) */
+  --soc-text-venue-body: 1.1875rem;   /* 19px */
+  --soc-text-venue-title: 1.75rem;    /* 28px */
+  --soc-text-door-band: 4.5rem;       /* 72px: the "21+" on a result page */
+  --soc-text-door-clock: 2.25rem;     /* 36px: tabular, server time */
+
+  /* Motion: 150 to 300ms eases, never bouncy (brand rule). The one
+     exception is functional, not decorative: the Door Pass animated
+     validity element (TW-647 3.2) is a security control whose motion
+     is the proof a screenshot is dead. It runs only on the verify
+     result page and in door mode. */
+  --soc-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --soc-motion-fast: 150ms;
+  --soc-motion-base: 250ms;
+
+  /* Focus: visible everywhere, both schemes (accessibility gate) */
+  --soc-focus-ring: 0 0 0 2px var(--soc-canvas), 0 0 0 5px var(--soc-violet-deep);
+}
+
+/* ------------------------------------------------------------------ */
+/* DAY scheme: Arroz con Leche. Default for all member surfaces.       */
+/* ------------------------------------------------------------------ */
+:root,
+[data-social-scheme="day"] {
+  --soc-canvas: #faf7f0;          /* Paper */
+  --soc-surface: #f1ece1;         /* Crema: cards, sheets, modals
+                                     (separated by line and shadow) */
+  --soc-ink: #1a1712;             /* primary text */
+  --soc-ink-dim: #6e675c;         /* Muted Clay: secondary text */
+  --soc-line: rgba(26, 23, 18, 0.12);
+  --soc-action: #4a2fd6;          /* Indigo Deep fills; warm white text */
+  --soc-action-text: #f5f2ea;
+  --soc-accent: #4a2fd6;          /* links, active states */
+  --soc-chip-bg: rgba(74, 47, 214, 0.08);
+
+  /* Standing (rewards catalog): Ledger Gold is the currency metal.
+     Standing is shown in gold so it never borrows a safety color. */
+  --soc-standing: #8a5a2b;        /* Cafecito: tier text on paper */
+  --soc-standing-fill: #c9a24b;   /* Ledger Gold: marks only, never a
+                                     text color or text background */
+
+  /* Semantic states: always paired with words and icon shape */
+  --soc-valid: #067647;           /* arrived, confirmed, valid */
+  --soc-caution: #b54708;         /* need a minute, expiring, waitlist */
+  --soc-danger: #b42318;          /* need help, not valid, report */
+  --soc-valid-text: #f5f2ea;      /* text on valid fill */
+
+  /* Age band chips (decision: Justynn, 2026-10-20). The chip states a
+     verified fact about the member, like the door check does. 21 plus
+     is green, the 18 to 20 band is black, teen accounts carry the word
+     TEEN on an outlined violet chip. There is deliberately NO chip
+     variant for restriction or sanction state: punishment is never
+     displayed anywhere in the product (pattern 00). */
+  --soc-chip-21-bg: #067647;      /* deep green fill */
+  --soc-chip-21-text: #f5f2ea;
+  --soc-chip-18-bg: #1a1712;      /* Ink: the black chip */
+  --soc-chip-18-text: #f5f2ea;
+  --soc-chip-18-line: transparent; /* day: the fill defines the edge */
+  --soc-chip-teen-line: #4a2fd6;  /* Indigo Deep outline */
+  --soc-chip-teen-text: #4a2fd6;
+}
+
+/* ------------------------------------------------------------------ */
+/* VENUE scheme: Medianoche. Context-switched, never a user toggle.    */
+/* Applies to: door mode, live check-in session, verify result page.   */
+/* ------------------------------------------------------------------ */
+[data-social-scheme="venue"] {
+  --soc-canvas: #0b0b10;          /* Medianoche */
+  --soc-surface: #13131b;         /* Panel: cards, sheets, modals
+                                     (separated by line and shadow) */
+  --soc-ink: #f5f2ea;             /* Warm White */
+  --soc-ink-dim: #a8a29a;         /* Muted Sand */
+  --soc-line: rgba(245, 242, 234, 0.14);
+  --soc-action: #7c5cff;          /* Indigo Violet fills on dark */
+  --soc-action-text: #f5f2ea;
+  --soc-accent: #b9a8ff;          /* Violet Mist */
+  --soc-chip-bg: rgba(185, 168, 255, 0.12);
+
+  --soc-standing: #f2b33d;        /* Chinola: tier text on near-black */
+  --soc-standing-fill: #c9a24b;   /* Ledger Gold holds across schemes */
+
+  --soc-valid: #32d583;           /* bright: reads across a doorway */
+  --soc-caution: #fdb022;
+  --soc-danger: #f97066;
+  --soc-valid-text: #0b0b10;      /* near-black text on the valid banner */
+
+  /* Age band chips, venue scheme (pattern 00). Green brightens for bar
+     light; the black chip keeps its black fill and gains a warm white
+     outline so it stays defined on a near-black canvas; the TEEN chip
+     outline and text move to Violet Mist. */
+  --soc-chip-21-bg: #32d583;
+  --soc-chip-21-text: #0b0b10;
+  --soc-chip-18-bg: #1a1712;
+  --soc-chip-18-text: #f5f2ea;
+  --soc-chip-18-line: #f5f2ea;
+  --soc-chip-teen-line: #b9a8ff;
+  --soc-chip-teen-text: #b9a8ff;
+}
+
+/* ------------------------------------------------------------------ */
+/* Reduced motion: the brand rule, plus the venue exception handled    */
+/* honestly: with motion off, the verify page leans on the ticking     */
+/* server clock and rotating scan word (TW-647 3.2), which are text,   */
+/* not animation, and keep working.                                    */
+/* ------------------------------------------------------------------ */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --soc-motion-fast: 0ms;
+    --soc-motion-base: 0ms;
+  }
+}
+
+/**
+ * Twistor Social component styles (TW-652).
+ * Components consume the --soc-* tokens only; no hex is hardcoded here.
+ * Token source: frontend/design-system/social/tokens.css (the Social
+ * design foundation). Schemes switch on [data-social-scheme]; the
+ * consent flow is a day-scheme surface (pattern 01: it happens at home,
+ * in daylight, before the first night out).
+ *
+ * Prepared by Twistor Holdings LLC
+ */
+
+.soc-screen {
+  background: var(--soc-canvas);
+  color: var(--soc-ink);
+  font-family: var(--soc-font-body);
+  font-size: var(--soc-text-body);
+  line-height: 1.5;
+  min-height: 100%;
+  padding: 24px var(--soc-thumb-pad) var(--soc-action-bar-clearance);
+  box-sizing: border-box;
+}
+
+.soc-screen__inner {
+  max-width: 560px;
+  margin: 0 auto;
+}
+
+.soc-step {
+  color: var(--soc-ink-dim);
+  font-size: var(--soc-text-caption);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin: 0 0 8px;
+}
+
+.soc-badge-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--soc-accent);
+  font-weight: 600;
+  font-size: var(--soc-text-lede);
+  margin: 0 0 12px;
+}
+
+.soc-badge-line svg {
+  flex: none;
+}
+
+.soc-title {
+  font-family: var(--soc-font-display);
+  font-size: var(--soc-text-title);
+  font-weight: 600;
+  line-height: 1.2;
+  margin: 0 0 12px;
+}
+
+.soc-lede {
+  font-size: var(--soc-text-lede);
+  margin: 0 0 24px;
+}
+
+.soc-body {
+  margin: 0 0 16px;
+}
+
+.soc-body--dim {
+  color: var(--soc-ink-dim);
+}
+
+.soc-section-title {
+  font-size: var(--soc-text-lede);
+  font-weight: 700;
+  margin: 28px 0 8px;
+}
+
+/* Fact and schedule rows: label in ink, explanation below. Rows sit on
+   the canvas; the schedule screen groups them on a Crema surface. */
+.soc-fact {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--soc-line);
+}
+
+.soc-fact:last-child {
+  border-bottom: none;
+}
+
+.soc-fact__label {
+  font-weight: 700;
+  margin: 0 0 4px;
+}
+
+.soc-fact__text {
+  color: var(--soc-ink-dim);
+  margin: 0;
+}
+
+.soc-panel {
+  background: var(--soc-surface);
+  border-radius: var(--soc-radius-card);
+  padding: 4px 20px;
+  margin: 0 0 8px;
+}
+
+.soc-panel .soc-fact__text {
+  /* Muted Clay on Crema: 4.74 to 1, AA (computed 2026-10-20). */
+  color: var(--soc-ink-dim);
+}
+
+.soc-link {
+  color: var(--soc-accent);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.soc-link:focus-visible,
+.soc-btn:focus-visible,
+.soc-attest input:focus-visible {
+  outline: none;
+  box-shadow: var(--soc-focus-ring);
+  border-radius: 6px;
+}
+
+/* Attestation: the written-release equivalent (TW-654 Section 1.4,
+   item 1a). A real checkbox, unchecked by default, in a thumb-height
+   row; the grant button stays disabled until it is checked. */
+.soc-attest {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  min-height: var(--soc-touch-primary);
+  padding: 14px 0;
+  cursor: pointer;
+}
+
+.soc-attest input {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  margin: 2px 0 0;
+  accent-color: var(--soc-action);
+}
+
+.soc-version-line {
+  color: var(--soc-ink-dim);
+  font-size: var(--soc-text-caption);
+  margin: 16px 0 0;
+}
+
+/* Bottom action bar (pattern 00): one filled primary, one text-weight
+   secondary. The decline action is always rendered, always labeled,
+   never hidden behind a menu or a greyed state. */
+.soc-action-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--soc-canvas);
+  border-top: 1px solid var(--soc-line);
+  padding: 12px var(--soc-thumb-pad) calc(12px + env(safe-area-inset-bottom));
+  box-sizing: border-box;
+  z-index: 20;
+}
+
+.soc-action-bar__inner {
+  max-width: 560px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.soc-btn {
+  font-family: var(--soc-font-body);
+  font-size: var(--soc-text-body);
+  border: none;
+  cursor: pointer;
+  border-radius: var(--soc-radius-card);
+  transition: opacity var(--soc-motion-fast) var(--soc-ease);
+}
+
+.soc-btn--primary {
+  background: var(--soc-action);
+  color: var(--soc-action-text);
+  font-weight: 700;
+  min-height: var(--soc-touch-primary);
+  padding: 0 24px;
+  width: 100%;
+}
+
+.soc-btn--primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.soc-btn--text {
+  background: transparent;
+  color: var(--soc-accent);
+  font-weight: 600;
+  min-height: var(--soc-touch-min);
+  padding: 0 16px;
+  align-self: center;
+}
+
+/* State banner: icon shape plus words, never color alone (pattern 00). */
+.soc-banner {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  border-radius: var(--soc-radius-card);
+  padding: 16px 20px;
+  margin: 0 0 20px;
+}
+
+.soc-banner svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.soc-banner--valid {
+  background: var(--soc-valid);
+  color: var(--soc-valid-text);
+}
+
+.soc-banner--caution {
+  background: var(--soc-surface);
+  color: var(--soc-ink);
+  border: 1.5px solid var(--soc-caution);
+}
+
+.soc-banner__text {
+  margin: 0;
+  font-weight: 600;
+}
+
+/* Age band chip (pattern 00, SocBandChip): exactly three variants.
+   There is deliberately no variant for restriction or sanction state:
+   punishment is never displayed anywhere in the product. */
+.soc-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 8px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: var(--soc-text-caption);
+}
+
+.soc-chip--glance {
+  min-height: 36px;
+  padding: 0 14px;
+  font-size: 1rem;
+}
+
+.soc-chip--21 {
+  background: var(--soc-chip-21-bg);
+  color: var(--soc-chip-21-text);
+}
+
+.soc-chip--18 {
+  background: var(--soc-chip-18-bg);
+  color: var(--soc-chip-18-text);
+  border: 1.5px solid var(--soc-chip-18-line);
+}
+
+.soc-chip--teen {
+  background: transparent;
+  color: var(--soc-chip-teen-text);
+  border: 1.5px solid var(--soc-chip-teen-line);
+}
+
+.soc-approved-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 0 0 12px;
+}
+
+body { margin: 0; background: #26241f; font-family: Inter, system-ui, sans-serif; }
+header { color: #f5f2ea; padding: 24px 32px 8px; }
+header h1 { font-size: 22px; margin: 0 0 6px; }
+header p { margin: 0; opacity: 0.75; max-width: 70ch; }
+.grid { display: flex; flex-wrap: wrap; gap: 28px; padding: 24px 32px 48px; }
+.frame-wrap { margin: 0; }
+.frame-wrap figcaption { color: #f5f2ea; font-size: 13px; font-weight: 600;
+  letter-spacing: 0.04em; margin-bottom: 8px; text-transform: uppercase; }
+.phone { position: relative; width: 375px; height: 780px; overflow: hidden;
+  border-radius: 28px; transform: translateZ(0); background: var(--soc-canvas); }
+.phone .soc-screen { height: 100%; overflow-y: auto; }
+</style></head>
+<body>
+<header>
+<h1>TW-652: Twistor Social biometric consent screens</h1>
+<p>Server-rendered from the production components (BiometricConsentFlow), both
+languages, all nine states. The grant screen renders with the attestation
+unchecked, so the agree button shows its disabled state. Prepared by Twistor
+Holdings LLC.</p>
+</header>
+<div class="grid">
+<figure class="frame-wrap"><figcaption>EN · explain</figcaption><div class="phone"><main class="soc-screen" data-social-scheme="day"><div class="soc-screen__inner"><p class="soc-step">Step 1 of 4: Consent</p><h1 class="soc-title">The door check, before your first night out</h1><p class="soc-badge-line"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3l7 3v5c0 4.5-3 7.6-7 9-4-1.4-7-4.5-7-9V6l7-3z" fill="none" stroke="currentColor" stroke-width="1.8"></path><path d="M9 12l2.2 2.2L15.5 10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg>Checked at the door</p><p class="soc-lede">Everyone on Twistor Social passes the same ID check, the way a good door checks everyone in line. It happens once, here, before the night starts.</p><h2 class="soc-section-title">What we capture</h2><div class="soc-fact"><p class="soc-fact__label">Your ID</p><p class="soc-fact__text">A photo of your government ID, front and back, or the photo page of your passport.</p></div><div class="soc-fact"><p class="soc-fact__label">A live selfie</p><p class="soc-fact__text">A short live camera check, so we can match your face to the ID.</p></div><div class="soc-fact"><p class="soc-fact__label">A face template</p><p class="soc-fact__text">From the two, we build a face template: a mathematical map of your face. The template is the thing we keep.</p></div><h2 class="soc-section-title">Why we capture it</h2><div class="soc-fact"><p class="soc-fact__text">To confirm you are who you say you are, and which age band is yours. We record the band, never your birthdate.</p></div><div class="soc-fact"><p class="soc-fact__text">To keep one person to one verified account, so nobody can return under a fresh signup after a ban.</p></div><div class="soc-fact"><p class="soc-fact__text">To keep the room honest after the check, so the person who shows up is the person who verified.</p></div></div></main><div class="soc-action-bar"><div class="soc-action-bar__inner"><button type="button" class="soc-btn soc-btn--primary">Continue</button><button type="button" class="soc-btn soc-btn--text">Not now</button></div></div></div></figure>
+<figure class="frame-wrap"><figcaption>EN · schedule</figcaption><div class="phone"><main class="soc-screen" data-social-scheme="day"><div class="soc-screen__inner"><p class="soc-step">Step 1 of 4: Consent</p><h1 class="soc-title">What we keep, and when it is destroyed</h1><div class="soc-panel"><div class="soc-fact"><p class="soc-fact__label">Your ID and selfie photos</p><p class="soc-fact__text">Destroyed when your check is decided, and never kept longer than 72 hours.</p></div><div class="soc-fact"><p class="soc-fact__label">Your face template</p><p class="soc-fact__text">Kept only while your account stays verified. It stays inside the verification service, encrypted. Nothing outside that service ever receives it: the rest of Twistor Social only ever learns yes or no.</p></div><div class="soc-fact"><p class="soc-fact__label">If you close your account</p><p class="soc-fact__text">Your template is destroyed with the account.</p></div><div class="soc-fact"><p class="soc-fact__label">If you stop using Twistor Social</p><p class="soc-fact__text">Your template is destroyed 24 months after your last activity. We notify you before it happens, your account returns to unverified, and you can verify again whenever you like.</p></div><div class="soc-fact"><p class="soc-fact__label">If you withdraw consent</p><p class="soc-fact__text">You can withdraw in Settings at any time. Your template is destroyed and your account returns to browsing only, the same as before you verified.</p></div><div class="soc-fact"><p class="soc-fact__label">Never sold</p><p class="soc-fact__text">We never sell, lease, or trade your template or your photos. That promise stands in our published biometric policy, not just on this screen.</p></div></div><p><button type="button" class="soc-link soc-btn">Read the full biometric policy</button></p></div></main><div class="soc-action-bar"><div class="soc-action-bar__inner"><button type="button" class="soc-btn soc-btn--primary">Continue</button><button type="button" class="soc-btn soc-btn--text">Not now</button></div></div></div></figure>
+<figure class="frame-wrap"><figcaption>EN · grant</figcaption><div class="phone"><main class="soc-screen" data-social-scheme="day"><div class="soc-screen__inner"><p class="soc-step">Step 1 of 4: Consent</p><h1 class="soc-title">This consent stands on its own</h1><p class="soc-lede">It is separate from the Terms of Service. Agreeing to the terms does not give this consent, and this consent does not accept the terms.</p><p class="soc-body">You consent to the capture on the two screens before this one: an ID photo, a live selfie, and the face template built from them, kept and destroyed on the schedule you just read.</p><label class="soc-attest"><input type="checkbox"/><span>I understand what will be captured, why, how long it is kept, and when it is destroyed. I agree to the creation and keeping of my face template on that schedule.</span></label><p class="soc-version-line">Biometric consent, policy version 1.0. Retention schedule version 1.0. The version you saw is recorded with your consent.</p></div></main><div class="soc-action-bar"><div class="soc-action-bar__inner"><button type="button" class="soc-btn soc-btn--primary" disabled="">I agree. Start the check</button><button type="button" class="soc-btn soc-btn--text">Not now</button></div></div></div></figure>
+<figure class="frame-wrap"><figcaption>EN · declined</figcaption><div class="phone"><main class="soc-screen" data-social-scheme="day"><div class="soc-screen__inner"><h1 class="soc-title">No problem at all</h1><p class="soc-lede">Nothing was captured. No photo, no template, nothing to delete.</p><p class="soc-body">You can keep browsing public events and groups. The check stays here if you change your mind, and we will not keep asking.</p></div></main><div class="soc-action-bar"><div class="soc-action-bar__inner"><button type="button" class="soc-btn soc-btn--primary">Back to browsing</button></div></div></div></figure>
+<figure class="frame-wrap"><figcaption>EN · capture</figcaption><div class="phone"><main class="soc-screen" data-social-scheme="day"><div class="soc-screen__inner"><h1 class="soc-title">Now the check itself</h1><p class="soc-lede">Your camera opens next: first your ID, then the live selfie. Retakes are free and unpenalized, as many as you need.</p><p class="soc-body">Good light helps the most. If the camera check cannot read you, that is a limit of the camera, never a verdict on you.</p><p class="soc-body soc-body--dim">If the live challenge is not possible for you, a trained reviewer can run the check with assisted capture instead.</p><p><button type="button" class="soc-link soc-btn">Use human review instead</button></p></div></main><div class="soc-action-bar"><div class="soc-action-bar__inner"><button type="button" class="soc-btn soc-btn--primary">Open the camera check</button><button type="button" class="soc-btn soc-btn--text">Not now</button></div></div></div></figure>
+<figure class="frame-wrap"><figcaption>EN · pending</figcaption><div class="phone"><main class="soc-screen" data-social-scheme="day"><div class="soc-screen__inner"><h1 class="soc-title">A person is taking a look</h1><div class="soc-banner soc-banner--caution"><svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"></circle><path d="M12 7.5V12l3 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg><p class="soc-banner__text">Your check was routed to a trained reviewer. That is a normal part of this process, and it happens for every kind of reason, most of them about lighting and camera quality.</p></div><p class="soc-body">We notify you the moment there is a decision. Until then, you can keep browsing public events and groups.</p></div></main><div class="soc-action-bar"><div class="soc-action-bar__inner"><button type="button" class="soc-btn soc-btn--primary">Keep browsing</button></div></div></div></figure>
+<figure class="frame-wrap"><figcaption>EN · approved · 21+</figcaption><div class="phone"><main class="soc-screen" data-social-scheme="day"><div class="soc-screen__inner"><h1 class="soc-title">You are verified 21+</h1><div class="soc-banner soc-banner--valid"><svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"></circle><path d="M8.5 12.2l2.4 2.4 4.6-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg><p class="soc-banner__text">Checked at the door</p></div><div class="soc-approved-head"><span class="soc-chip soc-chip--21 soc-chip--glance" role="img" aria-label="Age band: 21 plus">21+</span></div><p class="soc-body">The room sees your band, never your birthdate. Your ID and selfie photos are destroyed on the schedule you agreed to; your template stays in the verification service, on that same schedule.</p></div></main><div class="soc-action-bar"><div class="soc-action-bar__inner"><button type="button" class="soc-btn soc-btn--primary">Start exploring</button></div></div></div></figure>
+<figure class="frame-wrap"><figcaption>EN · approved · 18-20</figcaption><div class="phone"><main class="soc-screen" data-social-scheme="day"><div class="soc-screen__inner"><h1 class="soc-title">You are verified 18+</h1><div class="soc-banner soc-banner--valid"><svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"></circle><path d="M8.5 12.2l2.4 2.4 4.6-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg><p class="soc-banner__text">Checked at the door</p></div><div class="soc-approved-head"><span class="soc-chip soc-chip--18 soc-chip--glance" role="img" aria-label="Age band: 18 to 20">18+</span></div><p class="soc-body">The room sees your band, never your birthdate. Your ID and selfie photos are destroyed on the schedule you agreed to; your template stays in the verification service, on that same schedule.</p></div></main><div class="soc-action-bar"><div class="soc-action-bar__inner"><button type="button" class="soc-btn soc-btn--primary">Start exploring</button></div></div></div></figure>
+<figure class="frame-wrap"><figcaption>EN · rejected</figcaption><div class="phone"><main class="soc-screen" data-social-scheme="day"><div class="soc-screen__inner"><h1 class="soc-title">We could not verify you this time</h1><p class="soc-lede">That is a limit of the check, not a verdict on you, and it is never the last word.</p><h2 class="soc-section-title">Try again with guidance</h2><p class="soc-body">Retake the camera check. The guidance walks you through light, distance, and glare, and retakes are always free.</p><h2 class="soc-section-title">Ask for a human review</h2><p class="soc-body">A trained reviewer takes a fresh look at your check.</p></div></main><div class="soc-action-bar"><div class="soc-action-bar__inner"><button type="button" class="soc-btn soc-btn--primary">Request human review</button><button type="button" class="soc-btn soc-btn--text">Retake the check</button></div></div></div></figure>
+<figure class="frame-wrap"><figcaption>EN · dormant</figcaption><div class="phone"><main class="soc-screen" data-social-scheme="day"><div class="soc-screen__inner"><h1 class="soc-title">Your verification has lapsed</h1><div class="soc-banner soc-banner--caution"><svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"></circle><path d="M12 7.5V12l3 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg><p class="soc-banner__text">Your face template was destroyed on March 4, 2028, on the published schedule.</p></div><p class="soc-body">It had been 24 months since your last activity here. Your account is unverified again, which means browsing works and posting waits, the same as before you first verified.</p><p class="soc-body">Nothing else changed. Your profile, your groups, and your history are still yours.</p></div></main><div class="soc-action-bar"><div class="soc-action-bar__inner"><button type="button" class="soc-btn soc-btn--primary">Verify again</button><button type="button" class="soc-btn soc-btn--text">Not now</button></div></div></div></figure>
+<figure class="frame-wrap"><figcaption>ES · explain</figcaption><div class="phone"><main class="soc-screen" data-social-scheme="day"><div class="soc-screen__inner"><p class="soc-step">Paso 1 de 4: Consentimiento</p><h1 class="soc-title">El control de la puerta, antes de tu primera noche</h1><p class="soc-badge-line"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3l7 3v5c0 4.5-3 7.6-7 9-4-1.4-7-4.5-7-9V6l7-3z" fill="none" stroke="currentColor" stroke-width="1.8"></path><path d="M9 12l2.2 2.2L15.5 10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg>Verificado en la puerta</p><p class="soc-lede">Toda persona en Twistor Social pasa el mismo control de identificación, como una buena puerta que revisa a toda la fila. Se hace una sola vez, aquí, antes de que empiece la noche.</p><h2 class="soc-section-title">Qué capturamos</h2><div class="soc-fact"><p class="soc-fact__label">Tu identificación</p><p class="soc-fact__text">Una foto de tu identificación oficial, frente y reverso, o la página con foto de tu pasaporte.</p></div><div class="soc-fact"><p class="soc-fact__label">Una selfie en vivo</p><p class="soc-fact__text">Una breve revisión con la cámara en vivo, para comparar tu rostro con la identificación.</p></div><div class="soc-fact"><p class="soc-fact__label">Una plantilla facial</p><p class="soc-fact__text">Con ambas creamos una plantilla facial: un mapa matemático de tu rostro. La plantilla es lo que conservamos.</p></div><h2 class="soc-section-title">Para qué lo capturamos</h2><div class="soc-fact"><p class="soc-fact__text">Para confirmar que eres quien dices ser y cuál es tu banda de edad. Registramos la banda, nunca tu fecha de nacimiento.</p></div><div class="soc-fact"><p class="soc-fact__text">Para mantener una sola cuenta verificada por persona, de modo que nadie pueda volver con un registro nuevo después de una expulsión.</p></div><div class="soc-fact"><p class="soc-fact__text">Para mantener la honestidad del lugar después del control, de modo que quien se presenta sea la persona que se verificó.</p></div></div></main><div class="soc-action-bar"><div class="soc-action-bar__inner"><button type="button" class="soc-btn soc-btn--primary">Continuar</button><button type="button" class="soc-btn soc-btn--text">Ahora no</button></div></div></div></figure>
+<figure class="frame-wrap"><figcaption>ES · schedule</figcaption><div class="phone"><main class="soc-screen" data-social-scheme="day"><div class="soc-screen__inner"><p class="soc-step">Paso 1 de 4: Consentimiento</p><h1 class="soc-title">Qué conservamos y cuándo se destruye</h1><div class="soc-panel"><div class="soc-fact"><p class="soc-fact__label">Las fotos de tu identificación y tu selfie</p><p class="soc-fact__text">Se destruyen cuando se decide tu verificación y nunca se conservan más de 72 horas.</p></div><div class="soc-fact"><p class="soc-fact__label">Tu plantilla facial</p><p class="soc-fact__text">Se conserva solo mientras tu cuenta siga verificada. Permanece dentro del servicio de verificación, cifrada. Nada fuera de ese servicio la recibe jamás: el resto de Twistor Social solo conoce un sí o un no.</p></div><div class="soc-fact"><p class="soc-fact__label">Si cierras tu cuenta</p><p class="soc-fact__text">Tu plantilla se destruye con la cuenta.</p></div><div class="soc-fact"><p class="soc-fact__label">Si dejas de usar Twistor Social</p><p class="soc-fact__text">Tu plantilla se destruye 24 meses después de tu última actividad. Te avisamos antes de que ocurra, tu cuenta vuelve a estar sin verificar y puedes verificarte de nuevo cuando quieras.</p></div><div class="soc-fact"><p class="soc-fact__label">Si retiras tu consentimiento</p><p class="soc-fact__text">Puedes retirarlo en Ajustes en cualquier momento. Tu plantilla se destruye y tu cuenta vuelve a ser solo de lectura, igual que antes de verificarte.</p></div><div class="soc-fact"><p class="soc-fact__label">Nunca se vende</p><p class="soc-fact__text">Nunca vendemos, arrendamos ni intercambiamos tu plantilla ni tus fotos. Esa promesa consta en nuestra política biométrica publicada, no solo en esta pantalla.</p></div></div><p><button type="button" class="soc-link soc-btn">Leer la política biométrica completa</button></p></div></main><div class="soc-action-bar"><div class="soc-action-bar__inner"><button type="button" class="soc-btn soc-btn--primary">Continuar</button><button type="button" class="soc-btn soc-btn--text">Ahora no</button></div></div></div></figure>
+<figure class="frame-wrap"><figcaption>ES · grant</figcaption><div class="phone"><main class="soc-screen" data-social-scheme="day"><div class="soc-screen__inner"><p class="soc-step">Paso 1 de 4: Consentimiento</p><h1 class="soc-title">Este consentimiento vale por sí solo</h1><p class="soc-lede">Es independiente de los Términos de Servicio. Aceptar los términos no otorga este consentimiento, y este consentimiento no acepta los términos.</p><p class="soc-body">Aceptas la captura descrita en las dos pantallas anteriores: una foto de tu identificación, una selfie en vivo y la plantilla facial creada a partir de ellas, conservada y destruida según el calendario que acabas de leer.</p><label class="soc-attest"><input type="checkbox"/><span>Entiendo qué se capturará, para qué, cuánto tiempo se conservará y cuándo se destruirá. Acepto la creación y conservación de mi plantilla facial según ese calendario.</span></label><p class="soc-version-line">Consentimiento biométrico, versión de política 1.0. Versión del calendario de retención 1.0. La versión que viste queda registrada con tu consentimiento.</p></div></main><div class="soc-action-bar"><div class="soc-action-bar__inner"><button type="button" class="soc-btn soc-btn--primary" disabled="">Acepto. Empezar la verificación</button><button type="button" class="soc-btn soc-btn--text">Ahora no</button></div></div></div></figure>
+<figure class="frame-wrap"><figcaption>ES · declined</figcaption><div class="phone"><main class="soc-screen" data-social-scheme="day"><div class="soc-screen__inner"><h1 class="soc-title">Sin ningún problema</h1><p class="soc-lede">No se capturó nada. Ni foto, ni plantilla, nada que borrar.</p><p class="soc-body">Puedes seguir explorando los eventos y grupos públicos. La verificación seguirá aquí si cambias de opinión, y no te lo estaremos preguntando.</p></div></main><div class="soc-action-bar"><div class="soc-action-bar__inner"><button type="button" class="soc-btn soc-btn--primary">Volver a explorar</button></div></div></div></figure>
+<figure class="frame-wrap"><figcaption>ES · capture</figcaption><div class="phone"><main class="soc-screen" data-social-scheme="day"><div class="soc-screen__inner"><h1 class="soc-title">Ahora sí, la verificación</h1><p class="soc-lede">A continuación se abre tu cámara: primero tu identificación, después la selfie en vivo. Puedes repetir las tomas gratis y sin penalización, las veces que necesites.</p><p class="soc-body">Buena luz es lo que más ayuda. Si la cámara no logra leerte, eso es un límite de la cámara, nunca un juicio sobre ti.</p><p class="soc-body soc-body--dim">Si el desafío en vivo no es posible para ti, una persona capacitada puede hacer la verificación con captura asistida.</p><p><button type="button" class="soc-link soc-btn">Usar revisión humana</button></p></div></main><div class="soc-action-bar"><div class="soc-action-bar__inner"><button type="button" class="soc-btn soc-btn--primary">Abrir la verificación con cámara</button><button type="button" class="soc-btn soc-btn--text">Ahora no</button></div></div></div></figure>
+<figure class="frame-wrap"><figcaption>ES · pending</figcaption><div class="phone"><main class="soc-screen" data-social-scheme="day"><div class="soc-screen__inner"><h1 class="soc-title">Una persona está revisando tu caso</h1><div class="soc-banner soc-banner--caution"><svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"></circle><path d="M12 7.5V12l3 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg><p class="soc-banner__text">Tu verificación pasó a una persona capacitada. Es una parte normal de este proceso y ocurre por todo tipo de razones, la mayoría relacionadas con la luz y la calidad de la cámara.</p></div><p class="soc-body">Te avisaremos en cuanto haya una decisión. Mientras tanto, puedes seguir explorando los eventos y grupos públicos.</p></div></main><div class="soc-action-bar"><div class="soc-action-bar__inner"><button type="button" class="soc-btn soc-btn--primary">Seguir explorando</button></div></div></div></figure>
+<figure class="frame-wrap"><figcaption>ES · approved · 21+</figcaption><div class="phone"><main class="soc-screen" data-social-scheme="day"><div class="soc-screen__inner"><h1 class="soc-title">Verificación completa: 21+</h1><div class="soc-banner soc-banner--valid"><svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"></circle><path d="M8.5 12.2l2.4 2.4 4.6-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg><p class="soc-banner__text">Verificado en la puerta</p></div><div class="soc-approved-head"><span class="soc-chip soc-chip--21 soc-chip--glance" role="img" aria-label="Banda de edad: 21 o más">21+</span></div><p class="soc-body">El lugar ve tu banda, nunca tu fecha de nacimiento. Las fotos de tu identificación y tu selfie se destruyen según el calendario que aceptaste; tu plantilla permanece en el servicio de verificación, con ese mismo calendario.</p></div></main><div class="soc-action-bar"><div class="soc-action-bar__inner"><button type="button" class="soc-btn soc-btn--primary">Empezar a explorar</button></div></div></div></figure>
+<figure class="frame-wrap"><figcaption>ES · approved · 18-20</figcaption><div class="phone"><main class="soc-screen" data-social-scheme="day"><div class="soc-screen__inner"><h1 class="soc-title">Verificación completa: 18+</h1><div class="soc-banner soc-banner--valid"><svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"></circle><path d="M8.5 12.2l2.4 2.4 4.6-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg><p class="soc-banner__text">Verificado en la puerta</p></div><div class="soc-approved-head"><span class="soc-chip soc-chip--18 soc-chip--glance" role="img" aria-label="Banda de edad: de 18 a 20">18+</span></div><p class="soc-body">El lugar ve tu banda, nunca tu fecha de nacimiento. Las fotos de tu identificación y tu selfie se destruyen según el calendario que aceptaste; tu plantilla permanece en el servicio de verificación, con ese mismo calendario.</p></div></main><div class="soc-action-bar"><div class="soc-action-bar__inner"><button type="button" class="soc-btn soc-btn--primary">Empezar a explorar</button></div></div></div></figure>
+<figure class="frame-wrap"><figcaption>ES · rejected</figcaption><div class="phone"><main class="soc-screen" data-social-scheme="day"><div class="soc-screen__inner"><h1 class="soc-title">Esta vez no pudimos verificarte</h1><p class="soc-lede">Eso es un límite de la verificación, no un juicio sobre ti, y nunca es la última palabra.</p><h2 class="soc-section-title">Intentarlo de nuevo con guía</h2><p class="soc-body">Repite la verificación con cámara. La guía te acompaña con la luz, la distancia y los reflejos, y repetir es siempre gratis.</p><h2 class="soc-section-title">Pedir una revisión humana</h2><p class="soc-body">Una persona capacitada revisa tu verificación con ojos nuevos.</p></div></main><div class="soc-action-bar"><div class="soc-action-bar__inner"><button type="button" class="soc-btn soc-btn--primary">Solicitar revisión humana</button><button type="button" class="soc-btn soc-btn--text">Repetir la verificación</button></div></div></div></figure>
+<figure class="frame-wrap"><figcaption>ES · dormant</figcaption><div class="phone"><main class="soc-screen" data-social-scheme="day"><div class="soc-screen__inner"><h1 class="soc-title">Tu verificación venció</h1><div class="soc-banner soc-banner--caution"><svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"></circle><path d="M12 7.5V12l3 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg><p class="soc-banner__text">Tu plantilla facial se destruyó el March 4, 2028, según el calendario publicado.</p></div><p class="soc-body">Habían pasado 24 meses desde tu última actividad aquí. Tu cuenta volvió a estar sin verificar: explorar funciona y publicar espera, igual que antes de tu primera verificación.</p><p class="soc-body">Nada más cambió. Tu perfil, tus grupos y tu historial siguen siendo tuyos.</p></div></main><div class="soc-action-bar"><div class="soc-action-bar__inner"><button type="button" class="soc-btn soc-btn--primary">Verificarme de nuevo</button><button type="button" class="soc-btn soc-btn--text">Ahora no</button></div></div></div></figure>
+</div>
+</body></html>

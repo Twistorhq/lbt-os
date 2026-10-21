@@ -27,9 +27,11 @@ class Settings(BaseSettings):
     # Stripe
     stripe_secret_key: str
     stripe_webhook_secret: str
-    stripe_price_basic: str
-    stripe_price_pro: str
-    stripe_price_premium: str
+    stripe_price_basic: str = "legacy-grandfathered"   # grandfathered; not sold
+    stripe_price_pro: str = "legacy-grandfathered"     # grandfathered; not sold
+    stripe_price_premium: str = "legacy-grandfathered" # grandfathered; not sold
+    stripe_price_trades_starter: str  # $299/shop/mo flat (TW-550)
+    stripe_price_trades_pro: str      # $499/shop/mo flat (TW-550)
 
     # App
     app_env: str = "development"
@@ -38,6 +40,9 @@ class Settings(BaseSettings):
     cors_origins: str = ""
     # Comma-separated hostnames accepted by TrustedHostMiddleware in production.
     trusted_hosts: str = ""
+    # TW-484: owner SSO — comma-separated emails that bypass all plan gates.
+    # The owner signs in once via Clerk; backend + frontend unlock everything.
+    owner_emails: str = ""
     api_secret: str | None = None          # not currently used; remove weak default
     # Development/demo only: lets testers rerun free-tier audits without monthly gating.
     demo_allow_unlimited_audits: bool = False
@@ -55,10 +60,20 @@ class Settings(BaseSettings):
     resend_api_key: str | None = None
     from_email: str = "LBT OS <noreply@lbt-os.com>"
 
+    # Twistor Identity (TW-619) — corporate-voice identity emails (Resend)
+    identity_from_email: str = "Twistor <noreply@twistor.co>"
+    identity_magic_link_path: str = "/auth/magic-link"
+    identity_public_api_url: str = "http://localhost:8000"
+
     # SMS (Twilio) — optional; SMS is silently skipped if not set
     twilio_account_sid: str | None = None
     twilio_auth_token: str | None = None
     twilio_from_number: str | None = None  # e.g. +15555550100
+    twilio_10dlc_configured: bool = False  # TW-556: M2 recovery SMS requires 10DLC registration
+
+    # Twistor Flows (TW-625) — scheduler tick guard. Unset = tick refuses
+    # (fail-closed); no schedule ever fires without this key.
+    flows_tick_key: str | None = None
 
     # Integration / OAuth
     integration_secret_key: str | None = None
@@ -123,9 +138,8 @@ class Settings(BaseSettings):
             required_stripe = {
                 "STRIPE_SECRET_KEY": self.stripe_secret_key,
                 "STRIPE_WEBHOOK_SECRET": self.stripe_webhook_secret,
-                "STRIPE_PRICE_BASIC": self.stripe_price_basic,
-                "STRIPE_PRICE_PRO": self.stripe_price_pro,
-                "STRIPE_PRICE_PREMIUM": self.stripe_price_premium,
+                "STRIPE_PRICE_TRADES_STARTER": self.stripe_price_trades_starter,
+                "STRIPE_PRICE_TRADES_PRO": self.stripe_price_trades_pro,
             }
             missing = [name for name, value in required_stripe.items() if not value or "placeholder" in value.lower()]
             if missing:
@@ -135,7 +149,7 @@ class Settings(BaseSettings):
             if not self.stripe_webhook_secret.startswith("whsec_"):
                 raise ValueError("STRIPE_WEBHOOK_SECRET must be a Stripe webhook signing secret in production.")
             bad_prices = [
-                name for name in ("STRIPE_PRICE_BASIC", "STRIPE_PRICE_PRO", "STRIPE_PRICE_PREMIUM")
+                name for name in ("STRIPE_PRICE_TRADES_STARTER", "STRIPE_PRICE_TRADES_PRO")
                 if not required_stripe[name].startswith("price_")
             ]
             if bad_prices:
@@ -144,15 +158,44 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
+# TW-550: flat per-shop pricing (the anti-ServiceTitan wedge). Legacy
+# basic/pro/premium are grandfathered — existing subscriptions keep syncing
+# via webhook metadata passthrough, but no new checkouts are sold on them.
 PLAN_PRICE_MAP: dict[str, str] = {
-    "basic":   settings.stripe_price_basic,
-    "pro":     settings.stripe_price_pro,
-    "premium": settings.stripe_price_premium,
+    "trades_starter": settings.stripe_price_trades_starter,  # $299/shop/mo
+    "trades_pro":     settings.stripe_price_trades_pro,      # $499/shop/mo
 }
 
-PLAN_FEATURES: dict[str, list[str]] = {
-    "basic":   ["leads", "sales", "customers", "expenses", "dashboard"],
-    "pro":     ["leads", "sales", "customers", "expenses", "dashboard", "ai_audit"],
-    "premium": ["leads", "sales", "customers", "expenses", "dashboard", "ai_audit", "consulting"],
-    "enterprise": ["leads", "sales", "customers", "expenses", "dashboard", "ai_audit", "consulting", "dots_video"],
+# Explicit technician limits. None = unlimited, declared — never an absent check.
+PLAN_LIMITS: dict[str, dict] = {
+    "trades_starter": {"max_techs": None},
+    "trades_pro":     {"max_techs": None},
 }
+
+# Land motion (TW-549): 14-day trial, zero credit risk.
+TRIAL_PERIOD_DAYS = 14
+
+# Micro-toll rates in cents per event (TW-549 Twistor staple). The toll ledger
+# owns this vocabulary; M2/M3 emit events, the ledger prices them.
+# Percent-of-value events (e.g. booking.recovered at 10% of job value) are NOT
+# in this map: the emitter computes the amount and passes amount_cents.
+TOLL_RATES: dict[str, int] = {
+    "missed_call.detected": 10,   # $0.10 per detected missed call
+    "sms.auto_reply":         5,  # $0.05 per auto-SMS
+    "call.ai_handled":       50,  # $0.50 per AI-handled call
+    "bi.embed_view":          5,  # $0.05 per public embed view (TW-570)
+    "bi.connector_sync":     25,  # $0.25 per connector sync (TW-570)
+    # TW-593 science data layer (V1 defaults; dynamic volume tiers stamped per doctrine)
+    "data.science.query":     5,  # $0.05 per gold query call
+    "data.science.bulk":     25,  # $0.25 per 1k rows on bulk export
+    "data.science.ingest":   10,  # $0.10 per ingested batch (lab-side, nominal)
+    "data.science.benchmark": 50,  # $0.50 per benchmark submission
+    # TW-620 Twistor Notify: orchestration toll per message sent
+    "notify.message_sent":    1,  # $0.01 per orchestrated notification
+    # TW-625 Twistor Flows: execution toll per step executed
+    "flows.step_executed":    1,  # $0.01 per executed workflow step
+}
+
+# NOTE (TW-550): PLAN_FEATURES removed — it had no consumers and listed only
+# legacy plans. Plan capabilities are expressed via PLAN_LIMITS (techs),
+# PLAN_AUDIT_LIMITS (ai_audit), and require_plan() (route gates).

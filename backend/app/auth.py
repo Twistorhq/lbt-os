@@ -86,12 +86,59 @@ class UserContext:
 
 class AuthContext:
     """Full auth — verified user with a resolved org UUID."""
-    def __init__(self, user_id: str, org_id: str, plan: str = "basic", subscription_status: str = "inactive", stripe_subscription_id: str | None = None):
+    # TW-677 merge union: the PR's subscription fields keep their positional
+    # slots (existing Trade View tests construct them positionally) and
+    # TW-484's is_owner is appended, so every main-side caller using keywords
+    # or <=3 positional args is unaffected.
+    def __init__(self, user_id: str, org_id: str, plan: str = "basic", subscription_status: str = "inactive", stripe_subscription_id: str | None = None, is_owner: bool = False):
         self.user_id = user_id
         self.org_id  = org_id
         self.plan    = plan
         self.subscription_status = subscription_status
         self.stripe_subscription_id = stripe_subscription_id
+        self.is_owner = is_owner  # TW-484: owner SSO bypasses all plan gates
+
+
+def is_owner_email(email: str | None) -> bool:
+    """TW-484: check an email against the OWNER_EMAILS allowlist (case-insensitive)."""
+    if not email:
+        return False
+    return email.strip().lower() in _owner_allowlist()
+
+
+_owner_allowlist_cache: frozenset = frozenset()
+_owner_allowlist_raw: str | None = None
+
+
+def _owner_allowlist() -> frozenset:
+    """Parse OWNER_EMAILS once; re-parse only when the raw value changes."""
+    global _owner_allowlist_cache, _owner_allowlist_raw
+    raw = settings.owner_emails
+    if raw != _owner_allowlist_raw:
+        _owner_allowlist_cache = frozenset(
+            e.strip().lower() for e in raw.split(",") if e.strip()
+        )
+        _owner_allowlist_raw = raw
+    return _owner_allowlist_cache
+
+
+_owner_status_cache: dict = {}  # user_id -> (is_owner, fetched_at)
+_owner_status_lock = threading.Lock()
+OWNER_STATUS_TTL = 600  # 10 minutes — owner changes take effect shortly after
+
+
+def resolve_owner_status(user_id: str) -> bool:
+    """TW-484: cached owner check. Hits Clerk's API at most once per user
+    per 10 minutes instead of on every authenticated request."""
+    now = time.time()
+    with _owner_status_lock:
+        cached = _owner_status_cache.get(user_id)
+        if cached and now - cached[1] < OWNER_STATUS_TTL:
+            return cached[0]
+    is_owner = is_owner_email(get_clerk_user_email(user_id))
+    with _owner_status_lock:
+        _owner_status_cache[user_id] = (is_owner, now)
+    return is_owner
 
 
 async def get_user(
@@ -135,6 +182,8 @@ async def get_auth(
         plan=result.data.get("plan", "basic"),
         subscription_status=result.data.get("subscription_status", "inactive"),
         stripe_subscription_id=result.data.get("stripe_subscription_id"),
+        # TW-484: owner SSO — cached lookup, not a Clerk call per request.
+        is_owner=resolve_owner_status(user_id),
     )
 
 
@@ -195,11 +244,22 @@ def get_clerk_user_phone(user_id: str) -> str | None:
     return None
 
 
+# TW-550: plan entitlement ladder. Flat trades tiers are mapped explicitly —
+# trades_starter ($299) sits at legacy pro level, trades_pro ($499) at premium.
+# Unknown plan strings default to 0 (most restrictive) in the check below.
+PLAN_ORDER = {
+    "basic": 0, "pro": 1, "premium": 2, "enterprise": 3,
+    "trades_starter": 1, "trades_pro": 2,
+}
+
+
 def require_plan(minimum_plan: str):
     """Gate a route to a minimum subscription tier."""
-    PLAN_ORDER = {"basic": 0, "pro": 1, "premium": 2, "enterprise": 3}
 
     def _check(auth: AuthContext = Depends(get_auth)) -> AuthContext:
+        # TW-484: owner SSO bypasses all plan gates.
+        if auth.is_owner:
+            return auth
         if PLAN_ORDER.get(auth.plan, 0) < PLAN_ORDER.get(minimum_plan, 99):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

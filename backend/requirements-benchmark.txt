@@ -1,0 +1,25 @@
+# TW-649 verification benchmark: heavy FOSS model stack.
+#
+# NOT part of requirements.txt. The benchmark harness's metric core
+# (metrics, documents, registry, runner) is pure stdlib and never
+# imports anything here; stages.py imports each library lazily and
+# reports unavailable honestly when it is absent. Install this file
+# only on the machine that executes real dataset runs.
+#
+# Every entry is FOSS with commercially usable code AND model
+# licenses (TW-646 Section 5.3). InsightFace is excluded on purpose:
+# its pretrained model packs are non-commercial research only.
+#
+#   pip install -r requirements-benchmark.txt
+
+numpy>=1.26                # Apache-2.0/BSD array substrate for all stages
+paddleocr>=2.7             # Apache-2.0; OCR stage (pulls paddlepaddle)
+paddlepaddle>=2.6          # Apache-2.0; PaddleOCR runtime (CPU build)
+passporteye>=2.2           # MIT; MRZ read stage
+zxing-cpp>=2.2             # Apache-2.0; PDF417 decode stage
+opencv-python-headless>=4.9  # Apache-2.0; YuNet face detection stage
+mediapipe>=0.10            # Apache-2.0; Face Mesh landmarks stage
+face-recognition>=1.3      # MIT wrapper; dlib (Boost) face-match stage.
+                           # dlib builds from source: needs cmake + a
+                           # C++ toolchain on the benchmark machine.
+onnxruntime>=1.17          # MIT; MiniFASNet liveness stage runtime

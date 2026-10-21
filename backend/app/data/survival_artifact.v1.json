@@ -1,0 +1,288 @@
+{
+  "schema_version": 1,
+  "model_version": "synthetic-v1",
+  "fit_date": "2026-10-13",
+  "calibration_provenance": "synthetic",
+  "nominal_coverage": 0.8,
+  "alpha": 0.2,
+  "method": "Weibull AFT closed forms on synthetic generator ground-truth params; split-conformal q per metro on |truth - mu| residuals. Machinery validation only \u2014 NOT real calibration.",
+  "equipment_types": [
+    "ac",
+    "air_handler",
+    "boiler",
+    "furnace",
+    "heat_pump"
+  ],
+  "metros": [
+    "denver",
+    "phoenix",
+    "austin",
+    "seattle"
+  ],
+  "groups": {
+    "denver|furnace": {
+      "rho": 2.2,
+      "lambda0_years": 22.0,
+      "brand_mult": {
+        "value": 0.85,
+        "mid": 1.0,
+        "premium": 1.15
+      },
+      "q_years": 9.7193,
+      "n_calibration": 992,
+      "nominal_coverage": 0.8,
+      "note": "no metro wear"
+    },
+    "denver|boiler": {
+      "rho": 2.4,
+      "lambda0_years": 25.0,
+      "brand_mult": {
+        "value": 0.85,
+        "mid": 1.0,
+        "premium": 1.15
+      },
+      "q_years": 9.7193,
+      "n_calibration": 992,
+      "nominal_coverage": 0.8,
+      "note": "no metro wear"
+    },
+    "denver|ac": {
+      "rho": 1.8,
+      "lambda0_years": 15.0,
+      "brand_mult": {
+        "value": 0.85,
+        "mid": 1.0,
+        "premium": 1.15
+      },
+      "q_years": 9.7193,
+      "n_calibration": 992,
+      "nominal_coverage": 0.8,
+      "note": "metro AC wear x1.0"
+    },
+    "denver|heat_pump": {
+      "rho": 1.9,
+      "lambda0_years": 14.0,
+      "brand_mult": {
+        "value": 0.85,
+        "mid": 1.0,
+        "premium": 1.15
+      },
+      "q_years": 9.7193,
+      "n_calibration": 992,
+      "nominal_coverage": 0.8,
+      "note": "metro AC wear x1.0"
+    },
+    "denver|air_handler": {
+      "rho": 2.0,
+      "lambda0_years": 18.0,
+      "brand_mult": {
+        "value": 0.85,
+        "mid": 1.0,
+        "premium": 1.15
+      },
+      "q_years": 9.7193,
+      "n_calibration": 992,
+      "nominal_coverage": 0.8,
+      "note": "no metro wear"
+    },
+    "phoenix|furnace": {
+      "rho": 2.2,
+      "lambda0_years": 22.0,
+      "brand_mult": {
+        "value": 0.85,
+        "mid": 1.0,
+        "premium": 1.15
+      },
+      "q_years": 8.9291,
+      "n_calibration": 1054,
+      "nominal_coverage": 0.8,
+      "note": "no metro wear"
+    },
+    "phoenix|boiler": {
+      "rho": 2.4,
+      "lambda0_years": 25.0,
+      "brand_mult": {
+        "value": 0.85,
+        "mid": 1.0,
+        "premium": 1.15
+      },
+      "q_years": 8.9291,
+      "n_calibration": 1054,
+      "nominal_coverage": 0.8,
+      "note": "no metro wear"
+    },
+    "phoenix|ac": {
+      "rho": 1.8,
+      "lambda0_years": 11.7,
+      "brand_mult": {
+        "value": 0.85,
+        "mid": 1.0,
+        "premium": 1.15
+      },
+      "q_years": 8.9291,
+      "n_calibration": 1054,
+      "nominal_coverage": 0.8,
+      "note": "metro AC wear x0.78"
+    },
+    "phoenix|heat_pump": {
+      "rho": 1.9,
+      "lambda0_years": 10.92,
+      "brand_mult": {
+        "value": 0.85,
+        "mid": 1.0,
+        "premium": 1.15
+      },
+      "q_years": 8.9291,
+      "n_calibration": 1054,
+      "nominal_coverage": 0.8,
+      "note": "metro AC wear x0.78"
+    },
+    "phoenix|air_handler": {
+      "rho": 2.0,
+      "lambda0_years": 18.0,
+      "brand_mult": {
+        "value": 0.85,
+        "mid": 1.0,
+        "premium": 1.15
+      },
+      "q_years": 8.9291,
+      "n_calibration": 1054,
+      "nominal_coverage": 0.8,
+      "note": "no metro wear"
+    },
+    "austin|furnace": {
+      "rho": 2.2,
+      "lambda0_years": 22.0,
+      "brand_mult": {
+        "value": 0.85,
+        "mid": 1.0,
+        "premium": 1.15
+      },
+      "q_years": 8.7373,
+      "n_calibration": 1006,
+      "nominal_coverage": 0.8,
+      "note": "no metro wear"
+    },
+    "austin|boiler": {
+      "rho": 2.4,
+      "lambda0_years": 25.0,
+      "brand_mult": {
+        "value": 0.85,
+        "mid": 1.0,
+        "premium": 1.15
+      },
+      "q_years": 8.7373,
+      "n_calibration": 1006,
+      "nominal_coverage": 0.8,
+      "note": "no metro wear"
+    },
+    "austin|ac": {
+      "rho": 1.8,
+      "lambda0_years": 12.75,
+      "brand_mult": {
+        "value": 0.85,
+        "mid": 1.0,
+        "premium": 1.15
+      },
+      "q_years": 8.7373,
+      "n_calibration": 1006,
+      "nominal_coverage": 0.8,
+      "note": "metro AC wear x0.85"
+    },
+    "austin|heat_pump": {
+      "rho": 1.9,
+      "lambda0_years": 11.9,
+      "brand_mult": {
+        "value": 0.85,
+        "mid": 1.0,
+        "premium": 1.15
+      },
+      "q_years": 8.7373,
+      "n_calibration": 1006,
+      "nominal_coverage": 0.8,
+      "note": "metro AC wear x0.85"
+    },
+    "austin|air_handler": {
+      "rho": 2.0,
+      "lambda0_years": 18.0,
+      "brand_mult": {
+        "value": 0.85,
+        "mid": 1.0,
+        "premium": 1.15
+      },
+      "q_years": 8.7373,
+      "n_calibration": 1006,
+      "nominal_coverage": 0.8,
+      "note": "no metro wear"
+    },
+    "seattle|furnace": {
+      "rho": 2.2,
+      "lambda0_years": 22.0,
+      "brand_mult": {
+        "value": 0.85,
+        "mid": 1.0,
+        "premium": 1.15
+      },
+      "q_years": 9.3552,
+      "n_calibration": 948,
+      "nominal_coverage": 0.8,
+      "note": "no metro wear"
+    },
+    "seattle|boiler": {
+      "rho": 2.4,
+      "lambda0_years": 25.0,
+      "brand_mult": {
+        "value": 0.85,
+        "mid": 1.0,
+        "premium": 1.15
+      },
+      "q_years": 9.3552,
+      "n_calibration": 948,
+      "nominal_coverage": 0.8,
+      "note": "no metro wear"
+    },
+    "seattle|ac": {
+      "rho": 1.8,
+      "lambda0_years": 15.75,
+      "brand_mult": {
+        "value": 0.85,
+        "mid": 1.0,
+        "premium": 1.15
+      },
+      "q_years": 9.3552,
+      "n_calibration": 948,
+      "nominal_coverage": 0.8,
+      "note": "metro AC wear x1.05"
+    },
+    "seattle|heat_pump": {
+      "rho": 1.9,
+      "lambda0_years": 14.7,
+      "brand_mult": {
+        "value": 0.85,
+        "mid": 1.0,
+        "premium": 1.15
+      },
+      "q_years": 9.3552,
+      "n_calibration": 948,
+      "nominal_coverage": 0.8,
+      "note": "metro AC wear x1.05"
+    },
+    "seattle|air_handler": {
+      "rho": 2.0,
+      "lambda0_years": 18.0,
+      "brand_mult": {
+        "value": 0.85,
+        "mid": 1.0,
+        "premium": 1.15
+      },
+      "q_years": 9.3552,
+      "n_calibration": 948,
+      "nominal_coverage": 0.8,
+      "note": "no metro wear"
+    }
+  },
+  "global": {
+    "q_years": 9.1715,
+    "n_calibration": 4000
+  }
+}

@@ -1,3 +1,4 @@
+import { isProUnlocked } from '../lib/pro'
 import { useState, useRef, useEffect } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { orgApi, strategyApi } from '../lib/api'
@@ -38,7 +39,7 @@ export default function Strategy() {
     staleTime: 5 * 60 * 1000,
   })
 
-  const isPro = org?.plan === 'pro' || org?.plan === 'premium' || org?.plan === 'enterprise'
+  const isPro = isProUnlocked(org) // TW-484: owner SSO + dev flag
 
   return (
     <div className="page-shell">

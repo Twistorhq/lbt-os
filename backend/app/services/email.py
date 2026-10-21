@@ -10,10 +10,13 @@ Emails sent:
   - sync_complete      → after QuickBooks / HubSpot sync
   - weekly_brief       → Monday morning operating summary (called by scheduler)
 """
+
 from __future__ import annotations
 
+import hashlib
 import logging
 from typing import Any
+from urllib.parse import quote as _urlquote
 
 from ..config import settings
 
@@ -23,30 +26,49 @@ log = logging.getLogger(__name__)
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _enabled() -> bool:
     return bool(settings.resend_api_key)
 
 
-def _send(*, to: str, subject: str, html: str) -> None:
+def _recipient_tag(to: str) -> str:
+    """Log-safe recipient identifier: truncated sha256, never the address.
+
+    M2: the design doc guarantees recipient addresses are never logged.
+    """
+    digest = hashlib.sha256(to.strip().lower().encode("utf-8")).hexdigest()
+    return f"sha256:{digest[:12]}"
+
+
+def _send(*, to: str, subject: str, html: str, from_addr: str | None = None) -> None:
     """Low-level send via Resend SDK. Silently skips if not configured."""
     if not _enabled():
-        log.debug("Email skipped (RESEND_API_KEY not set): %s → %s", subject, to)
+        log.debug(
+            "Email skipped (RESEND_API_KEY not set): %s → %s",
+            subject,
+            _recipient_tag(to),
+        )
         return
     try:
         import resend
+
         resend.api_key = settings.resend_api_key
-        resend.Emails.send({
-            "from": settings.from_email,
-            "to": [to],
-            "subject": subject,
-            "html": html,
-        })
-        log.info("Email sent: %s → %s", subject, to)
+        resend.Emails.send(
+            {
+                "from": from_addr or settings.from_email,
+                "to": [to],
+                "subject": subject,
+                "html": html,
+            }
+        )
+        log.info("Email sent: %s → %s", subject, _recipient_tag(to))
     except Exception as exc:
-        log.warning("Email failed (%s → %s): %s", subject, to, exc)
+        log.warning("Email failed (%s → %s): %s", subject, _recipient_tag(to), exc)
 
 
-def _base(*, title: str, preheader: str, body_html: str, cta_url: str, cta_label: str) -> str:
+def _base(
+    *, title: str, preheader: str, body_html: str, cta_url: str, cta_label: str
+) -> str:
     """
     Minimal responsive HTML shell.
     Uses inline styles only — email clients strip <style> tags.
@@ -116,16 +138,17 @@ def _base(*, title: str, preheader: str, body_html: str, cta_url: str, cta_label
 # ---------------------------------------------------------------------------
 
 _SEV_COLOURS: dict[str, tuple[str, str]] = {
-    "high":   ("#fff1f2", "#b91c1c"),
+    "high": ("#fff1f2", "#b91c1c"),
     "medium": ("#fffbeb", "#b45309"),
-    "low":    ("#eff6ff", "#1d4ed8"),
+    "low": ("#eff6ff", "#1d4ed8"),
 }
+
 
 def _severity_pill(severity: str) -> str:
     bg, text = _SEV_COLOURS.get(severity, ("#f1f5f9", "#64748b"))
     return (
         f'<span style="display:inline-block;background:{bg};color:{text};'
-        f'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;'
+        f"font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;"
         f'padding:3px 10px;border-radius:50px;">{severity}</span>'
     )
 
@@ -133,6 +156,7 @@ def _severity_pill(severity: str) -> str:
 # ---------------------------------------------------------------------------
 # Public send functions
 # ---------------------------------------------------------------------------
+
 
 def send_audit_complete(
     *,
@@ -144,9 +168,11 @@ def send_audit_complete(
     Email sent immediately after an AI audit run.
     Shows health score + top 3 insights with a link back to the full report.
     """
-    score  = report.get("health_score", 0)
+    score = report.get("health_score", 0)
     score_color = "#16a34a" if score >= 70 else "#d97706" if score >= 45 else "#dc2626"
-    label  = "Healthy" if score >= 70 else "Needs Attention" if score >= 45 else "Critical"
+    label = (
+        "Healthy" if score >= 70 else "Needs Attention" if score >= 45 else "Critical"
+    )
 
     insights = (report.get("insights") or [])[:3]
     insight_rows = ""
@@ -157,13 +183,13 @@ def send_audit_complete(
           <div style="margin-bottom:8px;">
             {_severity_pill(sev)}
             <span style="font-size:13px;font-weight:600;color:#0f172a;margin-left:8px;">
-              {ins.get('title', '')}
+              {ins.get("title", "")}
             </span>
           </div>
           <p style="margin:0;font-size:13px;color:#475569;line-height:1.6;">
-            {ins.get('detail', '')}
+            {ins.get("detail", "")}
           </p>
-          {"<p style='margin:8px 0 0;font-size:12px;font-weight:600;color:#16a34a;'>" + ins['estimated_impact'] + "</p>" if ins.get('estimated_impact') else ""}
+          {"<p style='margin:8px 0 0;font-size:12px;font-weight:600;color:#16a34a;'>" + ins["estimated_impact"] + "</p>" if ins.get("estimated_impact") else ""}
         </div>"""
 
     is_truncated = report.get("is_truncated", False)
@@ -232,8 +258,18 @@ def send_sync_complete(
     status: str,
 ) -> None:
     """Email sent after a QuickBooks or HubSpot sync completes."""
-    status_colour = "#16a34a" if status == "success" else "#d97706" if status == "partial" else "#dc2626"
-    status_label  = {"success": "Sync complete", "partial": "Sync partial", "failed": "Sync failed"}.get(status, status)
+    status_colour = (
+        "#16a34a"
+        if status == "success"
+        else "#d97706"
+        if status == "partial"
+        else "#dc2626"
+    )
+    status_label = {
+        "success": "Sync complete",
+        "partial": "Sync partial",
+        "failed": "Sync failed",
+    }.get(status, status)
 
     stat_rows = ""
     for entity, count in (stats or {}).items():
@@ -282,10 +318,15 @@ def send_weekly_brief(
     to: str,
     org_name: str,
     metrics: dict[str, Any],
+    actions: list[dict[str, Any]] | None = None,
 ) -> None:
     """
     Weekly Monday morning operating brief.
     Called by the recurring scheduler — not triggered by user actions.
+
+    `actions`: precomputed top money moves from brief_actions.top_brief_actions
+    (TW-212 wire-in). Rendered as the "top money moves" section; omitted when
+    empty. Never raises because of actions — rendering is total.
     """
     r = metrics.get("revenue", {})
     leads_m = metrics.get("leads", {})
@@ -304,10 +345,18 @@ def send_weekly_brief(
           </div>
         </td>"""
         for lbl, val, sub in [
-            ("Revenue",          _d(r.get("total")),  f"{r.get('margin_pct', 0):.1f}% margin"),
-            ("Gross Profit",     _d(r.get("profit")), f"{_d(e.get('total'))} expenses"),
-            ("Lead Conversion",  f"{leads_m.get('conversion_rate_pct', 0):.1f}%", f"{leads_m.get('won', 0)} won of {leads_m.get('total', 0)}"),
-            ("Repeat Customers", f"{c.get('repeat_pct', 0):.1f}%", f"{c.get('repeat', 0)} returning"),
+            ("Revenue", _d(r.get("total")), f"{r.get('margin_pct', 0):.1f}% margin"),
+            ("Gross Profit", _d(r.get("profit")), f"{_d(e.get('total'))} expenses"),
+            (
+                "Lead Conversion",
+                f"{leads_m.get('conversion_rate_pct', 0):.1f}%",
+                f"{leads_m.get('won', 0)} won of {leads_m.get('total', 0)}",
+            ),
+            (
+                "Repeat Customers",
+                f"{c.get('repeat_pct', 0):.1f}%",
+                f"{c.get('repeat', 0)} returning",
+            ),
         ]
     )
 
@@ -322,8 +371,17 @@ def send_weekly_brief(
             f"have a follow-up scheduled but haven't been contacted.</p></div>"
         )
 
-    revenue_str  = _d(r.get("total"))
-    conv_str     = f"{leads_m.get('conversion_rate_pct', 0):.0f}"
+    # TW-212 wire-in: ranked money moves from the next-best-action engine.
+    # Rendering is total (empty string when no actions); never breaks the send.
+    try:
+        from .brief_actions import render_email_section
+
+        actions_html = render_email_section(actions or [])
+    except Exception:
+        actions_html = ""
+
+    revenue_str = _d(r.get("total"))
+    conv_str = f"{leads_m.get('conversion_rate_pct', 0):.0f}"
 
     body = f"""
       <h1 style="margin:0 0 4px;font-size:22px;font-weight:700;color:#0f172a;letter-spacing:-0.4px;">
@@ -332,10 +390,12 @@ def send_weekly_brief(
       <p style="margin:0 0 24px;font-size:14px;color:#64748b;">{org_name} · Last 30 days</p>
 
       <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:12px;">
-        <tr>{kpi_cells[:len(kpi_cells)//2*2 // 2 * 2]}</tr>
+        <tr>{kpi_cells[: len(kpi_cells) // 2 * 2 // 2 * 2]}</tr>
       </table>
 
       {followup_alert}
+
+      {actions_html}
 
       <p style="margin:0;font-size:13px;color:#64748b;line-height:1.6;">
         Open your dashboard for the full analyst brief, revenue trend chart, and this week's action board.
@@ -348,6 +408,248 @@ def send_weekly_brief(
         html=_base(
             title="Weekly Operating Brief",
             preheader=f"{org_name}: {revenue_str} revenue, {conv_str}% conversion last 30 days.",
+            body_html=body,
+            cta_url=f"{settings.frontend_url}/app",
+            cta_label="Open dashboard →",
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# TW-619 Twistor Identity emails
+# ---------------------------------------------------------------------------
+# Corporate voice: white, clean, minimal. Zero em-dashes.
+# Contract: callers pass the RAW token; it is embedded in the link and never
+# stored, logged, or persisted anywhere by this module.
+
+
+def identity_link_url(token: str, purpose: str = "login") -> str:
+    """Portal URL the recipient opens to consume a magic link.
+
+    The portal page POSTs the token to POST /identity/magic-link/consume.
+    """
+    base = settings.frontend_url.rstrip("/")
+    return (
+        f"{base}{settings.identity_magic_link_path}"
+        f"?token={_urlquote(token)}&purpose={_urlquote(purpose)}"
+    )
+
+
+def _twistor_base(
+    *, title: str, preheader: str, body_html: str, cta_url: str, cta_label: str
+) -> str:
+    """Twistor corporate shell: white, clean, minimal, inline styles only."""
+    app_url = settings.frontend_url
+    safe_url = cta_url.replace("&", "&amp;")
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{title}</title>
+</head>
+<body style="margin:0;padding:0;background:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;">
+  <span style="display:none;max-height:0;overflow:hidden;mso-hide:all;">{preheader}</span>
+
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#ffffff;padding:48px 16px;">
+    <tr><td align="center">
+      <table width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;">
+
+        <tr>
+          <td style="padding:0 0 32px;">
+            <span style="color:#0f172a;font-size:20px;font-weight:700;letter-spacing:-0.3px;">Twistor</span>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding:0 0 8px;">
+            {body_html}
+            <div style="margin-top:32px;">
+              <a href="{safe_url}"
+                 style="display:inline-block;background:#0f172a;color:#ffffff;font-weight:600;
+                        font-size:14px;padding:13px 32px;border-radius:8px;text-decoration:none;">
+                {cta_label}
+              </a>
+            </div>
+            <p style="margin:24px 0 0;font-size:12px;color:#94a3b8;line-height:1.6;word-break:break-all;">
+              Or paste this link into your browser:<br/>
+              <a href="{safe_url}" style="color:#64748b;">{safe_url}</a>
+            </p>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding:40px 0 0;border-top:1px solid #f1f5f9;">
+            <p style="margin:0;font-size:12px;color:#94a3b8;line-height:1.6;">
+              Twistor Holdings LLC · Denver, CO<br/>
+              <a href="{app_url}" style="color:#64748b;text-decoration:none;">twistor.co</a>
+            </p>
+          </td>
+        </tr>
+
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>"""
+
+
+def _identity_heading(text: str) -> str:
+    return (
+        f'<h1 style="margin:0 0 12px;font-size:24px;font-weight:700;'
+        f'color:#0f172a;letter-spacing:-0.4px;">{text}</h1>'
+    )
+
+
+def _identity_copy(text: str) -> str:
+    return (
+        f'<p style="margin:0 0 12px;font-size:14px;color:#475569;'
+        f'line-height:1.7;">{text}</p>'
+    )
+
+
+def identity_magic_link_html(*, link_url: str, purpose: str = "login") -> str:
+    """Magic-link email body. purpose is 'login' or 'verify'."""
+    if purpose == "verify":
+        title, pre = (
+            "Verify your email",
+            "Confirm your email to activate your Twistor account.",
+        )
+        heading = "Verify your email"
+        copy = (
+            "Welcome to Twistor. Confirm your email address to activate "
+            "your account. This link expires in 15 minutes and can be "
+            "used once."
+        )
+        cta = "Verify email"
+    else:
+        title, pre = "Sign in to Twistor", "Your secure sign in link for Twistor."
+        heading = "Sign in to Twistor"
+        copy = (
+            "Click the button below to sign in. This link expires in "
+            "15 minutes and can be used once."
+        )
+        cta = "Sign in"
+    body = (
+        _identity_heading(heading)
+        + _identity_copy(copy)
+        + _identity_copy(
+            "If you did not request this, you can safely ignore this email."
+        )
+    )
+    return _twistor_base(
+        title=title, preheader=pre, body_html=body, cta_url=link_url, cta_label=cta
+    )
+
+
+def identity_verify_email_html(*, link_url: str) -> str:
+    """Dedicated verify-email body (alias of the verify-purpose magic link)."""
+    return identity_magic_link_html(link_url=link_url, purpose="verify")
+
+
+def identity_sso_invite_html(*, org_name: str, link_url: str) -> str:
+    """SSO invite: org admin invited a user to join via their IdP."""
+    body = (
+        _identity_heading(f"{org_name} invited you to Twistor")
+        + _identity_copy(
+            f"Your team at {org_name} set up single sign on. "
+            "Click below to join using your organization account."
+        )
+        + _identity_copy(
+            "If this was not meant for you, you can safely ignore this email."
+        )
+    )
+    return _twistor_base(
+        title=f"Join {org_name} on Twistor",
+        preheader=f"You were invited to join {org_name} on Twistor.",
+        body_html=body,
+        cta_url=link_url,
+        cta_label="Join with SSO",
+    )
+
+
+def _send_identity(*, to: str, subject: str, html: str) -> None:
+    _send(to=to, subject=subject, html=html, from_addr=settings.identity_from_email)
+
+
+def send_identity_magic_link(
+    *, to: str, token: str, purpose: str = "login", link_url: str | None = None
+) -> None:
+    """Email a raw magic-link token. The token is never stored or logged."""
+    url = link_url or identity_link_url(token, purpose=purpose)
+    subject = (
+        "Verify your Twistor email"
+        if purpose == "verify"
+        else "Your Twistor sign in link"
+    )
+    _send_identity(
+        to=to,
+        subject=subject,
+        html=identity_magic_link_html(link_url=url, purpose=purpose),
+    )
+
+
+def send_identity_verify_email(
+    *, to: str, token: str, link_url: str | None = None
+) -> None:
+    """Verify-email variant of the magic-link email."""
+    url = link_url or identity_link_url(token, purpose="verify")
+    _send_identity(
+        to=to,
+        subject="Verify your Twistor email",
+        html=identity_verify_email_html(link_url=url),
+    )
+
+
+def send_identity_sso_invite(*, to: str, org_name: str, link_url: str) -> None:
+    """Invite a user to join an org via SSO."""
+    _send_identity(
+        to=to,
+        subject=f"Join {org_name} on Twistor",
+        html=identity_sso_invite_html(org_name=org_name, link_url=link_url),
+    )
+
+
+def send_rate_limit_warning(
+    *,
+    to: str,
+    org_name: str,
+    tier: str,
+    rpm: int,
+    used: int,
+    warn_pct: int,
+) -> None:
+    """Rate-limit courtesy warning (TW-608): the org is near its per-minute
+    API limit. Sent BEFORE any shutoff, so no customer is ever surprised.
+    At 100% the API pauses with a 429; Twistor never charges overage fees.
+    """
+    body = f"""
+      <h1 style="margin:0 0 4px;font-size:22px;font-weight:700;color:#0f172a;letter-spacing:-0.4px;">
+        Heads up: {warn_pct}% of your API rate limit used
+      </h1>
+      <p style="margin:0 0 24px;font-size:14px;color:#64748b;">{org_name} · Twistor data API</p>
+
+      <p style="margin:0 0 12px;font-size:14px;color:#0f172a;line-height:1.6;">
+        You have used <strong>{used} of {rpm} requests per minute</strong>
+        on the <strong>{tier}</strong> tier.
+      </p>
+      <p style="margin:0 0 12px;font-size:14px;color:#475569;line-height:1.6;">
+        When usage reaches 100%, requests pause with a 429 response until the
+        window resets. Nothing is served past the limit and nothing extra is
+        charged. Twistor never bills overage fees.
+      </p>
+      <p style="margin:0;font-size:14px;color:#475569;line-height:1.6;">
+        To raise your ceiling, upgrade your rate-limit tier. Your live usage
+        is always visible in the X-Twistor-Usage response headers.
+      </p>
+    """
+
+    _send(
+        to=to,
+        subject=f"Rate limit warning: {used}/{rpm} requests per minute used · {org_name}",
+        html=_base(
+            title="Rate Limit Warning",
+            preheader=f"{org_name}: {used} of {rpm} requests per minute used. Service pauses at 100%, no overage fees.",
             body_html=body,
             cta_url=f"{settings.frontend_url}/app",
             cta_label="Open dashboard →",
