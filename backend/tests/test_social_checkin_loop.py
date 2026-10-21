@@ -184,22 +184,53 @@ class TestGeoArrival:
         assert len(db.rows("rsn_checkins")) == 1
         assert len(_ledger(db, uid, "checkin_completed")) == 1
 
-    def test_qr_token_creates_strong_proof_and_is_not_stored(
+    def test_qr_self_assertion_is_refused_until_the_registry_lands(
         self, db, host, group, event
     ):
+        # Rosa TW-673 M3 probe, quoted: "two different members
+        # presented the same arbitrary string ('literally-any-string')
+        # as a qr_token at the same event; both were recorded as
+        # qr_strong check-ins at weight 3, the top proof weight, equal
+        # to a host's own door confirmation." A self-typed string is
+        # not an issued venue token (Section 7.1 defines the strong
+        # proof as the host's venue QR code), so until the venue
+        # token registry lands the service refuses qr_strong outright
+        # rather than recording an unvalidated assertion as proof.
+        a = _attendee(db, group, event)
+        b = _attendee(db, group, event)
+        for uid in (a, b):
+            with pytest.raises(service.ForbiddenError):
+                service.create_checkin(
+                    db,
+                    uid,
+                    models.CheckinCreate(
+                        event_id=event["id"],
+                        proof_type="qr_strong",
+                        qr_token="literally-any-string",
+                    ),
+                    now=START + timedelta(minutes=5),
+                )
+        assert db.rows("rsn_checkins") == []
+        assert _ledger(db, a, "checkin_completed") == []
+        assert _ledger(db, b, "checkin_completed") == []
+
+    def test_stale_geo_verdict_observed_before_the_window_is_refused(
+        self, db, host, group, event
+    ):
+        # Rosa TW-673 m1 probe: a geo verdict observed three hours
+        # before the arrival window opened was accepted when
+        # submitted inside the window. A verdict observed before the
+        # window opened is not an arrival verdict; observed_at now
+        # carries a freshness bound on both ends.
         uid = _attendee(db, group, event)
-        out = service.create_checkin(
-            db,
-            uid,
-            models.CheckinCreate(
-                event_id=event["id"], proof_type="qr_strong", qr_token="venue-token-1"
-            ),
-            now=START + timedelta(minutes=5),
-        )
-        assert out["proof_type"] == "qr_strong"
-        row = db.rows("rsn_checkins")[0]
-        assert "venue-token-1" not in str(row.values())
-        assert _ledger(db, uid, "checkin_completed")[0]["weight"] == 3
+        with pytest.raises(service.ConflictError):
+            service.create_checkin(
+                db,
+                uid,
+                _geo_payload(event, observed=START - timedelta(hours=3)),
+                now=START + timedelta(minutes=5),
+            )
+        assert db.rows("rsn_checkins") == []
 
     def test_banned_member_cannot_check_in(self, db, host, group, event):
         uid = _attendee(db, group, event)
@@ -332,6 +363,42 @@ class TestEncounterConfirms:
         out = _confirm(db, a, event, b, met=False, matched=None)
         assert out["met_them"] is False
         assert len(_ledger(db, b, "no_show")) == 1
+
+    def test_not_met_confirm_cannot_carry_an_identity_answer(
+        self, db, host, group, event
+    ):
+        # Rosa TW-673 M2 probe, quoted: "met_them=false +
+        # identity_matched=false against an RSVP'd subject with no
+        # check-in wrote BOTH the no-show (-3) and the identity_strike
+        # (-10), and moved the subject's band, from a confirmer who
+        # by their own answer never encountered the person." Section
+        # 7.2 is a sequence: the identity question is asked about
+        # someone you met. The model now refuses the incoherent pair
+        # (and its mirror, met=false + identity=true) at the
+        # boundary, so the double-fire is unconstructable.
+        for matched in (False, True):
+            with pytest.raises(Exception):
+                models.EncounterConfirmCreate(
+                    event_id=event["id"],
+                    subject_id=uuid4(),
+                    met_them=False,
+                    identity_matched=matched,
+                )
+
+    def test_not_met_confirm_writes_no_show_and_never_a_strike(
+        self, db, host, group, event
+    ):
+        # The service-level half of the M2 probe: a didn't-meet
+        # confirm writes only the no-show input. The identity strike
+        # (the heaviest single negative in the trust model) never
+        # fires on a non-encounter.
+        a = _attendee(db, group, event)
+        b = _attendee(db, group, event)
+        _checkin(db, a, event)
+        _confirm(db, a, event, b, met=False, matched=None)
+        assert len(_ledger(db, b, "no_show")) == 1
+        assert _ledger(db, b, "identity_strike") == []
+        assert _ledger(db, b, "identity_confirm_positive") == []
 
     def test_identity_no_is_a_strike_and_opens_review(self, db, host, group, event):
         a, b = self._pair(db, group, event)
@@ -558,6 +625,90 @@ class TestCompletionAndReviews:
         summary = service.my_review_summary(db, b, now=END + timedelta(hours=2))
         assert summary["reviews_received"] == 1
         assert summary["would_meet_again_rate"] == 0.0
+        # The ledger asserts too, not just rows and summary: this is
+        # the assertion whose absence let TW-673 M1 through (the edit
+        # was invisible to the ledger, so the score kept the first
+        # submission). The True submission (+1) must be corrected by
+        # a compensating event (-2) when the edit lands on False.
+        weights = [r["weight"] for r in _ledger(db, b, "review_received")]
+        assert weights == [1, -2]
+
+    def test_review_edit_reconciles_ledger_score_and_summary(self, db, host, group):
+        # Rosa TW-673 M1 probe, quoted: "reviewer files
+        # would_meet_again=True (subject ledger gains review_received
+        # +1, stored score 3), then edits the same triple to False.
+        # The row and the summary now say the latest answer is no
+        # (rate 0.0), but the ledger still holds only the original
+        # +1, the stored score still counts it, and an explicit
+        # recompute still returns score 3 against a would-meet-again
+        # rate of 0.0." After the fix the three projections of the
+        # same fact agree: ledger sum, stored score, recompute, and
+        # summary rate.
+        a = add_member(db)
+        b = add_member(db)
+        join(db, group, a)
+        join(db, group, b)
+        ev, _ = _completed_event(db, host, group, attendee_ids=(a, b))
+
+        def _review(wma):
+            return service.create_review(
+                db,
+                a,
+                models.ReviewCreate(
+                    event_id=ev["id"],
+                    subject_type="person",
+                    subject_id=b,
+                    would_meet_again=wma,
+                ),
+                now=END + timedelta(hours=1),
+            )
+
+        def _stored_score():
+            rows = [r for r in db.rows("rsn_trust_scores") if r["user_id"] == b]
+            return rows[0]["score"]
+
+        _review(True)
+        assert _stored_score() == 3  # geo check-in 2 + review_received 1
+        _review(False)
+        ledger = _ledger(db, b)
+        assert sum(r["weight"] for r in ledger) == 1
+        assert _stored_score() == 1
+        recomputed = service.recompute_member_standing(
+            db, b, now=END + timedelta(hours=2)
+        )
+        assert recomputed["score"] == 1
+        summary = service.my_review_summary(db, b, now=END + timedelta(hours=2))
+        assert summary["reviews_received"] == 1
+        assert summary["would_meet_again_rate"] == 0.0
+
+    def test_person_review_of_rsvp_only_subject_refused(self, db, host, group):
+        # Rosa TW-673 m2: Section 7.5's would-meet-again rate is
+        # defined over reviews "where reviewer and subject both
+        # completed the session." A subject who only RSVP'd (and so
+        # no-showed at completion) is not reviewable as a person.
+        a = add_member(db)
+        b = add_member(db)
+        join(db, group, a)
+        join(db, group, b)
+        ev = make_event(db, host, group, starts_at=START)
+        rsvp(db, a, ev)
+        rsvp(db, b, ev)
+        _checkin(db, a, ev)
+        service.complete_event(db, host, ev["id"], now=END + timedelta(minutes=30))
+        with pytest.raises(service.NotFoundError):
+            service.create_review(
+                db,
+                a,
+                models.ReviewCreate(
+                    event_id=ev["id"],
+                    subject_type="person",
+                    subject_id=b,
+                    would_meet_again=True,
+                ),
+                now=END + timedelta(hours=1),
+            )
+        assert db.rows("rsn_reviews") == []
+        assert _ledger(db, b, "review_received") == []
 
     def test_review_requires_reviewer_checkin(self, db, host, group):
         a = add_member(db)

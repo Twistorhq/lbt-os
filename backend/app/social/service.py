@@ -1555,9 +1555,12 @@ def get_listing(db, viewer_user_id: UUID, listing_id, *, now=None) -> dict:
 
 ARRIVAL_WINDOW_EARLY = timedelta(minutes=30)
 ARRIVAL_CLASS_LATE_AFTER = timedelta(minutes=30)
-# Proof quality (Section 7.5): qr_strong and host-confirmed arrivals
-# outweigh geo_soft in the trust model.
-CHECKIN_WEIGHTS = {"geo_soft": 2, "qr_strong": 3, "host_confirm": 3}
+# Proof quality (Section 7.5): a host-confirmed arrival outweighs a
+# geo_soft verdict in the trust model. qr_strong carries NO weight
+# here on purpose: it is refused in create_checkin until the venue
+# token registry lands (Rosa TW-673 M3), so no code path can record
+# an unvalidated QR assertion at any weight, let alone strong.
+CHECKIN_WEIGHTS = {"geo_soft": 2, "host_confirm": 3}
 IDENTITY_CONFIRM_WEIGHT = 1
 IDENTITY_STRIKE_WEIGHT = -10
 NO_SHOW_WEIGHT = -3
@@ -1676,13 +1679,17 @@ def _record_checkin(db, event: dict, user_id: str, proof_type: str, now) -> dict
 def create_checkin(
     db, user_id: UUID, payload: models.CheckinCreate, *, now=None
 ) -> dict:
-    """Stage 1: a member's own arrival, by geo verdict or venue QR.
+    """Stage 1: a member's own arrival, by geo verdict.
 
     host_confirm is refused here by design: the model contract says
     a host confirmation carries nothing the member asserts, so it
     can only be recorded by the host (host_confirm_checkin below).
-    The QR token is the assertion at the door; it is never stored
-    (rsn_checkins has no token column)."""
+    qr_strong is refused until the venue token registry lands
+    (Rosa TW-673 M3): Section 7.1's strong proof is the host's
+    issued venue QR code, and a non-empty string from the member's
+    own client proves nothing, so an unvalidated QR assertion is
+    never recorded as a check-in at any weight. The token value is
+    never stored either way (rsn_checkins has no token column)."""
     ctx = get_member_context(db, user_id)
     _require_voice(ctx)
     if payload.proof_type == "host_confirm":
@@ -1703,6 +1710,12 @@ def create_checkin(
             )
         if _going_rsvp(db, event["id"], ctx.user_id) is None:
             raise ForbiddenError("check-in requires a going RSVP")
+    if payload.proof_type == "qr_strong":
+        raise ForbiddenError(
+            "venue QR check-in is not yet available: QR tokens are "
+            "unvalidated until the venue token registry lands; check "
+            "in by geo verdict or host confirmation at the door"
+        )
     if payload.proof_type == "geo_soft":
         if payload.within_geofence is not True:
             raise ForbiddenError("geofence verdict is outside the venue geofence")
@@ -1710,6 +1723,16 @@ def create_checkin(
             now + timedelta(minutes=5)
         ):
             raise ConflictError("observed_at is in the future")
+        starts = _parse_ts(event.get("starts_at"))
+        if (
+            payload.observed_at is not None
+            and starts is not None
+            and payload.observed_at < starts - ARRIVAL_WINDOW_EARLY
+        ):
+            raise ConflictError(
+                "observed_at predates the arrival window: a verdict "
+                "observed before the window opened is not an arrival verdict"
+            )
     return _record_checkin(db, event, ctx.user_id, payload.proof_type, now)
 
 
@@ -2055,11 +2078,13 @@ def create_review(db, user_id: UUID, payload: models.ReviewCreate, *, now=None) 
             raise ConflictError("a person review names its subject")
         if subject_id == ctx.user_id:
             raise ForbiddenError("a member cannot review themselves")
+        # Section 7.5's rate is defined over reviews where reviewer
+        # and subject both completed the session, so the subject
+        # must have arrived (check-in) or hosted; an RSVP alone is
+        # not attendance (Rosa TW-673 m2).
         attended = (
             subject_id == event["host_user_id"]
             or _checkin_row(db, event["id"], subject_id) is not None
-            or _fetch_one(db, "rsn_rsvps", event_id=event["id"], user_id=subject_id)
-            is not None
         )
         if not attended:
             raise NotFoundError()
@@ -2110,6 +2135,29 @@ def create_review(db, user_id: UUID, payload: models.ReviewCreate, *, now=None) 
             break
     if existing is not None:
         updated = _update_by_id(db, "rsn_reviews", existing["id"], fields)
+        if payload.subject_type == "person" and subject_id is not None:
+            # The latest submission counts (Section 7.5) for the
+            # ledger too, not just the row and the rates: the insert
+            # wrote REVIEW_WEIGHTS[old answer], so an edit writes the
+            # compensating review_received delta referencing the same
+            # review row and recomputes the subject. Without this the
+            # stored score keeps the first submission forever while
+            # the summary reads the latest (Rosa TW-673 M1).
+            delta = (
+                REVIEW_WEIGHTS[payload.would_meet_again]
+                - REVIEW_WEIGHTS[existing.get("would_meet_again")]
+            )
+            if delta != 0:
+                _append_trust_event(
+                    db,
+                    subject_id,
+                    "review_received",
+                    delta,
+                    ref_type="review",
+                    ref_id=existing["id"],
+                    now=now,
+                )
+            recompute_member_standing(db, subject_id, now=now)
         return _review_out(updated or {**existing, **fields})
     row = _insert(
         db,

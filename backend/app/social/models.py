@@ -245,7 +245,10 @@ class CheckinCreate(_Strict):
       same fail-closed validator the geo module pins;
     - qr_strong carries the scanned venue token and nothing else
       (the scan is the assertion; a client-supplied verdict beside
-      it would be a second, weaker claim);
+      it would be a second, weaker claim). The wire contract stands,
+      but the service refuses qr_strong until the venue token
+      registry lands: a self-typed string is not an issued token,
+      and an unvalidated assertion is never recorded as proof;
     - host_confirm carries nothing the client asserts: the host
       confirms out-of-band and the server stamps the arrival.
     """
@@ -307,10 +310,27 @@ class CheckinCreate(_Strict):
 
 
 class EncounterConfirmCreate(_Strict):
+    """Section 7.2 is a sequence, and the model enforces it:
+    question 1 is "Did you meet them?", and question 2 ("Were they
+    who they said they were?", asked against the verified profile
+    photo) is only meaningfully asked about someone you met. When
+    met_them is false, identity_matched must be None: a confirm that
+    says "I did not meet them" marks a possible no-show, full stop,
+    and can never carry the identity answer that writes a strike."""
+
     event_id: UUID
     subject_id: UUID
     met_them: bool
     identity_matched: bool | None = None
+
+    @model_validator(mode="after")
+    def _check_identity_requires_a_meeting(self) -> "EncounterConfirmCreate":
+        if self.met_them is False and self.identity_matched is not None:
+            raise ValueError(
+                "identity_matched must be None when met_them is false: "
+                "the identity question is only asked about someone you met"
+            )
+        return self
 
 
 class WelfareResponseIn(_Strict):
