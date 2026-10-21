@@ -6,7 +6,7 @@
 - Clerk account + application
 - Stripe account (test mode first)
 - OpenAI API key
-- Render / Railway / Fly.io account (backend)
+- Fly.io account (backend, free tier)
 - Vercel / Netlify account (frontend)
 
 ---
@@ -51,25 +51,41 @@
 
 ---
 
-## 4. Backend Deployment (Render recommended)
+## 4. Backend Deployment (Fly.io free tier — $0)
 
 ```bash
-# 1. Create a new Web Service on Render
-# 2. Connect your GitHub repo
-# 3. Set:
-#    Root Directory: lbt-os/backend
-#    Build Command: pip install -r requirements.txt
-#    Start Command: uvicorn app.main:app --host 0.0.0.0 --port $PORT
-
-# 4. Add all environment variables from .env.example
-```
-
-**Or with Docker:**
-```bash
+# 1. Install flyctl and log in (one-time, Justynn's account)
+# 2. From the repo:
 cd lbt-os/backend
-docker build -t lbt-os-api .
-docker run -p 8000:8000 --env-file .env lbt-os-api
+flyctl launch --no-deploy   # accepts backend/fly.toml as-is
+# 3. Set secrets (never in the repo):
+flyctl secrets set \
+  SUPABASE_URL=... \
+  SUPABASE_SERVICE_KEY=... \
+  CLERK_SECRET_KEY=... \
+  CLERK_PUBLISHABLE_KEY=... \
+  CLERK_WEBHOOK_SECRET=... \
+  CLERK_JWT_AUDIENCE=... \
+  STRIPE_SECRET_KEY=... \
+  STRIPE_WEBHOOK_SECRET=... \
+  STRIPE_PRICE_BASIC=... \
+  STRIPE_PRICE_PRO=... \
+  STRIPE_PRICE_PREMIUM=... \
+  OWNER_EMAILS="Twistorhq@gmail.com,Twistorhq@twistor.co,holla@twistor.co" \
+  FRONTEND_URL=https://twistorhq.github.io/lbt-os \
+  CORS_ORIGINS=https://twistorhq.github.io \
+  TRUSTED_HOSTS=lbt-os-backend.fly.dev
+# 4. Deploy:
+flyctl deploy
 ```
+> **Note:** `llm_provider` defaults to `ollama` (localhost:11434) — no Ollama
+> runs on Fly, so `ai_audit` (Pro/Premium tiers) will degrade unless you set
+> `LLM_PROVIDER=openai` + `OPENAI_API_KEY` as secrets.
+
+
+The app serves at `https://lbt-os-backend.fly.dev` (or your chosen name).
+Free tier: 1 shared CPU / 512MB, sleeps when idle, wakes on request —
+health check on `/health`. Supabase stays as the database (free tier).
 
 ---
 
@@ -85,7 +101,7 @@ docker run -p 8000:8000 --env-file .env lbt-os-api
 
 # 4. Add environment variables:
 VITE_CLERK_PUBLISHABLE_KEY=pk_live_...
-VITE_API_URL=https://your-api.render.com
+VITE_API_URL=https://lbt-os-backend.fly.dev
 ```
 
 **Or local:**

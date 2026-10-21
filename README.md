@@ -51,7 +51,7 @@ This view shows how the product carries connected business data through to a usa
 
 **Backend** — FastAPI (Python), Supabase (PostgreSQL), Stripe, OpenAI GPT-4o
 
-**Infrastructure** — Railway (backend), Vercel (frontend), Supabase (database + storage)
+**Infrastructure** — Fly.io (backend, free tier), GitHub Pages (frontend), Supabase (database + storage)
 
 ---
 
@@ -144,7 +144,7 @@ migration_message_storage_bucket.sql
 
 ## Deploy
 
-See [docs/deployment.md](docs/deployment.md) for Railway + Vercel step-by-step.
+See [docs/deployment.md](docs/deployment.md) for Fly.io + GitHub Pages step-by-step.
 
 ---
 
