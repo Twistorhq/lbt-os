@@ -97,6 +97,20 @@ class TestFunctions:
         assert "pg_advisory_xact_lock" in sql
         assert sql.count("INSERT INTO rsn_rsvps") >= 2
 
+    def test_couple_rsvp_rpc_partner_window_and_overload_drop(self, sql):
+        # TW-661 fix round (Rosa M1): each row records its own
+        # admitting wave, so the RPC takes the partner's window as a
+        # separate parameter and spends it on the partner's row only.
+        assert "p_partner_rsvp_window TEXT DEFAULT 'general'" in sql
+        # The signature changed, so the original 9-argument overload
+        # is dropped explicitly: CREATE OR REPLACE with a different
+        # parameter list would leave it callable alongside the new
+        # function.
+        assert (
+            "DROP FUNCTION IF EXISTS rsn_rsvp_couple("
+            "UUID, UUID, UUID, UUID, TEXT, TEXT, TEXT, UUID, TIMESTAMPTZ);"
+        ) in sql
+
 
 class TestScopeGuard:
     def test_no_foreign_prefix_tables(self, sql):
