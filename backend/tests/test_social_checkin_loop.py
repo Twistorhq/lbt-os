@@ -26,12 +26,10 @@ The safety check-in loop (spec Section 7) over the TW-660 core loop:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from uuid import uuid4
 
 import pytest
-
-from app.social import models, service, sessions
 from test_social_core_loop import (
     NOW,
     FakeDb,
@@ -41,6 +39,8 @@ from test_social_core_loop import (
     make_group,
     rsvp,
 )
+
+from app.social import models, service, sessions
 
 START = NOW + timedelta(hours=1)
 END = START + timedelta(hours=2)
@@ -105,7 +105,9 @@ def _ledger(db, user_id, event_type=None):
 
 
 class TestGeoArrival:
-    def test_inside_verdict_creates_checkin_and_ledger_event(self, db, host, group, event):
+    def test_inside_verdict_creates_checkin_and_ledger_event(
+        self, db, host, group, event
+    ):
         uid = _attendee(db, group, event)
         out = _checkin(db, uid, event)
         assert out["proof_type"] == "geo_soft"
@@ -182,7 +184,9 @@ class TestGeoArrival:
         assert len(db.rows("rsn_checkins")) == 1
         assert len(_ledger(db, uid, "checkin_completed")) == 1
 
-    def test_qr_token_creates_strong_proof_and_is_not_stored(self, db, host, group, event):
+    def test_qr_token_creates_strong_proof_and_is_not_stored(
+        self, db, host, group, event
+    ):
         uid = _attendee(db, group, event)
         out = service.create_checkin(
             db,
@@ -198,13 +202,18 @@ class TestGeoArrival:
         assert _ledger(db, uid, "checkin_completed")[0]["weight"] == 3
 
     def test_banned_member_cannot_check_in(self, db, host, group, event):
-        uid = _attendee(db, group, event, banned=True)
+        uid = _attendee(db, group, event)
+        # The ban lands after the RSVP (banned accounts are refused
+        # at join time too, so the ban flip is the realistic path).
+        for row in db.tables["vfy_identity_anchors"]:
+            row["is_banned"] = True
         with pytest.raises(service.ForbiddenError):
             _checkin(db, uid, event)
 
-    def test_under_band_member_sees_no_event_to_check_into(self, db, host, group, event):
+    def test_under_band_member_sees_no_event_to_check_into(
+        self, db, host, group, event
+    ):
         teen = add_member(db, band="age_16_17")
-        join(db, group, teen)
         with pytest.raises(service.NotFoundError):
             _checkin(db, teen, event)
 
@@ -248,7 +257,12 @@ class TestHostConfirm:
     def test_restricted_band_member_arrives_by_host_confirm_only(
         self, db, host, group, event
     ):
-        uid = _attendee(db, group, event, trust_band="restricted")
+        # RSVP'd in good standing; the band fell to restricted
+        # before the event (a restricted member cannot RSVP at all).
+        uid = _attendee(db, group, event)
+        for row in db.tables["rsn_trust_scores"]:
+            if row["user_id"] == uid:
+                row["band"] = "restricted"
         with pytest.raises(service.ForbiddenError):
             _checkin(db, uid, event)
         out = service.host_confirm_checkin(
@@ -457,7 +471,9 @@ class TestCompletionAndReviews:
         join(db, group, ghost_rsvp)
         ev = make_event(db, host, group, starts_at=START)
         rsvp(db, ghost_rsvp, ev)
-        out = service.complete_event(db, host, ev["id"], now=END + timedelta(minutes=30))
+        out = service.complete_event(
+            db, host, ev["id"], now=END + timedelta(minutes=30)
+        )
         assert out["status"] == "completed"
         rows = [r for r in db.rows("rsn_rsvps") if r["user_id"] == ghost_rsvp]
         assert rows[0]["status"] == "no_show"
@@ -655,9 +671,7 @@ class TestStandingRecompute:
     def test_uncorroborated_checkin_is_not_a_night(self, db):
         uid = add_member(db)
         for i in range(5):
-            _seed_night(
-                db, uid, when=NOW - timedelta(days=30 - i), proof="geo_soft"
-            )
+            _seed_night(db, uid, when=NOW - timedelta(days=30 - i), proof="geo_soft")
         out = service.recompute_member_standing(db, uid, now=NOW)
         assert out["completed_nights"] == 0
         assert out["standing_tier"] == "verified"
