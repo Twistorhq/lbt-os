@@ -27,11 +27,18 @@
 --    Section 4) as one database transaction. TW-660 made it
 --    atomic at the service layer by validating both partners
 --    before either row existed; this RPC makes the PAIR WRITE
---    itself atomic and serializes concurrent pair writes per
---    event with an advisory lock, so two couples racing the last
---    seats cannot interleave. Any failure (including the
---    UNIQUE(event_id, user_id) on either row) aborts the
---    transaction: both rows or neither.
+--    itself atomic: an advisory lock serializes pair writes per
+--    event, so two couples' inserts cannot interleave, and any
+--    failure (including the UNIQUE(event_id, user_id) on either
+--    row) aborts the transaction: both rows or neither. What the
+--    lock does NOT do: the two rows' capacity statuses are
+--    computed at the service layer before the RPC is called, so
+--    the lock cannot make two racing couples' capacity decisions
+--    atomic; capacity stays service-advisory, consistent with the
+--    rest of the core loop. Each row records its own admitting
+--    wave (p_rsvp_window / p_partner_rsvp_window, TW-661 fix
+--    round, Rosa M1): the partner's window is computed from the
+--    partner's standing, never borrowed from the requester.
 --
 -- RLS deny-all (service role only), same posture as v1.
 -- Idempotent: safe to re-run.
@@ -117,6 +124,15 @@ $$ LANGUAGE plpgsql;
 -- 3. Couple RSVP: both rows or neither, in one transaction
 -- ---------------------------------------------------------------
 
+-- The TW-661 fix round adds p_partner_rsvp_window (Rosa M1: each
+-- row records its own admitting wave). CREATE OR REPLACE with a
+-- different parameter list would leave the original 9-argument
+-- overload callable alongside the new function, so the old
+-- overload is dropped explicitly first. On a fresh database this
+-- is a no-op; on a database already migrated it removes exactly
+-- the superseded overload.
+DROP FUNCTION IF EXISTS rsn_rsvp_couple(UUID, UUID, UUID, UUID, TEXT, TEXT, TEXT, UUID, TIMESTAMPTZ);
+
 CREATE OR REPLACE FUNCTION rsn_rsvp_couple(
     p_event_id UUID,
     p_user_id UUID,
@@ -125,12 +141,15 @@ CREATE OR REPLACE FUNCTION rsn_rsvp_couple(
     p_user_status TEXT,
     p_partner_status TEXT,
     p_rsvp_window TEXT DEFAULT 'general',
+    p_partner_rsvp_window TEXT DEFAULT 'general',
     p_user_plus_one_of UUID DEFAULT NULL,
     p_now TIMESTAMPTZ DEFAULT NOW()
 ) RETURNS SETOF rsn_rsvps AS $$
 BEGIN
-    -- Serialize pair writes per event: capacity decisions made by
-    -- concurrent couple RSVPs must not interleave.
+    -- Serialize pair writes per event so two couples' inserts
+    -- cannot interleave. The capacity statuses were computed by
+    -- the caller before this ran; the lock does not make those
+    -- decisions atomic (see the header note).
     PERFORM pg_advisory_xact_lock(hashtextextended(p_event_id::text, 0));
 
     RETURN QUERY
@@ -152,7 +171,7 @@ BEGIN
         host_decided_at, created_at
     ) VALUES (
         gen_random_uuid(), p_event_id, p_partner_id, p_partner_status,
-        p_couple_link_id, NULL, p_rsvp_window, NULL, NULL, p_now
+        p_couple_link_id, NULL, p_partner_rsvp_window, NULL, NULL, p_now
     )
     RETURNING *;
 END;

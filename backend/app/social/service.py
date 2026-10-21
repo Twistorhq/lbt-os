@@ -47,6 +47,7 @@ Cross-cutting enforcement (TW-660 brief, spec Sections 5.9-5.11):
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
@@ -54,6 +55,8 @@ from uuid import UUID, uuid4
 from dateutil.rrule import rrulestr
 
 from . import models
+
+log = logging.getLogger(__name__)
 
 _PHASE_5 = "Phase 5 (tasks.md items 19-23)"
 _PHASE_6 = "Phase 6 (tasks.md items 24-27)"
@@ -1311,16 +1314,30 @@ def _try_couple_rpc(db, params: dict) -> list[dict] | None:
     when the RPC is unavailable (client without rpc, function not
     yet deployed): the caller then runs the TW-660 service path,
     which validates both partners before either row exists, so
-    the observable behavior is the same."""
+    the observable behavior is the same. A failed or malformed RPC
+    result logs a warning before the fallback runs (Rosa TW-661
+    m1): a broken or undeployed RPC must not stay invisible while
+    the fallback quietly carries production."""
     rpc = getattr(db, "rpc", None)
     if rpc is None:
         return None
     try:
         data = rpc("rsn_rsvp_couple", params).execute().data
     except Exception:
+        log.warning(
+            "rsn_rsvp_couple RPC failed; falling back to service inserts",
+            exc_info=True,
+        )
         return None
     rows = [r for r in (data or []) if isinstance(r, dict)]
-    return rows if len(rows) == 2 else None
+    if len(rows) != 2:
+        log.warning(
+            "rsn_rsvp_couple returned %d rows, expected 2; "
+            "falling back to service inserts",
+            len(rows),
+        )
+        return None
+    return rows
 
 
 def request_rsvp(db, user_id: UUID, payload: models.RsvpCreate, *, now=None) -> dict:
@@ -1395,10 +1412,21 @@ def request_rsvp(db, user_id: UUID, payload: models.RsvpCreate, *, now=None) -> 
     )
     if partner_existing is not None:
         raise ConflictError("couple partner already holds an RSVP on this event")
+    # The partner's own wave gates the pair (Rosa TW-661 M1): the
+    # opening is computed from partner_ctx, never borrowed from the
+    # requester, and the pair is refused with zero rows written
+    # while the partner's window has not opened. Eligibility is
+    # atomic with the write: both partners eligible or neither row.
+    partner_window, partner_opens = _rsvp_opening(partner_ctx, event, now)
+    if partner_opens is not None and now < partner_opens:
+        raise ConflictError(
+            "RSVP has not opened for your couple partner's standing tier yet"
+        )
     # Both partners validated above; the write itself now prefers
     # the rsn_rsvp_couple RPC so the pair lands in one database
     # transaction (TW-661), falling back to the two service inserts
-    # when the RPC is unavailable.
+    # when the RPC is unavailable. Each row records the wave that
+    # admitted THAT member (Section 7.7), in both paths.
     rpc_rows = _try_couple_rpc(
         db,
         {
@@ -1409,6 +1437,7 @@ def request_rsvp(db, user_id: UUID, payload: models.RsvpCreate, *, now=None) -> 
             "p_user_status": _initial_status(db, event, ctx.user_id, now),
             "p_partner_status": _initial_status(db, event, partner_id, now),
             "p_rsvp_window": rsvp_window,
+            "p_partner_rsvp_window": partner_window,
             "p_user_plus_one_of": plus_one_of,
             "p_now": now,
         },
@@ -1426,7 +1455,12 @@ def request_rsvp(db, user_id: UUID, payload: models.RsvpCreate, *, now=None) -> 
         rsvp_window=rsvp_window,
     )
     _create_rsvp_row(
-        db, event, partner_id, now, couple_link_id=link["id"], rsvp_window=rsvp_window
+        db,
+        event,
+        partner_id,
+        now,
+        couple_link_id=link["id"],
+        rsvp_window=partner_window,
     )
     return _rsvp_out(own)
 
