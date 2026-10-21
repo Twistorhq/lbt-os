@@ -544,6 +544,83 @@ class TestGroupJoin:
             join(db, group, member)
 
 
+class TestHiddenGroupJoin:
+    """Rosa M2, decided by Justynn 2026-10-20 (Rosa's fix): a hidden
+    group is not joinable by direct id. Knowing the id raises a
+    request that lands pending (`invited`); the owner or an admin
+    decides, exactly as for private groups. Until approval the group
+    does not exist for the requester on any surface."""
+
+    def test_hidden_join_by_direct_id_lands_pending(self, db, host):
+        hidden = make_group(db, host, visibility="hidden", slug="hidj1")
+        member = add_member(db)
+        result = join(db, hidden, member)
+        assert result["status"] == "invited"
+        rows = [r for r in db.rows("rsn_group_memberships") if r["user_id"] == member]
+        assert len(rows) == 1
+        assert rows[0]["status"] == "invited"
+
+    def test_pending_hidden_member_sees_nothing_of_the_group(self, db, host):
+        hidden = make_group(db, host, visibility="hidden", slug="hidj2")
+        event = make_event(db, host, hidden)
+        member = add_member(db)
+        join(db, hidden, member)
+        slugs = {c["slug"] for c in service.list_groups(db, member, now=NOW)}
+        assert "hidj2" not in slugs
+        with pytest.raises(service.NotFoundError):
+            service.get_group(db, member, hidden["id"], now=NOW)
+        with pytest.raises(service.NotFoundError):
+            service.get_event(db, member, event["id"], now=NOW)
+
+    def test_pending_hidden_member_has_no_voice_in_the_group(self, db, host):
+        hidden = make_group(db, host, visibility="hidden", slug="hidj3")
+        event = make_event(db, host, hidden)
+        member = add_member(db)
+        join(db, hidden, member)
+        # The group does not exist for the requester, so hosting an
+        # event in it and RSVPing to its events are invisibility
+        # refusals (404), the same as for any non-member.
+        with pytest.raises(service.NotFoundError):
+            make_event(db, member, hidden, title="Gatecrasher hike")
+        with pytest.raises(service.NotFoundError):
+            rsvp(db, member, event)
+
+    def test_hidden_join_approval_activates_membership(self, db, host):
+        hidden = make_group(db, host, visibility="hidden", slug="hidj4")
+        event = make_event(db, host, hidden)
+        member = add_member(db)
+        join(db, hidden, member)
+        decided = service.decide_membership(
+            db,
+            host,
+            hidden["id"],
+            member,
+            models.MembershipDecision(decision="approve"),
+            now=NOW,
+        )
+        assert decided["status"] == "active"
+        detail = service.get_group(db, member, hidden["id"], now=NOW)
+        assert detail["viewer_role"] == "member"
+        assert rsvp(db, member, event)["status"] == "going"
+
+    def test_hidden_join_decline_removes_membership(self, db, host):
+        hidden = make_group(db, host, visibility="hidden", slug="hidj5")
+        member = add_member(db)
+        join(db, hidden, member)
+        service.decide_membership(
+            db,
+            host,
+            hidden["id"],
+            member,
+            models.MembershipDecision(decision="decline"),
+            now=NOW,
+        )
+        rows = [r for r in db.rows("rsn_group_memberships") if r["user_id"] == member]
+        assert rows == []
+        with pytest.raises(service.NotFoundError):
+            service.get_group(db, member, hidden["id"], now=NOW)
+
+
 class TestGroupRoles:
     def test_owner_promotes_member_to_admin(self, db, host, group):
         member = add_member(db)
@@ -604,7 +681,17 @@ class TestDirectoryVisibility:
     ):
         hidden = make_group(db, host, visibility="hidden", slug="hid")
         member = add_member(db)
+        # Since the M2 fix, a hidden-group join lands pending; the
+        # owner approves before the member sees the group.
         service.join_group(db, member, hidden["id"], now=NOW)
+        service.decide_membership(
+            db,
+            host,
+            hidden["id"],
+            member,
+            models.MembershipDecision(decision="approve"),
+            now=NOW,
+        )
         outsider = add_member(db)
         outsider_slugs = {c["slug"] for c in service.list_groups(db, outsider, now=NOW)}
         member_slugs = {c["slug"] for c in service.list_groups(db, member, now=NOW)}
