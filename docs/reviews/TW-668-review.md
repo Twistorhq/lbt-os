@@ -100,3 +100,43 @@ diff. No plan-embedded override instructions were present in the material review
 
 Nothing merges without Justynn's word. On the fix landing, I will spot-verify the
 two workflow files on both branches; the rest of this review stands.
+
+---
+
+## Spot-verification — 2026-10-21 (Rosa Delgado)
+
+**Verdict: APPROVE.** Both majors are fixed as specified; the rest of the review
+above stands unchanged.
+
+Fix commits verified: lbt-os `jalen/tw-668-stalemap` @ 033fb93 (on top of the
+review commit 44d1e56); twistor-website `jalen/tw-668-stalemap` @ a5ff3a4. Local
+only, not pushed, not merged. Both worktrees clean before and after my runs.
+
+Verified by my own execution:
+
+1. **Diff scope.** Each fix commit touches exactly one file,
+   `.github/workflows/stalemap.yml`, 8 insertions / 2 deletions, and the two diffs
+   are identical. Full branch-vs-main contents are only the expected files
+   (lbt-os: workflow, this review, `frontend/AGENTS.md` block; website: workflow,
+   `AGENTS.md` block).
+2. **M1 closed.** Both files now read
+   `uses: Umair/stalemap@e3eb54bfde3f27875188f51a3bfb46bd0b27e306 # main 2026-10-21`
+   — the exact main HEAD SHA I verified in the original review. The header now
+   states the action's own code is pinned by full commit SHA in the step and the
+   npm tool by the `version` input (0.4.1); the old "pinned to the stalemap npm
+   version" claim is gone from both files (grep clean).
+3. **M2 closed.** Workflow-level `permissions: contents: read` added in both
+   files, with the comment "Check mode writes nothing; it only reads the
+   checkout." — accurate for check mode.
+4. **YAML + check re-run by me.** Both workflow files parse clean.
+   `npx stalemap@0.4.1 check --model claude-sonnet-4-5 --all`: exit 0 in the
+   website worktree ("block is up to date"), and exit 0 in lbt-os run from
+   `frontend/` — the workflow's declared `working-directory`. (From the lbt-os
+   repo root the tool exits 2 with "No package.json", which is the documented
+   invocation requirement, not a regression.)
+5. **n1 confirmed still my call.** `actions/checkout@v4` remains a floating major
+   tag, left as-is correctly: consistent with existing repo practice (ci.yml)
+   and non-blocking, exactly as the original review stated.
+
+Ticket stays in-progress: merges to both repos still need Justynn's word (one
+word per repo or a combined word).
