@@ -1,0 +1,51 @@
+{
+  "dataset": "twistor-synth-smoke",
+  "gate": {
+    "criteria": {
+      "fmr_max": 0.0001,
+      "fnmr_gap_max": 0.05,
+      "fnmr_max": 0.1,
+      "min_genuine_per_group": 300,
+      "min_impostor_per_group": 5000
+    },
+    "failures": [
+      "group kofi: fmr 0.016667 exceeds ceiling 0.0001",
+      "overall: fmr 0.008333 exceeds ceiling 0.0001"
+    ],
+    "insufficient": [
+      "group ama: 60 genuine attempts < minimum 300",
+      "group ama: 60 impostor attempts < minimum 5000",
+      "group kofi: 60 genuine attempts < minimum 300",
+      "group kofi: 60 impostor attempts < minimum 5000"
+    ],
+    "status": "fail"
+  },
+  "groups": {
+    "ama": {
+      "false_matches": 0,
+      "false_non_matches": 0,
+      "fmr": 0.0,
+      "fnmr": 0.0,
+      "genuine_count": 60,
+      "impostor_count": 60
+    },
+    "kofi": {
+      "false_matches": 1,
+      "false_non_matches": 0,
+      "fmr": 0.016666666666666666,
+      "fnmr": 0.0,
+      "genuine_count": 60,
+      "impostor_count": 60
+    }
+  },
+  "overall": {
+    "false_matches": 1,
+    "false_non_matches": 0,
+    "fmr": 0.008333333333333333,
+    "fnmr": 0.0,
+    "genuine_count": 120,
+    "impostor_count": 120
+  },
+  "smoke": true,
+  "threshold": 0.55
+}
