@@ -335,9 +335,7 @@ def test_partial_state_refuses_reliance_and_never_blends():
             venue_state="CO", purpose="alcohol_service", user_id="ama"
         )
     # The lane flow exists in CO, and it carries no biometric step.
-    txn = service.create_transaction(
-        venue_state="CO", purpose="entry", user_id="ama"
-    )
+    txn = service.create_transaction(venue_state="CO", purpose="entry", user_id="ama")
     assert txn.flow_mode == "lane_qr_photo"
     assert txn.challenges == []
     with pytest.raises(TransactionStateError):
