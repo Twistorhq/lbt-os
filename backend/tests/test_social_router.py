@@ -50,11 +50,22 @@ EXPECTED_ROUTES = {
     ("GET", "/social/profiles/me"),
     ("PUT", "/social/profiles/me"),
     ("POST", "/social/groups"),
+    ("GET", "/social/groups"),
     ("GET", "/social/groups/{group_id}"),
+    ("POST", "/social/groups/{group_id}/join"),
+    ("POST", "/social/groups/{group_id}/memberships/{user_id}/decision"),
+    ("POST", "/social/groups/{group_id}/memberships/{user_id}/role"),
     ("POST", "/social/events"),
     ("GET", "/social/events/{event_id}"),
+    ("POST", "/social/events/{event_id}/location"),
     ("POST", "/social/events/{event_id}/rsvps"),
     ("POST", "/social/rsvps/{rsvp_id}/decision"),
+    ("POST", "/social/rsvps/{rsvp_id}/withdraw"),
+    ("POST", "/social/series"),
+    ("GET", "/social/series/{series_id}"),
+    ("POST", "/social/series/{series_id}/location"),
+    ("GET", "/social/listings"),
+    ("GET", "/social/listings/{listing_id}"),
     ("POST", "/social/events/{event_id}/reveal"),
     ("POST", "/social/events/{event_id}/checkins"),
     ("POST", "/social/reports"),
@@ -78,8 +89,16 @@ class TestSkeletonHonesty:
         resp = client.get("/api/v1/social/profiles/me")
         assert resp.status_code == 501
 
-    def test_group_create_is_501(self, client):
-        resp = client.post(
+    def test_group_create_maps_service_refusal_to_403(self, monkeypatch):
+        # TW-660: group creation is implemented; the router's job is
+        # now mapping the service layer's refusals, so record at the
+        # service seam (behavior lives in test_social_core_loop.py).
+        def _refuse(db, user_id, payload):
+            raise social_router.service.ForbiddenError("verification required")
+
+        monkeypatch.setattr(social_router.service, "create_group", _refuse)
+        app = _build_app(authenticated=True)
+        resp = TestClient(app, raise_server_exceptions=False).post(
             "/api/v1/social/groups",
             json={
                 "name": "Denver Hikers",
@@ -89,7 +108,7 @@ class TestSkeletonHonesty:
                 "min_age_band": "age_18_plus",
             },
         )
-        assert resp.status_code == 501
+        assert resp.status_code == 403
 
     def test_report_create_is_501_not_silently_accepted(self, client):
         resp = client.post(
@@ -103,9 +122,21 @@ class TestSkeletonHonesty:
         )
         assert resp.status_code == 501
 
-    def test_reveal_is_501_and_fails_closed(self, client):
-        resp = client.post(f"/api/v1/social/events/{uuid4()}/reveal")
-        assert resp.status_code == 501
+    def test_reveal_fails_closed_when_service_refuses(self, monkeypatch):
+        # TW-660: the reveal is implemented and fail-closed in the
+        # service layer; an invisible event answers the standard
+        # restricted shell and never carries location text.
+        def _refuse(db, user_id, event_id):
+            raise social_router.service.NotFoundError()
+
+        monkeypatch.setattr(
+            social_router.service, "reveal_event_location", _refuse
+        )
+        app = _build_app(authenticated=True)
+        resp = TestClient(app, raise_server_exceptions=False).post(
+            f"/api/v1/social/events/{uuid4()}/reveal"
+        )
+        assert resp.status_code == 404
         assert "address" not in resp.text.lower()
 
 
