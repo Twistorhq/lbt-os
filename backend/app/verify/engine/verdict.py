@@ -44,6 +44,11 @@ class VerdictInputs:
     banned_anchor: bool
     velocity_exceeded: list[str]
     ai_face_score: float | None
+    # TW-678: the secondary identity stage. Required only by
+    # flows that set it (Arizona-purpose enrollment); the status
+    # is the stage's verdict string, None when not required.
+    secondary_required: bool = False
+    secondary_status: str | None = None
 
 
 @dataclass(frozen=True)
@@ -99,6 +104,17 @@ def decide(inputs: VerdictInputs, config: EngineConfig) -> Verdict:
         and inputs.ai_face_score >= config.ai_face_review_at
     ):
         review.append("ai_face_signal")
+    if inputs.secondary_required and inputs.secondary_status != "passed":
+        # Fail closed (TW-678): an enrollment that requires the
+        # secondary identity stage cannot complete without its
+        # pass. A records contradiction and a missing source both
+        # land in review, not fail: the member may be a data
+        # error away from verified, and a human owns that call.
+        review.append(
+            "secondary_identity_failed"
+            if inputs.secondary_status == "failed"
+            else "secondary_identity_unavailable"
+        )
     if inputs.selfie_face_count > 1 or inputs.document_face_count > 1:
         review.append("multiple_faces")
     if review:

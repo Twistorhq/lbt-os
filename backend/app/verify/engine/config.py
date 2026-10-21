@@ -66,6 +66,14 @@ class EngineConfig:
     staging_ttl_hours: int = 72
     # D3: production capture flag. Default OFF, always.
     production_capture_enabled: bool = False
+    # TW-678: whether THIS enrollment flow requires the secondary
+    # identity verification stage (A.R.S. 4-101 condition (b)) to
+    # pass before a verdict can pass. Arizona-purpose enrollments
+    # set it; the generic flow does not. Default off, and the
+    # stage's data source is a separate question (secondary.py):
+    # requiring the stage while no source is configured fails the
+    # enrollment closed into review, never through.
+    secondary_identity_required: bool = False
     # Document classes whose capture is built. school_id is phase 2
     # (spec Section 5.12): its schema shape exists, its capture does
     # not, and the pipeline refuses it honestly until then.
@@ -88,4 +96,5 @@ class EngineConfig:
             "velocity_max_per_document": self.velocity_max_per_document,
             "velocity_max_per_device": self.velocity_max_per_device,
             "velocity_max_per_network": self.velocity_max_per_network,
+            "secondary_identity_required": self.secondary_identity_required,
         }

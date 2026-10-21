@@ -73,7 +73,7 @@ def get_pipeline(db: Client = Depends(get_db)):
     """
     import os
 
-    from .engine.adapters import real_ports
+    from .engine.adapters import real_ports, secondary_port
     from .engine.config import EngineConfig
     from .engine.crypto import AesGcmEncryptor
     from .engine.hashing import FieldHasher
@@ -109,6 +109,10 @@ def get_pipeline(db: Client = Depends(get_db)):
         encryptor=encryptor,
         ports=real_ports(),
         config=config,
+        # TW-678: the secondary identity stage's source. The
+        # factory configures none today (no $0 records source
+        # exists); see engine/adapters.secondary_port.
+        secondary_port=secondary_port(),
     )
 
 

@@ -32,14 +32,13 @@ Fixtures are family, as in the pipeline tests: Ama Serwaa
 
 from __future__ import annotations
 
-import hashlib
 import random
 from datetime import datetime, timezone
 
-import pytest
-
 from app.door.profiles import (
+    APPROVAL_KINDS,
     BUILT_ENROLLMENT_HANDLERS,
+    ApprovalRecord,
     ProfileResolver,
     author_profile,
     build_fixture_profiles,
@@ -429,7 +428,7 @@ class TestHandlerGateTruthfulness:
         assert decision.mode == "disabled"
 
     def test_resolver_honors_wired_handler_set(self):
-        from app.door.profiles import LANE_QR_PHOTO, RELIANCE_BIOMETRIC
+        from app.door.profiles import RELIANCE_BIOMETRIC
 
         profile = author_profile(
             state_code="CA",
@@ -459,8 +458,6 @@ class TestHandlerGateTruthfulness:
             scan_retention_days=365,
         )
         # Default resolver: handler unwired, profile cannot activate.
-        from app.door.profiles import ApprovalRecord, APPROVAL_KINDS
-
         chain = [
             ApprovalRecord(
                 kind,
