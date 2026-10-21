@@ -4,12 +4,18 @@ The boundary every consumer (Twistor Identity first) talks to:
 
 - POST /verify/sessions: create a session. Refused with 403 while
   the D3 production capture flag is off: capture cannot occur.
+  The caller may supply device_ref and network_ref, pre-hashed
+  velocity references; raw device or network identifiers never
+  reach this service.
 - POST /verify/sessions/{id}/document and /selfie: guided-capture
   payloads over TLS. Images go to the encrypted staging path and
   nowhere else; identity data never travels in URLs.
+- POST /verify/sessions/{id}/liveness: issue the session's active
+  liveness challenges, so stage 4 can complete over this surface;
+  the selfie is evaluated against the set issued here.
 - GET /verify/sessions/{id}: the verdict only (status, tier,
-  confidence band, age band, decided_at). No images, no extracted
-  fields, no scores beyond the band.
+  confidence band, age band, decided_at), owner only. No images,
+  no extracted fields, no scores beyond the band.
 - POST /verify/anchors/lookup: service-to-service; answers whether
   an identity anchor exists and whether it is banned. Booleans.
 
@@ -76,6 +82,19 @@ def get_pipeline(db: Client = Depends(get_db)):
     from .engine.store import SupabaseVerifyStore
 
     config = EngineConfig.from_env()
+    if not config.production_capture_enabled:
+        # The D3 refusal runs ahead of key material: a flag-off
+        # deployment answers the honest 403 even before its keys
+        # are provisioned (Rosa's m3). Keys are mandatory only
+        # when capture is on.
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "production capture is disabled (TW-654 D3): the "
+                "capture flag stays off until counsel's written "
+                "review is filed"
+            ),
+        )
     template_key = base64.b64decode(os.environ["VFY_TEMPLATE_KEY_B64"])
     encryptor = AesGcmEncryptor(template_key)
     from pathlib import Path
@@ -96,6 +115,11 @@ def get_pipeline(db: Client = Depends(get_db)):
 class SessionCreate(BaseModel):
     document_type: str
     tier_requested: int = 2
+    # Pre-hashed velocity references (device, network), supplied
+    # by the calling client. The verify service never sees the raw
+    # identifiers these were hashed from.
+    device_ref: str | None = None
+    network_ref: str | None = None
 
 
 class DocumentSubmit(BaseModel):
@@ -137,7 +161,11 @@ def create_session(
 
     try:
         view = pipeline.start_session(
-            claims["sub"], body.document_type, body.tier_requested
+            claims["sub"],
+            body.document_type,
+            body.tier_requested,
+            device_ref=body.device_ref,
+            network_ref=body.network_ref,
         )
     except CaptureDisabled as exc:
         raise HTTPException(status_code=403, detail=str(exc))
@@ -155,6 +183,8 @@ def submit_document(
     claims: dict = Depends(_verified_claims),
     pipeline=Depends(get_pipeline),
 ):
+    from app.verify.benchmark.stages import StageUnavailable
+
     from .engine.errors import SessionStateError, UnknownSession
 
     try:
@@ -167,7 +197,30 @@ def submit_document(
         raise HTTPException(status_code=403, detail="not your session")
     except SessionStateError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    except StageUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
     return {"status": status}
+
+
+@router.post("/sessions/{session_id}/liveness")
+@limiter.limit("20/hour")
+def begin_liveness(
+    request: Request,
+    session_id: str,
+    claims: dict = Depends(_verified_claims),
+    pipeline=Depends(get_pipeline),
+):
+    from .engine.errors import SessionStateError, UnknownSession
+
+    try:
+        challenges = pipeline.begin_liveness(session_id, claims["sub"])
+    except UnknownSession:
+        raise HTTPException(status_code=404, detail="unknown session")
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="not your session")
+    except SessionStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"challenges": challenges}
 
 
 @router.post("/sessions/{session_id}/selfie")
@@ -179,6 +232,8 @@ def submit_selfie(
     claims: dict = Depends(_verified_claims),
     pipeline=Depends(get_pipeline),
 ):
+    from app.verify.benchmark.stages import StageUnavailable
+
     from .engine.errors import SessionStateError, UnknownSession
 
     frames = [[tuple(point) for point in frame] for frame in body.frames]
@@ -192,6 +247,8 @@ def submit_selfie(
         raise HTTPException(status_code=403, detail="not your session")
     except SessionStateError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    except StageUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
     return view.as_dict()
 
 
@@ -206,9 +263,11 @@ def get_session(
     from .engine.errors import UnknownSession
 
     try:
-        view = pipeline.get_verdict(session_id)
+        view = pipeline.get_verdict(session_id, claims["sub"])
     except UnknownSession:
         raise HTTPException(status_code=404, detail="unknown session")
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="not your session")
     return view.as_dict()
 
 

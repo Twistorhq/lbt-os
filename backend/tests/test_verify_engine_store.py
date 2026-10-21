@@ -21,8 +21,6 @@ import random
 import uuid
 from datetime import datetime, timezone
 
-import pytest
-
 from app.verify.engine.consent import grant_consent
 from app.verify.engine.crypto import AesGcmEncryptor
 from app.verify.engine.hashing import FieldHasher

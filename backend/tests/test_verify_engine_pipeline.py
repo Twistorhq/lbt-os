@@ -187,7 +187,7 @@ def _run_pass(pipe: VerificationPipeline, user_id: str = "u-ama"):
     grant_consent(pipe.store, user_id, "passport")
     session = pipe.start_session(user_id, "passport")
     pipe.submit_document(session.id, user_id, AMA_DOC)
-    challenges = pipe.begin_liveness(session.id)
+    challenges = pipe.begin_liveness(session.id, user_id)
     verdict = pipe.submit_selfie(
         session.id, user_id, AMA_SELFIE, _frames_for(challenges)
     )
@@ -330,7 +330,7 @@ class TestPassPath:
     def test_verdict_view_is_verdict_only(self):
         pipe = _pipeline()
         session, _ = _run_pass(pipe)
-        view = pipe.get_verdict(session.id)
+        view = pipe.get_verdict(session.id, "u-ama")
         assert set(view.as_dict()) == {
             "verification_id",
             "status",
@@ -370,7 +370,7 @@ class TestReviewAndFailPaths:
         grant_consent(store, "u-kofi", "passport")
         session = pipe.start_session("u-kofi", "passport")
         pipe.submit_document(session.id, "u-kofi", KOFI_DOC)
-        challenges = pipe.begin_liveness(session.id)
+        challenges = pipe.begin_liveness(session.id, "u-kofi")
         verdict = pipe.submit_selfie(
             session.id, "u-kofi", AMA_SELFIE, _frames_for(challenges)
         )
@@ -422,7 +422,7 @@ class TestReviewAndFailPaths:
     def test_unknown_session(self):
         pipe = _pipeline()
         with pytest.raises(UnknownSession):
-            pipe.get_verdict("no-such-session")
+            pipe.get_verdict("no-such-session", "u-ama")
 
     def test_session_belongs_to_its_user(self):
         pipe = _pipeline()
