@@ -2,9 +2,10 @@
 
 Routes are live and authenticated. TW-660 implemented the core loop
 (groups, events, series, RSVPs, location reveal, gold listings);
-check-ins and reports still delegate to service stubs that answer an
-honest 501 until their phases land. A stub must never pretend to
-work.
+TW-673 added the check-in loop routes (arrival, host confirm,
+encounter confirms, welfare, completion, reviews, review summary).
+Reports still delegate to a service stub that answers an honest
+501 until its phase lands. A stub must never pretend to work.
 
 Auth: Twistor Identity JWT (RS256), verified through the identity
 service exactly as Telemetry does. The member's user_id is the token
@@ -344,6 +345,92 @@ def create_checkin(
             status_code=422, detail="event_id in body must match the path"
         )
     return _call(service.create_checkin, db, UUID(claims["sub"]), payload)
+
+
+@router.post("/events/{event_id}/attendees/{user_id}/host-confirm", status_code=201)
+@limiter.limit("60/minute")
+def host_confirm_checkin(
+    request: Request,
+    event_id: UUID,
+    user_id: UUID,
+    claims: dict = Depends(_verified_claims),
+    db: Client = Depends(get_db),
+):
+    # The door path (TW-673): the host named in the token stamps the
+    # attendee named in the path. The service refuses anyone who is
+    # not the event's host.
+    return _call(
+        service.host_confirm_checkin, db, UUID(claims["sub"]), event_id, user_id
+    )
+
+
+@router.post("/events/{event_id}/encounter-confirms", status_code=201)
+@limiter.limit("60/minute")
+def record_encounter_confirm(
+    request: Request,
+    event_id: UUID,
+    payload: models.EncounterConfirmCreate,
+    claims: dict = Depends(_verified_claims),
+    db: Client = Depends(get_db),
+):
+    if payload.event_id != event_id:
+        raise HTTPException(
+            status_code=422, detail="event_id in body must match the path"
+        )
+    return _call(service.record_encounter_confirm, db, UUID(claims["sub"]), payload)
+
+
+@router.post("/events/{event_id}/welfare", status_code=201)
+@limiter.limit("60/minute")
+def respond_welfare_check(
+    request: Request,
+    event_id: UUID,
+    payload: models.WelfareResponseIn,
+    claims: dict = Depends(_verified_claims),
+    db: Client = Depends(get_db),
+):
+    if payload.event_id != event_id:
+        raise HTTPException(
+            status_code=422, detail="event_id in body must match the path"
+        )
+    return _call(service.respond_welfare_check, db, UUID(claims["sub"]), payload)
+
+
+@router.post("/events/{event_id}/complete")
+@limiter.limit("60/minute")
+def complete_event(
+    request: Request,
+    event_id: UUID,
+    claims: dict = Depends(_verified_claims),
+    db: Client = Depends(get_db),
+):
+    return _call(service.complete_event, db, UUID(claims["sub"]), event_id)
+
+
+@router.post("/events/{event_id}/reviews", status_code=201)
+@limiter.limit("60/minute")
+def create_review(
+    request: Request,
+    event_id: UUID,
+    payload: models.ReviewCreate,
+    claims: dict = Depends(_verified_claims),
+    db: Client = Depends(get_db),
+):
+    if payload.event_id != event_id:
+        raise HTTPException(
+            status_code=422, detail="event_id in body must match the path"
+        )
+    return _call(service.create_review, db, UUID(claims["sub"]), payload)
+
+
+@router.get("/profiles/me/review-summary")
+@limiter.limit("300/minute")
+def get_my_review_summary(
+    request: Request,
+    claims: dict = Depends(_verified_claims),
+    db: Client = Depends(get_db),
+):
+    return _call(service.my_review_summary, db, UUID(claims["sub"]))
 
 
 @router.post("/reports", status_code=201)
