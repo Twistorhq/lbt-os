@@ -15,8 +15,6 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import pytest
-
 from app.social.events_index.models import SourceConfig
 from app.social.events_index.pipeline import IngestPipeline
 from app.social.events_index.store import MemoryStore
@@ -99,7 +97,7 @@ def test_full_ics_run_creates_listings():
     assert report.created == 10  # every extracted instance is one listing
     listings = store.all_listings()
     assert len(listings) == report.created
-    assert all(l.sources for l in listings)
+    assert all(x.sources for x in listings)
 
 
 def test_cancelled_event_in_feed_is_cancelled_listing():
@@ -107,7 +105,7 @@ def test_cancelled_event_in_feed_is_cancelled_listing():
     store.add_source(_source())
     pipe = _pipeline(store, {"ics_generic": lambda s: DPL_ICS})
     pipe.run_source("src-dpl", NOW)
-    cancelled = [l for l in store.all_listings() if l.status == "cancelled"]
+    cancelled = [x for x in store.all_listings() if x.status == "cancelled"]
     assert len(cancelled) == 1
     assert cancelled[0].title == "Evening Book Club"
     assert cancelled[0].tombstone_until is not None
@@ -147,9 +145,13 @@ def test_display_facts_come_from_most_authoritative_pipe():
     store.add_source(_source())
     store.add_source(
         _source(
-            id="src-rino", name="RiNo", kind="api", connector="tribe_events",
+            id="src-rino",
+            name="RiNo",
+            kind="api",
+            connector="tribe_events",
             attribution_label="RiNo Art District",
-            feed_url="https://example.org/tribe", config={"full_sync": True},
+            feed_url="https://example.org/tribe",
+            config={"full_sync": True},
         )
     )
     tribe_variant = json.loads(json.dumps(MARKET_TRIBE))
@@ -276,20 +278,42 @@ def test_vanished_item_cancels_after_two_syncs():
     assert listing.tombstone_until is not None
 
 
+TOMBSTONE_ICS = """BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:tombstone-1@example.org
+DTSTART;TZID=America/Denver:20261024T050000
+DTEND;TZID=America/Denver:20261024T054500
+RRULE:FREQ=DAILY;COUNT=100
+SUMMARY:Daily Vigil
+LOCATION:Confluence Park
+URL:https://example.org/events/vigil
+STATUS:CONFIRMED
+END:VEVENT
+END:VCALENDAR
+"""
+
+
 def test_tombstone_blocks_resurrection():
     store = MemoryStore()
     store.add_source(_source())
-    cancelled_ics = MARKET_ICS.replace("STATUS:CONFIRMED", "STATUS:CANCELLED")
+    cancelled_ics = TOMBSTONE_ICS.replace("STATUS:CONFIRMED", "STATUS:CANCELLED")
     pipe = _pipeline(store, {"ics_generic": lambda s: cancelled_ics})
     pipe.run_source("src-dpl", NOW)
-    assert store.all_listings()[0].status == "cancelled"
+    # The instance 90 days out is inside run 1's window and tombstoned.
+    far_start = datetime(2027, 1, 18, 12, 0, tzinfo=timezone.utc)
+    far = next(x for x in store.all_listings() if x.starts_at == far_start)
+    assert far.status == "cancelled"
+    assert far.tombstone_until is not None
     # The flaky feed brings it back as confirmed a day later: still dead.
-    pipe2 = _pipeline(store, {"ics_generic": lambda s: MARKET_ICS})
+    pipe2 = _pipeline(store, {"ics_generic": lambda s: TOMBSTONE_ICS})
     pipe2.run_source("src-dpl", NOW + timedelta(days=1))
-    assert store.all_listings()[0].status == "cancelled"
+    far = next(x for x in store.all_listings() if x.starts_at == far_start)
+    assert far.status == "cancelled"
     # Ninety-one days later the tombstone has expired; it may return.
     pipe2.run_source("src-dpl", NOW + timedelta(days=91))
-    assert store.all_listings()[0].status == "active"
+    far = next(x for x in store.all_listings() if x.starts_at == far_start)
+    assert far.status == "active"
 
 
 def test_publish_builds_gold_only_through_the_gate():

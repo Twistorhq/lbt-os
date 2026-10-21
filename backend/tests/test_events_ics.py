@@ -129,7 +129,9 @@ def test_bronze_payload_is_redacted_and_hashed(source):
 
 
 def test_recurrence_window_clips_at_ninety_days(source):
-    text = FIXTURE.replace("RRULE:FREQ=WEEKLY;COUNT=4;BYDAY=SA", "RRULE:FREQ=DAILY;COUNT=200")
+    text = FIXTURE.replace(
+        "RRULE:FREQ=WEEKLY;COUNT=4;BYDAY=SA", "RRULE:FREQ=DAILY;COUNT=200"
+    )
     events = _by_title(ics.parse_ics(text, source, NOW), "Preschool Storytime")
     horizon = NOW.timestamp() + 90 * 86400
     assert all(e.starts_at.timestamp() <= horizon for e in events)

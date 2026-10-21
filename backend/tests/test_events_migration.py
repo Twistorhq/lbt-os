@@ -81,9 +81,9 @@ def test_only_evt_tables_created(sql):
 
 def test_rls_enabled_on_every_table(sql):
     for table in EVT_TABLES:
-        assert re.search(
-            rf"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY", sql
-        ), f"RLS not enabled on {table}"
+        assert re.search(rf"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY", sql), (
+            f"RLS not enabled on {table}"
+        )
 
 
 def test_deny_all_policy_on_every_non_gold_table(sql):
@@ -96,10 +96,10 @@ def test_deny_all_policy_on_every_non_gold_table(sql):
 
 
 def test_gold_has_select_only_policy_for_read_role(sql):
-    gold_policies = re.findall(
-        r"CREATE POLICY (\w+) ON evt_gold_listings([^;]*);", sql
+    gold_policies = re.findall(r"CREATE POLICY (\w+) ON evt_gold_listings([^;]*);", sql)
+    assert len(gold_policies) == 1, (
+        f"gold must have exactly one policy: {gold_policies}"
     )
-    assert len(gold_policies) == 1, f"gold must have exactly one policy: {gold_policies}"
     name, body = gold_policies[0]
     assert "FOR SELECT" in body
     assert "evt_public_read" in body
@@ -108,8 +108,14 @@ def test_gold_has_select_only_policy_for_read_role(sql):
 
 
 def test_no_policy_grants_write_on_any_evt_table(sql):
-    for verb in ("FOR INSERT", "FOR UPDATE", "FOR DELETE", "FOR ALL"):
-        assert verb not in sql, f"write policy present in events migration: {verb}"
+    policies = re.findall(r"CREATE POLICY (\w+) ON (\w+)([^;]*);", sql)
+    assert policies, "no policies found"
+    for name, table, body in policies:
+        if "USING (false)" in body:
+            continue  # a deny-all policy, the TW-650 pattern
+        assert table == "evt_gold_listings" and "FOR SELECT" in body, (
+            f"policy {name} on {table} is neither deny-all nor the gold read policy"
+        )
 
 
 def test_never_store_columns_absent(sql):

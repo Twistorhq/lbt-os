@@ -14,8 +14,12 @@ from app.social.events_index import normalize
 
 
 def test_normalize_title_lowercases_and_collapses():
-    assert normalize.normalize_title("  Preschool   Storytime! ") == "preschool storytime"
-    assert normalize.normalize_title("Art Walk & Night-Market") == "art walk night market"
+    assert (
+        normalize.normalize_title("  Preschool   Storytime! ") == "preschool storytime"
+    )
+    assert (
+        normalize.normalize_title("Art Walk & Night-Market") == "art walk night market"
+    )
     assert normalize.normalize_title("Café con Leche Night") == "cafe con leche night"
 
 
@@ -70,15 +74,21 @@ def test_address_fingerprint_normalizes_variants():
 
 def test_address_fingerprint_uses_venue_name_without_street():
     fp = normalize.address_fingerprint(None, "Denver", venue_name="Confluence Park")
-    assert fp == normalize.address_fingerprint(None, "Denver", venue_name="confluence park")
+    assert fp == normalize.address_fingerprint(
+        None, "Denver", venue_name="confluence park"
+    )
     assert fp != normalize.address_fingerprint(None, "Denver", venue_name="Other Park")
 
 
 def test_listing_fingerprint_stable_across_source_variants():
     start = datetime(2026, 10, 30, 18, 2, tzinfo=timezone.utc)
     venue_fp = normalize.venue_fingerprint(39.76012, -105.00011, "b" * 64)
-    a = normalize.listing_fingerprint("First Friday Art Walk & Night Market", start, venue_fp)
-    b = normalize.listing_fingerprint("first friday art walk night market", start, venue_fp)
+    a = normalize.listing_fingerprint(
+        "First Friday Art Walk & Night Market", start, venue_fp
+    )
+    b = normalize.listing_fingerprint(
+        "first friday art walk night market", start, venue_fp
+    )
     assert a == b
     assert len(a) == 64
 

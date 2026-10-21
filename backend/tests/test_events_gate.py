@@ -109,7 +109,9 @@ def test_staleness_ceiling_is_seven_days_or_three_cycles():
 
 
 def test_gate_uses_freshest_indexable_source():
-    stale_row = _row(last_seen_at=NOW - timedelta(days=30), fetched_at=NOW - timedelta(days=30))
+    stale_row = _row(
+        last_seen_at=NOW - timedelta(days=30), fetched_at=NOW - timedelta(days=30)
+    )
     fresh_row = _row(source_id="src-2", last_seen_at=NOW - timedelta(hours=2))
     sources = {"src-1": _source(), "src-2": _source(id="src-2")}
     decision = gate.gate_decision(_listing(), [stale_row, fresh_row], sources, NOW)
@@ -140,10 +142,15 @@ def test_gate_ignores_organizer_only_freshness():
     idx = _source(id="src-idx")
     org = _source(id="src-org", terms_posture="organizer_only", kind="organizer_import")
     rows = [
-        _row(source_id="src-idx", last_seen_at=NOW - timedelta(days=30),
-             fetched_at=NOW - timedelta(days=30)),
+        _row(
+            source_id="src-idx",
+            last_seen_at=NOW - timedelta(days=30),
+            fetched_at=NOW - timedelta(days=30),
+        ),
         _row(source_id="src-org", authority=1),
     ]
-    decision = gate.gate_decision(_listing(), rows, {"src-idx": idx, "src-org": org}, NOW)
+    decision = gate.gate_decision(
+        _listing(), rows, {"src-idx": idx, "src-org": org}, NOW
+    )
     assert decision.publish is False
     assert decision.reason == "stale"

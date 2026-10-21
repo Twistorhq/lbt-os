@@ -46,8 +46,11 @@ def test_source_coordinates_win_and_need_no_provider():
 def test_venue_cache_beats_provider():
     facts = VenueFacts(name="Hall", street_address="1 Main St", city="Denver")
     cached = VenueFacts(
-        name="Hall", street_address="1 Main St", city="Denver",
-        latitude=39.7, longitude=-105.0,
+        name="Hall",
+        street_address="1 Main St",
+        city="Denver",
+        latitude=39.7,
+        longitude=-105.0,
     )
 
     def boom(query):
