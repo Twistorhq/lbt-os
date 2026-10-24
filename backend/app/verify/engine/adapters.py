@@ -140,3 +140,22 @@ def real_ports() -> "object":
         landmarks=LandmarkAdapter(),
         liveness=LivenessAdapter(),
     )
+
+
+def secondary_port() -> None:
+    """The production secondary identity source (TW-678): none.
+
+    The stage exists (app/verify/engine/secondary.py) and its
+    port is wired into the production pipeline here, but no
+    adapter is configured, deliberately: the FOSS survey found no
+    $0 records source that meets A.R.S. 4-101 condition (b).
+    Knowledge based authentication and public records data are
+    commercial per-use products, and AAMVA DLDV charges a setup
+    fee plus a per-transaction fee, reached directly or through
+    paid gateway partners. Wiring any of them is a spend decision
+    for Justynn, not an engineering default, and returning the
+    test fixture from this factory would be a false claim that a
+    source is wired. Until that decision lands, flows that
+    require the stage get an honest unavailable and fail closed.
+    """
+    return None

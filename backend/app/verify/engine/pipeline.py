@@ -61,6 +61,11 @@ from .hashing import FieldHasher
 from .liveness import evaluate_challenges, generate_challenges
 from .normalize import age_band_for, next_band_date_for
 from .ports import PipelinePorts
+from .secondary import (
+    SecondaryCheckRequest,
+    SecondaryCheckResult,
+    evaluate_secondary_check,
+)
 from .staging import Staging
 from .store import VerifyStore
 from .velocity import AttemptRecord, check_velocity
@@ -110,6 +115,7 @@ class VerificationPipeline:
         encryptor: Encryptor,
         ports: PipelinePorts,
         config: EngineConfig,
+        secondary_port=None,
         rng: random.Random | None = None,
         clock=None,
     ):
@@ -119,6 +125,11 @@ class VerificationPipeline:
         self.encryptor = encryptor
         self.ports = ports
         self.config = config
+        # TW-678: the secondary identity stage's port. None is the
+        # production posture today (no $0 records source exists);
+        # flows that require the stage then fail closed in the
+        # verdict combiner, honestly, instead of skipping it.
+        self.secondary_port = secondary_port
         self.rng = rng or random.Random()
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self._engine_version_id: str | None = None
@@ -481,6 +492,33 @@ class VerificationPipeline:
             config=self.config,
         )
 
+        # Secondary identity stage (TW-678): runs only for flows
+        # that require it (Arizona-purpose enrollment, A.R.S.
+        # 4-101 condition (b)). The request is built from the
+        # document row's hashes and the anchor, never plaintext;
+        # the outcome is a verdict input and a signal, nothing
+        # more is kept.
+        secondary_result: SecondaryCheckResult | None = None
+        if self.config.secondary_identity_required:
+            if anchor:
+                secondary_result = evaluate_secondary_check(
+                    self.secondary_port,
+                    SecondaryCheckRequest(
+                        anchor_hash=anchor,
+                        name_hash=document["name_hash"],
+                        dob_hash=document["dob_hash"],
+                        doc_number_hash=document["doc_number_hash"],
+                        document_type=session["document_type"],
+                    ),
+                )
+            else:
+                secondary_result = SecondaryCheckResult(
+                    status="unavailable",
+                    source_kind=None,
+                    source_ref_hash=None,
+                    reasons=("secondary_identity_fields_missing",),
+                )
+
         dob = payload.get("dob")
         band = age_band_for(date.fromisoformat(dob), today) if dob else None
         expired = bool(
@@ -503,6 +541,10 @@ class VerificationPipeline:
                 banned_anchor=banned,
                 velocity_exceeded=exceeded,
                 ai_face_score=None,
+                secondary_required=self.config.secondary_identity_required,
+                secondary_status=(
+                    secondary_result.status if secondary_result is not None else None
+                ),
             ),
             self.config,
         )
@@ -549,6 +591,25 @@ class VerificationPipeline:
                 },
             }
         )
+        if secondary_result is not None:
+            # Verdict + reference hashes only (TW-678): the trail
+            # proves the stage ran and what it concluded, and
+            # holds nothing a bronze dump could identify anyone
+            # from beyond the hashes the document row already has.
+            self.store.add_signal(
+                {
+                    "session_id": session_id,
+                    "signal_type": "secondary_identity_check",
+                    "score": 1.0 if secondary_result.status == "passed" else 0.0,
+                    "detail": {
+                        "status": secondary_result.status,
+                        "source_kind": secondary_result.source_kind,
+                        "source_ref_hash": secondary_result.source_ref_hash,
+                        "matched_fields": list(secondary_result.matched_fields),
+                        "reasons": list(secondary_result.reasons),
+                    },
+                }
+            )
 
         status = {"pass": "passed", "fail": "failed", "review": "review"}[
             verdict.status

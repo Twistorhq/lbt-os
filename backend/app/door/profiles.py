@@ -43,17 +43,41 @@ LANE_CLAIM_KEYS = (
 # A profile may name only handlers from this set; naming anything
 # else disables the profile (the spec Section 3 rule: a profile
 # that needs a handler the build does not have cannot activate).
-# "secondary_identity_check" is deliberately absent: Angela's
-# TW-672 Finding 2 records that the engine has no secondary
-# identity proofing stage today (commercial data or government
-# records check, A.R.S. 4-101 condition (b)); the build item is
-# decision TW-672-D2. Until that stage exists, an Arizona profile
-# naming it cannot activate, which is the honest state of Arizona.
+# "secondary_identity_check" is deliberately absent from this
+# default set: TW-678 built the stage (verify/engine/secondary.py,
+# the D2 build item from Angela's TW-672 Finding 2), but no
+# production data source is wired behind its port, because none
+# exists at $0 (commercial per-use KBA and public records data;
+# AAMVA DLDV charges setup plus per-transaction fees). The handler
+# counts as built only through built_enrollment_handlers(), which
+# adds it when a production-grade secondary adapter is actually
+# configured. Until then, an Arizona profile naming it cannot
+# activate, which is the honest state of Arizona.
 BUILT_ENROLLMENT_HANDLERS = (
     "document_auth_electronic",
     "contemporaneous_biometric_link",
     "seller_agent_registration",
 )
+
+SECONDARY_IDENTITY_HANDLER = "secondary_identity_check"
+
+
+def built_enrollment_handlers(secondary_port=None) -> tuple[str, ...]:
+    """The handler set the build genuinely has, given its wiring.
+
+    The secondary identity handler joins the set only when a
+    secondary port is configured AND the adapter declares itself
+    production grade (it queries a real records source). A test
+    fixture, however well it checks its fixture data, declares
+    False and opens nothing: the gate follows the wiring, never
+    a claim.
+    """
+    handlers = list(BUILT_ENROLLMENT_HANDLERS)
+    if secondary_port is not None and (
+        getattr(secondary_port, "production_grade", False) is True
+    ):
+        handlers.append(SECONDARY_IDENTITY_HANDLER)
+    return tuple(handlers)
 
 
 @dataclass(frozen=True)
@@ -197,8 +221,21 @@ class ProfileResolver:
     def __init__(
         self,
         profiles: dict[str, tuple[StateProfile, list[ApprovalRecord]]],
+        *,
+        available_handlers: tuple[str, ...] | None = None,
     ):
         self._profiles = profiles
+        # The handlers the caller's build genuinely has (TW-678):
+        # the default is the shipped set, in which the secondary
+        # identity handler is absent because no production records
+        # source is wired. A caller whose engine wiring configures
+        # a production-grade secondary adapter passes
+        # built_enrollment_handlers(port) here.
+        self._available_handlers = frozenset(
+            available_handlers
+            if available_handlers is not None
+            else BUILT_ENROLLMENT_HANDLERS
+        )
 
     def resolve(self, state_code: str, at_time: datetime) -> ProfileDecision:
         entry = self._profiles.get(state_code)
@@ -253,15 +290,16 @@ class ProfileResolver:
                 profile_hash=profile.canonical_hash,
             )
 
-        missing_handlers = set(profile.enrollment_requirement_handlers) - set(
-            BUILT_ENROLLMENT_HANDLERS
+        missing_handlers = (
+            set(profile.enrollment_requirement_handlers) - self._available_handlers
         )
         if missing_handlers:
             # The spec Section 3 rule, enforced: a profile that
             # needs an enrollment handler the build does not have
-            # cannot activate. This is the gate that keeps Arizona
-            # off until the secondary identity proofing stage exists
-            # (TW-672 Finding 2, decision TW-672-D2).
+            # cannot activate. For the secondary identity handler
+            # (TW-672 Finding 2, TW-678), "has" means a production
+            # records source is genuinely wired, not merely that
+            # stage code exists.
             return ProfileDecision(
                 state_code,
                 "disabled",
@@ -388,8 +426,9 @@ def build_fixture_profiles(
     # Arizona models its legally current state, not the end state:
     # DLLC authorization has not been granted (status pending), and
     # the profile names the secondary identity proofing handler the
-    # 4-101 device definition requires, which the engine does not
-    # have yet (TW-672 Finding 2). Either ground disables it today.
+    # 4-101 device definition requires, whose production data
+    # source the engine does not have wired yet (TW-672 Finding 2,
+    # TW-678). Either ground disables it today.
     az = author_profile(
         state_code="AZ",
         version=1,
@@ -562,6 +601,8 @@ def build_fixture_profiles(
 __all__ = [
     "APPROVAL_KINDS",
     "BUILT_ENROLLMENT_HANDLERS",
+    "SECONDARY_IDENTITY_HANDLER",
+    "built_enrollment_handlers",
     "LANE_CLAIM_KEYS",
     "LANE_QR_PHOTO",
     "RELIANCE_BIOMETRIC",
