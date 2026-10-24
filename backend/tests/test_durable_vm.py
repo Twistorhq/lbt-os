@@ -29,7 +29,6 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-import time
 
 import pytest
 
@@ -77,7 +76,7 @@ def test_verifier_rejects_type_error():
 
 def test_verifier_rejects_forged_branch_target():
     b = ProgramBuilder("t").function("main", returns="int", maxstack=2)
-    b.ldi(0).br("nowhere")
+    b.label("nowhere").ldi(0).br("nowhere")
     obj = b.to_object()
     # Forge a target past the end of the code: the builder would never
     # emit this, a hand-assembled or corrupted image could.
@@ -120,7 +119,9 @@ def test_verifier_rejects_stack_above_maxstack():
 
 def test_verifier_rejects_divergent_stack_shape_at_merge():
     def body(b):
-        b.ldi(1).brz("end").ldi(2).label("end").halt()
+        # The branch path reaches "mid" with an empty stack, the
+        # fall-through path with one Int: a merge the verifier must refuse.
+        b.ldi(1).brz("mid").ldi(2).label("mid").ldi(5).drop().drop().ldi(0).halt()
 
     with pytest.raises(VerifyError) as exc:
         build_simple(body)
@@ -196,9 +197,7 @@ def test_crash_after_money_effect_resumes_with_zero_ambiguity():
     # No second send: the resumed host deduped on its effect ledger, and
     # the journal shows exactly one issued send across both processes.
     assert list(effects) == ["sms:shop-417"]
-    issued = [
-        r for r in journal2.records if r["kind"] == "tool_issued"
-    ]
+    issued = [r for r in journal2.records if r["kind"] == "tool_issued"]
     assert len([r for r in issued if r["payload"]["tool"] == "send_callback_sms"]) == 1
     lookups = [r for r in issued if r["payload"]["tool"] == "lookup_caller"]
     assert len(lookups) == 3  # completed steps of work never re-issued
@@ -357,12 +356,26 @@ def test_fx0_lane_marks_crashed_money_step_ambiguous(tmp_path):
         StepDef("send_sms", sms, idempotent=False),
         StepDef("report", report, idempotent=True),
     ]
-    engine = DurableTurnEngine(str(tmp_path / "fx0.db"), lease_seconds=0.05)
+    db = str(tmp_path / "fx0.db")
+    engine = DurableTurnEngine(db, lease_seconds=30)
     turn_id = engine.submit(session_id="s1", message_id="m1", prompt="triage")
     with pytest.raises(Death):
         engine.run_turn(turn_id, steps, owner="w1")
-    time.sleep(0.06)  # let the dead worker's lease expire
-    out = engine.run_turn(turn_id, steps, owner="w2")
+    # Expire the dead worker's lease directly in the store: exactly what
+    # the passage of time does, with no wall-clock race. (A short lease
+    # plus sleep made this test flaky under load: the fence revalidation
+    # fired mid-run on whichever worker happened to be slow that run.)
+    import sqlite3
+
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "UPDATE durable_turns SET lease_expires_at=0 WHERE turn_id=?",
+            (turn_id,),
+        )
+    # The resumer is a different worker (the multi-process story this
+    # lane exists for), on the same store.
+    resumer = DurableTurnEngine(db, lease_seconds=30)
+    out = resumer.run_turn(turn_id, steps, owner="w2")
     assert out["status"] == "completed"
     assert out["results"][1] == {"interrupted_unknown_outcome": True}
     assert len(sent) == 1
