@@ -485,8 +485,16 @@ def run_turn(
         return outcome
 
     # Resume path: a restored VM may be suspended at an await whose
-    # effect was issued (and journaled) before the crash.
+    # effect was issued (and journaled) before the crash. The journal
+    # is about to be trusted for a recorded answer, so its hash chain
+    # is verified first: an edited journal is refused here, not
+    # silently trusted (TW-685 fix round, Rosa M1).
     if vm.awaiting is not None:
+        if not journal.verify_chain():
+            raise DivergenceError(
+                "journal hash chain verification failed; refusing to"
+                " resume from a tampered journal"
+            )
         ev = vm.step()  # re-surfaces the outstanding Trap
         assert isinstance(ev, Trap) and ev.kind == "tool"
         answered = next(

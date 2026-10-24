@@ -25,6 +25,13 @@ def main(argv: list[str]) -> int:
     image = Image.from_bytes(Path(image_path).read_bytes())
     vm = Vm.restore(image, Path(snapshot_path).read_bytes())
     journal = Journal.from_bytes(Path(journal_path).read_bytes())
+    if not journal.verify_chain():
+        print(
+            "error: journal hash chain verification failed; refusing"
+            " to resume from a tampered or corrupted journal",
+            file=sys.stderr,
+        )
+        return 1
     effects = FileEffects(effects_path)
     out = run_turn(image, TriageHost(effects), vm=vm, journal=journal)
     result = {
