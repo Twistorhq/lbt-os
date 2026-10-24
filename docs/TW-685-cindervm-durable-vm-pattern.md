@@ -33,14 +33,14 @@ exactly and a truncated or edited journal is detectable.
 
 | CinderVM idea | Twistor implant |
 |---|---|
-| Image exists only through the verifier | `verify.admit_object` is the only `Image` constructor path; `Image.from_bytes` re-verifies and re-checks the seal |
+| Image exists only through the verifier | `verify.admit_object` is the verifying constructor path: every production `Image` arrives through it, and `Image.from_bytes` (the boundary an image crosses as bytes) re-verifies and re-checks the seal. `Image.__init__` is public, so in-process code can construct an unverified `Image` directly; the lane's trust story does not rest on that, because any image that crosses a process or storage boundary re-enters through `from_bytes` |
 | Abstract-interpretation verifier with stable diagnostic codes | `verify.py`: fixpoint over the CFG, single-valued stack shape at every merge (`E_STACK_SHAPE`), `E_UNDERFLOW`, `E_TYPE`, `E_BAD_TARGET`, `E_MAXSTACK`, call/return arity and type agreement |
 | No unanswered effect live at a durability boundary | `E_PENDING_ESCAPE`: a Pending may not be live at a checkpoint, return, or halt, and may not be dropped or packed away, so no snapshot can capture a half-issued effect nobody is awaiting |
 | Every loop carries metering | Cycle check over the CFG (SCC): a cycle with no SPEND fails admission with `E_UNMETERED_LOOP`; a runaway loop burns budget, not wall-clock |
 | Two-phase budget | `engine.py` ledger: RESERVE refused at reserve time if reserved + spent + n exceeds the allowance (`E_BUDGET`, before any effect runs); SPEND settles only against a reservation; RELEASE frees it. The ledger is part of the snapshot |
 | Whole machine state is a byte string | `Vm.snapshot()`: frames, operand stack, pending effects, pid counter, awaiting pid, allowance, and ledger, canonically encoded and sealed with a SHA-256 content hash. `Vm.restore` validates the seal (`E_SNAPSHOT_HASH`) and the image binding (`E_IMAGE_MISMATCH`) before reconstructing anything |
 | Interpreter performs no I/O | `Vm.step` is a pure function of (image, state, answer); effects surface as Traps and the host answers. The same code path serves live runs and replay |
-| Hash-chained, replayable journal | `Journal`: each record commits to the previous record's hash; `verify_chain()` detects edits and truncation. `ReplayHost` serves answers from the journal and raises `DivergenceError` when the run asks for something the journal does not have next |
+| Hash-chained, replayable journal | `Journal`: each record commits to the previous record's hash; `verify_chain()` detects edits (any changed record breaks the chain), and both resume paths (`resume_cli` at load; `run_turn`'s resume branch) verify the chain before trusting a recorded answer. A tail-truncated journal is a valid prefix of the chain and still verifies; truncation is caught by `ReplayHost` divergence instead, when the run asks for an answer the journal no longer has. `ReplayHost` serves answers from the journal and raises `DivergenceError` when the run asks for something the journal does not have next |
 | Deterministic arithmetic | Wrapping signed-64-bit integers, upstream's rule; identical runs produce byte-identical journals (head-hash equality is tested) |
 
 ## What was deliberately NOT adopted
@@ -89,15 +89,18 @@ and halts with the summed lead score (105). Its host (`TriageHost`) is
 where effects live; `send_callback_sms` is the money effect, keyed
 `sms:<shop>` in an effect ledger.
 
-Proof, all in `backend/tests/test_durable_vm.py` (21 tests): the
-verifier rejects seven classes of bad program before they run; budget
-refusal happens before any effect; a simulated process death after the
-SMS lands resumes from snapshot bytes with exactly one `tool_issued`
-for the SMS across both processes and the three completed lookups never
-re-issued; a separate-interpreter resume via
-`python -m app.durable_vm.resume_cli` finishes the same turn from files
-only; replay reproduces the identical journal head hash; tampered and
-truncated journals are caught.
+Proof, all in `backend/tests/test_durable_vm.py` (25 tests): the
+verifier rejects seven classes of bad program before they run;
+function call/return arity and type agreement are exercised end to
+end; budget refusal happens before any effect; a simulated process
+death after the SMS lands resumes from snapshot bytes with exactly
+one `tool_issued` for the SMS across both processes and the three
+completed lookups never re-issued; a separate-interpreter resume via
+`python -m app.durable_vm.resume_cli` finishes the same turn from
+files only; replay reproduces the identical journal head hash;
+tampered and truncated journals are caught, and since the fix round a
+chain-broken journal is refused at the resume boundary (CLI and
+in-process) before any recorded answer is fed.
 
 ## Known gaps
 
@@ -109,5 +112,5 @@ truncated journals are caught.
   first production caller that routes live turns through this lane.
 - **No live turn routes through the VM lane yet.** The triage program
   and host are the pattern proof, the same posture TW-665 shipped with
-  its crash demo. Routing a real Trades turn is a follow-up ticket, not
-  a silent assumption of this one.
+  its crash demo. Routing a real Trades turn is follow-up ticket
+  TW-713 (filed 2026-10-24), not a silent assumption of this one.
