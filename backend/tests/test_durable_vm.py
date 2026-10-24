@@ -21,7 +21,11 @@ these tests pin down:
      at reserve time, never after the spend.
   4. The journal is hash-chained and replayable: replaying a run from
      its journal reproduces the identical journal, and a truncated or
-     edited journal is detected, not silently trusted.
+     edited journal is detected, not silently trusted. The chain is
+     verified where a journal crosses a trust boundary (the
+     resume_cli load path; run_turn's resume branch), so an edited
+     journal is refused before any recorded answer is fed (TW-685
+     fix round, Rosa M1).
 """
 
 from __future__ import annotations
@@ -321,6 +325,102 @@ def test_snapshot_moves_to_a_fresh_process_and_resumes(tmp_path):
     assert result["status"] == "halted"
     assert result["halt_code"] == 105
     assert result["sms_effects"] == 1
+
+
+# ---------------------------------------------------------------------
+# Fix round (Rosa TW-685 review): call/ret coverage (m1), and the
+# journal chain verified where state crosses a trust boundary (M1)
+# ---------------------------------------------------------------------
+
+
+def test_call_ret_roundtrip_halts_with_the_return_value():
+    b = ProgramBuilder("t")
+    b.function("main", returns="int", maxstack=2)
+    b.ldi(40).ldi(2).call("add2").halt()
+    b.function("add2", args=("int", "int"), returns="int", maxstack=2)
+    b.add().ret()
+    image = b.build()
+    out = run_turn(image, TriageHost())
+    assert out.status == "halted"
+    assert out.halt_code == 42
+
+
+def test_verifier_rejects_call_with_mismatched_argument_type():
+    b = ProgramBuilder("t")
+    b.function("main", returns="int", maxstack=2)
+    b.ldc("shop").call("takes_int").halt()
+    b.function("takes_int", args=("int",), returns="int", maxstack=1)
+    b.ret()
+    with pytest.raises(VerifyError) as exc:
+        b.build()
+    assert exc.value.code == "E_TYPE"
+
+
+def _stage_crashed_triage(tmp_path):
+    """Run the triage turn to the SMS crash and stage the four
+    cross-process files exactly as the resume proof does."""
+    image = missed_call_triage_image()
+    effects: dict = {}
+    host = TriageHost(effects, crash_after_sms=True)
+    journal = Journal()
+    vm = Vm(image, budget={"units": 100})
+    with pytest.raises(SimulatedCrash):
+        run_turn(image, host, vm=vm, journal=journal)
+    d = tmp_path
+    (d / "image.bin").write_bytes(image.to_bytes())
+    (d / "snapshot.bin").write_bytes(vm.snapshot())
+    (d / "journal.json").write_bytes(journal.to_bytes())
+    (d / "effects.json").write_text(json.dumps(effects))
+    return d
+
+
+def _forge_first_answer(journal_bytes: bytes) -> bytes:
+    """Edit the first recorded answer in a journal; the records no
+    longer match their hashes, so the chain does not verify."""
+    raw = json.loads(journal_bytes)
+    answered = next(r for r in raw["records"] if r["kind"] == "tool_answered")
+    answered["payload"]["answer"] = ["i", 777]
+    return json.dumps(raw).encode()
+
+
+def test_resume_cli_refuses_a_chain_broken_journal(tmp_path):
+    d = _stage_crashed_triage(tmp_path)
+    forged = _forge_first_answer((d / "journal.json").read_bytes())
+    (d / "journal.json").write_bytes(forged)
+    assert not Journal.from_bytes(forged).verify_chain()
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "app.durable_vm.resume_cli",
+            str(d / "image.bin"),
+            str(d / "snapshot.bin"),
+            str(d / "journal.json"),
+            str(d / "effects.json"),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode != 0
+    assert "chain" in proc.stderr.lower()
+
+
+def test_resume_branch_refuses_a_chain_broken_journal():
+    image = missed_call_triage_image()
+    effects: dict = {}
+    host = TriageHost(effects, crash_after_sms=True)
+    journal = Journal()
+    vm = Vm(image, budget={"units": 100})
+    with pytest.raises(SimulatedCrash):
+        run_turn(image, host, vm=vm, journal=journal)
+    forged = Journal.from_bytes(_forge_first_answer(journal.to_bytes()))
+    assert not forged.verify_chain()
+    vm2 = Vm.restore(image, vm.snapshot())
+    with pytest.raises(DivergenceError):
+        run_turn(image, TriageHost(effects), vm=vm2, journal=forged)
+    # Nothing was fed and nothing re-sent: the effect ledger is untouched.
+    assert list(effects) == ["sms:shop-417"]
 
 
 # ---------------------------------------------------------------------
