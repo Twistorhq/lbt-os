@@ -226,8 +226,6 @@ def test_clerk_wrong_kid_still_401(monkeypatch):
 def test_clerk_legit_rs256_still_verifies(monkeypatch):
     kp = keys.generate_keypair(kid="clerk-1")
     monkeypatch.setattr(auth, "_get_jwks", lambda: _jwks_for(kp, "clerk-1"))
-    tok = tokens.mint_access_token(
-        kp, user_id="user_legit", expires_in_seconds=600
-    )
+    tok = tokens.mint_access_token(kp, user_id="user_legit", expires_in_seconds=600)
     payload = auth._verify_clerk_jwt(tok)
     assert payload["sub"] == "user_legit"

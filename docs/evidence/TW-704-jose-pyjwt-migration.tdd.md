@@ -12,8 +12,8 @@
 
 - `backend/requirements.txt`: `python-jose[cryptography]==3.5.0` → `PyJWT[crypto]==2.15.1`.
 - `backend/app/identity/tokens.py`: PyJWT encode/decode; `options={"require": ["exp", "iss", "sub"]}` replaces jose's `require_*` keys with identical semantics; `JWTError` → `PyJWTError`. Public signatures unchanged.
-- `backend/app/auth.py`: PyJWT decode; new `_clerk_signing_key()` selects the JWKS entry by the token's `kid` into a `PyJWK` (PyJWT 2.15.1 does not consume a raw JWKS dict; a first cut passing a `PyJWKSet` to decode failed with "Expecting a PEM-formatted key" and was replaced). `JWTError` → `PyJWTError`; the 401/no-leak behavior is unchanged.
-- `backend/tests/test_jwt_alg_confusion.py` (commit 6e84942, landed before the fix): 8 guard tests. Attack tokens are hand-built with hmac/hashlib/base64 — an attacker does not use our JWT library.
+- `backend/app/auth.py`: PyJWT decode; new `_clerk_signing_keys()` selects candidate JWKS entries into `PyJWK`s (PyJWT 2.15.1 does not consume a raw JWKS dict; a first cut passing a `PyJWKSet` to decode failed with "Expecting a PEM-formatted key" and was replaced). With a `kid` in the token header, exactly the matching key is tried; with **no `kid`, every JWKS key is tried in turn** and the first successful decode wins (python-jose parity — it tries the key set for no-kid tokens; disclosed here per Rosa's fix round, since Clerk holds multiple keys during rotation). If no candidate verifies, the result is the same generic 401. `JWTError` → `PyJWTError`; the 401/no-leak behavior is unchanged.
+- `backend/tests/test_jwt_alg_confusion.py` (commit 6e84942, landed before the fix): 8 guard tests, plus 5 multi-key JWKS parity tests added in the fix round (commit 1129bd2, RED before the helper fix). Attack tokens are hand-built with hmac/hashlib/base64 — an attacker does not use our JWT library.
 
 ## Task report
 
@@ -30,12 +30,19 @@
 | 3 | alg=none token does not verify (identity + Clerk → 401) | ::test_identity_none_alg_rejected, ::test_clerk_none_alg_rejected | unit | PASS | same run |
 | 4 | HS256/DER token → 401 on the Clerk JWKS path | ::test_clerk_hs256_signed_with_der_public_key_rejected | unit | PASS | same run |
 | 5 | Legit RS256 tokens still verify on both paths; wrong-key RS256 rejected | ::test_identity_legit_rs256_still_verifies, ::test_clerk_legit_rs256_still_verifies, ::test_identity_rs256_from_wrong_key_rejected | unit | PASS | same run |
-| 6 | Identity suites: 49 passed on clean origin/main control → 57 passed on branch (49 + 8 new), same 1 pre-existing SAML collection error | pytest tests/test_identity*.py --continue-on-collection-errors | unit | PASS | control vs branch runs 2026-10-25 |
+| 6 | Identity suites: 49 passed on clean origin/main control → 62 passed on branch (49 + 13 guard/parity tests), same 1 pre-existing SAML collection error | pytest tests/test_identity*.py tests/test_jwt_alg_confusion.py --continue-on-collection-errors | unit | PASS | control vs branch runs 2026-10-25 (49 alone reproduces with tests/test_identity*.py only) |
+| 10 | Multi-key JWKS parity (Rosa Major 1, fix round): kid selects the non-first key; a no-kid token signed by EITHER key verifies; a no-kid token signed by an unknown key and a wrong-kid token both get the generic 401 | tests/test_jwt_alg_confusion.py::test_clerk_kid_selects_non_first_key, ::test_clerk_no_kid_signed_by_second_key_verifies, ::test_clerk_no_kid_signed_by_first_key_verifies, ::test_clerk_no_kid_signed_by_unknown_key_401, ::test_clerk_wrong_kid_still_401 | RED | PASS | RED run: 1 failed (no-kid/second-key) + 12 passed before the fix; GREEN after (see fix-round note) |
 | 7 | Zero new failures across all auth/identity-touching suites (18 files): failed/error node sets byte-identical control vs branch (20 failed + 7 errors, all pre-existing TW-471 baseline) | pytest (18 files) + diff of FAILED/ERROR node lists | unit | PASS | "NODE SETS IDENTICAL", 27 lines each |
 | 8 | python-jose no longer pinned or imported anywhere in backend code | grep -rn "jose" backend (only doc/comment mentions remain) | manual | PASS | grep output 2026-10-25 |
 | 9 | PyJWT 2.15.1 has no OSV vulnerabilities; jose 3.5.0 carries the GHSA | OSV query API for both pins | manual | PASS | `{}` vs GHSA-3qf3-8w2g-rqmx |
 
 Tests were run with PyJWT 2.15.1 on PYTHONPATH from an isolated `pip install --target` (the sandbox's preinstalled PyJWT is 2.14.0), so the tested version is the pinned version.
+
+## Fix round (Rosa REQUEST CHANGES, 2026-10-25)
+
+- **Major 1 (Clerk no-kid parity):** `_clerk_signing_key` returned the first JWKS key for a no-kid token; jose accepts a no-kid token signed by any key in the set. Fixed as described above: kid-present path unchanged (strict single-key match), no-kid tries all candidates, all-fail → the same generic 401 with no hint of which key failed. RED: the new parity tests failed on exactly the no-kid/second-key case (1 failed, 12 passed). GREEN after the fix: full guard file passes (counts in the fix-round ticket comment).
+- **Nit 1:** guarantees row 6 command corrected — it now includes `tests/test_jwt_alg_confusion.py`, the only way the combined count reproduces (49 reproduces with the identity glob alone).
+- **Nit 2:** `ruff format` applied to `tests/test_jwt_alg_confusion.py` (the flagged spot; format-check clean on it). `ruff check` clean on all changed files. `app/auth.py` keeps main's pre-existing format state outside the touched helper region (Rosa verified it was already unformatted on main; no CI format gate) — a whole-file reformat was tried and reverted as unrelated churn.
 
 ## Coverage and known gaps
 
