@@ -10,9 +10,10 @@ import time
 from typing import Annotated
 
 import httpx
+import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import JWTError, jwt
+from jwt import PyJWK, PyJWTError
 
 from .config import settings
 from .database import get_db
@@ -52,6 +53,16 @@ def _get_jwks() -> dict:
         return _jwks_cache
 
 
+def _clerk_signing_key(token: str) -> PyJWK:
+    """TW-704: select the JWKS key whose kid matches the token header
+    (PyJWT does not consume a raw JWKS dict the way python-jose did)."""
+    kid = jwt.get_unverified_header(token).get("kid")
+    for jwk in _get_jwks().get("keys", []):
+        if kid is None or jwk.get("kid") == kid:
+            return PyJWK.from_dict(jwk)
+    raise jwt.InvalidTokenError("No JWKS key matches the token kid.")
+
+
 def _verify_clerk_jwt(token: str) -> dict:
     try:
         # fix #16: explicit verify_exp; fix #6: conditional audience verification
@@ -64,13 +75,13 @@ def _verify_clerk_jwt(token: str) -> dict:
 
         payload = jwt.decode(
             token,
-            _get_jwks(),
+            _clerk_signing_key(token),
             algorithms=["RS256"],
             options=decode_options,
             **kwargs,
         )
         return payload
-    except JWTError:
+    except PyJWTError:
         # fix #7: never leak JWT library internals to the caller
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

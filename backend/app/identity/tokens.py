@@ -5,7 +5,8 @@ import secrets
 import time
 import uuid
 
-from jose import JWTError, jwt
+import jwt
+from jwt import PyJWTError
 
 from .keys import Keypair
 
@@ -59,13 +60,9 @@ def verify_access_token(keypairs, token: str, issuer: str = ISSUER) -> dict:
                 kp.public_pem,
                 algorithms=["RS256"],
                 issuer=issuer,
-                options={
-                    "require_exp": True,
-                    "require_iss": True,
-                    "require_sub": True,
-                },
+                options={"require": ["exp", "iss", "sub"]},
             )
-        except JWTError as e:
+        except PyJWTError as e:
             last_err = e
     raise TokenError(f"invalid token: {last_err}") from last_err
 
@@ -73,7 +70,7 @@ def verify_access_token(keypairs, token: str, issuer: str = ISSUER) -> dict:
 def get_kid(token: str) -> str | None:
     try:
         return jwt.get_unverified_header(token).get("kid")
-    except JWTError:
+    except PyJWTError:
         return None
 
 
