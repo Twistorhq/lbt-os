@@ -16,6 +16,7 @@ import hmac
 import json
 import time
 
+import jwt as pyjwt
 import pytest
 from cryptography.hazmat.primitives import serialization
 from fastapi import HTTPException
@@ -111,7 +112,7 @@ def test_identity_legit_rs256_still_verifies():
 # --- app.auth Clerk path (JWKS dict passed to the verifier) ---
 
 
-def _jwks_for(kp, kid: str) -> dict:
+def _jwk_for(kp, kid: str) -> dict:
     pub = serialization.load_pem_public_key(kp.public_pem.encode())
     nums = pub.public_numbers()
 
@@ -120,17 +121,26 @@ def _jwks_for(kp, kid: str) -> dict:
         return _b64u(raw)
 
     return {
-        "keys": [
-            {
-                "kty": "RSA",
-                "kid": kid,
-                "use": "sig",
-                "alg": "RS256",
-                "n": int_b64(nums.n),
-                "e": int_b64(nums.e),
-            }
-        ]
+        "kty": "RSA",
+        "kid": kid,
+        "use": "sig",
+        "alg": "RS256",
+        "n": int_b64(nums.n),
+        "e": int_b64(nums.e),
     }
+
+
+def _jwks_for(kp, kid: str) -> dict:
+    return {"keys": [_jwk_for(kp, kid)]}
+
+
+def _jwks_multi(pairs: list) -> dict:
+    return {"keys": [_jwk_for(kp, kid) for kp, kid in pairs]}
+
+
+def _rs256_token(kp, claims: dict, kid: str | None = None) -> str:
+    headers = {"kid": kid} if kid else {}
+    return pyjwt.encode(claims, kp.private_pem, algorithm="RS256", headers=headers)
 
 
 def _clerk_claims(**overrides) -> dict:
@@ -156,6 +166,61 @@ def test_clerk_none_alg_rejected(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         auth._verify_clerk_jwt(forged)
     assert exc.value.status_code == 401
+
+
+# --- TW-704 fix round (Rosa Major 1): multi-key JWKS parity ---
+# python-jose accepted a no-kid token signed by ANY key in the JWKS (it
+# tries the key set); the Clerk path must do the same. Kid-present stays
+# strict: exactly the named key, nothing else.
+
+
+def _two_key_setup(monkeypatch):
+    kp1 = keys.generate_keypair(kid="clerk-a")
+    kp2 = keys.generate_keypair(kid="clerk-b")
+    monkeypatch.setattr(
+        auth, "_get_jwks", lambda: _jwks_multi([(kp1, "clerk-a"), (kp2, "clerk-b")])
+    )
+    return kp1, kp2
+
+
+def test_clerk_kid_selects_non_first_key(monkeypatch):
+    _, kp2 = _two_key_setup(monkeypatch)
+    tok = _rs256_token(kp2, _clerk_claims(sub="user_second"), kid="clerk-b")
+    payload = auth._verify_clerk_jwt(tok)
+    assert payload["sub"] == "user_second"
+
+
+def test_clerk_no_kid_signed_by_second_key_verifies(monkeypatch):
+    _, kp2 = _two_key_setup(monkeypatch)
+    tok = _rs256_token(kp2, _clerk_claims(sub="user_second"))
+    payload = auth._verify_clerk_jwt(tok)
+    assert payload["sub"] == "user_second"
+
+
+def test_clerk_no_kid_signed_by_first_key_verifies(monkeypatch):
+    kp1, _ = _two_key_setup(monkeypatch)
+    tok = _rs256_token(kp1, _clerk_claims(sub="user_first"))
+    payload = auth._verify_clerk_jwt(tok)
+    assert payload["sub"] == "user_first"
+
+
+def test_clerk_no_kid_signed_by_unknown_key_401(monkeypatch):
+    _two_key_setup(monkeypatch)
+    stranger = keys.generate_keypair(kid="clerk-stranger")
+    tok = _rs256_token(stranger, _clerk_claims(sub="user_stranger"))
+    with pytest.raises(HTTPException) as exc:
+        auth._verify_clerk_jwt(tok)
+    assert exc.value.status_code == 401
+    assert exc.value.detail == "Authentication failed."
+
+
+def test_clerk_wrong_kid_still_401(monkeypatch):
+    kp1, _ = _two_key_setup(monkeypatch)
+    tok = _rs256_token(kp1, _clerk_claims(), kid="clerk-nope")
+    with pytest.raises(HTTPException) as exc:
+        auth._verify_clerk_jwt(tok)
+    assert exc.value.status_code == 401
+    assert exc.value.detail == "Authentication failed."
 
 
 def test_clerk_legit_rs256_still_verifies(monkeypatch):
