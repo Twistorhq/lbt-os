@@ -10,9 +10,10 @@ import time
 from typing import Annotated
 
 import httpx
+import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import JWTError, jwt
+from jwt import PyJWK, PyJWTError
 
 from .config import settings
 from .database import get_db
@@ -52,6 +53,29 @@ def _get_jwks() -> dict:
         return _jwks_cache
 
 
+def _clerk_signing_keys(token: str) -> list[PyJWK]:
+    """TW-704: candidate JWKS keys for a token (PyJWT does not consume a
+    raw JWKS dict the way python-jose did).
+
+    Kid present: exactly the key with that kid (strict match). No kid:
+    every key in the JWKS — python-jose tried the whole key set for a
+    no-kid token, and Clerk holds multiple keys during rotation, so a
+    no-kid token signed by any of them must verify (fix-round parity)."""
+    kid = jwt.get_unverified_header(token).get("kid")
+    keys = _get_jwks().get("keys", [])
+    if kid is not None:
+        return [PyJWK.from_dict(jwk) for jwk in keys if jwk.get("kid") == kid]
+    return [PyJWK.from_dict(jwk) for jwk in keys]
+
+
+def _clerk_signing_key(token: str) -> PyJWK:
+    """First candidate key; the verify path tries every candidate."""
+    candidates = _clerk_signing_keys(token)
+    if not candidates:
+        raise jwt.InvalidTokenError("No JWKS key matches the token kid.")
+    return candidates[0]
+
+
 def _verify_clerk_jwt(token: str) -> dict:
     try:
         # fix #16: explicit verify_exp; fix #6: conditional audience verification
@@ -62,15 +86,23 @@ def _verify_clerk_jwt(token: str) -> dict:
         else:
             decode_options["verify_aud"] = False
 
-        payload = jwt.decode(
-            token,
-            _get_jwks(),
-            algorithms=["RS256"],
-            options=decode_options,
-            **kwargs,
-        )
-        return payload
-    except JWTError:
+        candidates = _clerk_signing_keys(token)
+        if not candidates:
+            raise jwt.InvalidTokenError("No JWKS key matches the token kid.")
+        last_err: PyJWTError | None = None
+        for key in candidates:
+            try:
+                return jwt.decode(
+                    token,
+                    key,
+                    algorithms=["RS256"],
+                    options=decode_options,
+                    **kwargs,
+                )
+            except PyJWTError as e:
+                last_err = e
+        raise last_err  # type: ignore[misc]
+    except PyJWTError:
         # fix #7: never leak JWT library internals to the caller
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
