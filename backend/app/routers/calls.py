@@ -224,8 +224,8 @@ def escalation_acknowledge(
     from datetime import datetime, timezone
     try:
         chain = pa.acknowledge_escalation(
-            db, chain_id=chain_id, contact_id=body.contact_id,
-            now=datetime.now(timezone.utc))
+            db, org_id=auth.org_id, chain_id=chain_id,
+            contact_id=body.contact_id, now=datetime.now(timezone.utc))
     except pa.PhoneAutomationError as exc:
         raise HTTPException(status_code=exc.status, detail=exc.detail)
     return {"chain_id": chain_id, "status": chain["status"]}

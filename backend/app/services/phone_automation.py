@@ -403,19 +403,29 @@ def start_escalation(db, *, org_id: str, session_id: str | None,
     return chain
 
 
-def acknowledge_escalation(db, *, chain_id: str, contact_id: str,
-                           now: datetime) -> dict:
+def acknowledge_escalation(db, *, org_id: str, chain_id: str,
+                           contact_id: str, now: datetime) -> dict:
+    # Tenant boundary (Rosa M1): the chain is looked up by id + org, so
+    # a chain from another org is indistinguishable from a missing one
+    # (404, never 403 — no org existence leak), and the acknowledging
+    # contact must belong to the same org.
     rows = (
         db.table("escalation_chains").select("*")
-        .eq("id", chain_id).limit(1).execute()
+        .eq("id", chain_id).eq("org_id", org_id).limit(1).execute()
     ).data or []
     if not rows:
         raise PhoneAutomationError(404, "escalation chain not found")
     chain = rows[0]
+    contact_rows = (
+        db.table("emergency_contacts").select("id")
+        .eq("id", contact_id).eq("org_id", org_id).limit(1).execute()
+    ).data or []
+    if not contact_rows:
+        raise PhoneAutomationError(404, "emergency contact not found")
     db.table("escalation_chains").update({
         "status": "acknowledged", "acknowledged_by": contact_id,
         "resolved_at": now.isoformat(),
-    }).eq("id", chain_id).execute()
+    }).eq("id", chain_id).eq("org_id", org_id).execute()
     db.table("escalation_events").insert({
         "org_id": chain["org_id"], "chain_id": chain_id,
         "contact_id": contact_id, "attempt_no": None, "round": None,
