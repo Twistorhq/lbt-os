@@ -12,6 +12,7 @@ relay) is the go-live step: it lands with the Twilio number purchase
 (Justynn's manual step). Until a transport is wired, the voice agent's
 speak() raises ProviderNotConfigured rather than pretending to talk.
 """
+
 import logging
 from xml.sax.saxutils import escape
 
@@ -24,8 +25,14 @@ class ProviderNotConfigured(RuntimeError):
 
 def _twilio_configured() -> bool:
     from ..config import settings
-    return all([settings.twilio_account_sid, settings.twilio_auth_token,
-                settings.twilio_from_number])
+
+    return all(
+        [
+            settings.twilio_account_sid,
+            settings.twilio_auth_token,
+            settings.twilio_from_number,
+        ]
+    )
 
 
 class TwilioTelephonyProvider:
@@ -36,27 +43,32 @@ class TwilioTelephonyProvider:
 
     def _get_client(self):
         from ..config import settings
+
         if not _twilio_configured():
             raise ProviderNotConfigured("twilio-not-configured")
         if self._client is None:
             from twilio.rest import Client
-            self._client = Client(settings.twilio_account_sid,
-                                  settings.twilio_auth_token)
+
+            self._client = Client(
+                settings.twilio_account_sid, settings.twilio_auth_token
+            )
         return self._client
 
     def place_call(self, *, to: str, say_text: str) -> str:
         from ..config import settings
+
         client = self._get_client()
         twiml = f"<Response><Say>{escape(say_text)}</Say></Response>"
         call = client.calls.create(
-            to=to, from_=settings.twilio_from_number, twiml=twiml)
+            to=to, from_=settings.twilio_from_number, twiml=twiml
+        )
         return call.sid
 
     def send_sms(self, *, to: str, body: str) -> None:
         from ..config import settings
+
         client = self._get_client()
-        client.messages.create(
-            to=to, from_=settings.twilio_from_number, body=body)
+        client.messages.create(to=to, from_=settings.twilio_from_number, body=body)
 
     def start_recording(self, *, call_sid: str) -> None:
         client = self._get_client()
@@ -65,8 +77,7 @@ class TwilioTelephonyProvider:
     def stop_recording(self, *, call_sid: str) -> None:
         client = self._get_client()
         try:
-            client.calls(call_sid).recordings(
-                "in-progress").update(status="stopped")
+            client.calls(call_sid).recordings("in-progress").update(status="stopped")
         except Exception as exc:  # no live recording is not an error path
             log.warning("stop_recording no-op for %s: %s", call_sid, exc)
 
@@ -94,8 +105,7 @@ class OpenAIRealtimeVoiceAgent:
 
     def speak(self, *, session_id: str, text: str) -> None:
         if self._transport is None:
-            raise ProviderNotConfigured(
-                "openai-realtime-bridge-not-configured")
+            raise ProviderNotConfigured("openai-realtime-bridge-not-configured")
         self._transport.say(session_id, text)
 
 
@@ -107,6 +117,7 @@ def get_telephony_provider() -> TwilioTelephonyProvider:
 
 def get_voice_agent() -> OpenAIRealtimeVoiceAgent:
     from ..config import settings
+
     if not settings.openai_api_key or settings.openai_api_key == "not-needed":
         raise ProviderNotConfigured("openai-not-configured")
     return OpenAIRealtimeVoiceAgent()

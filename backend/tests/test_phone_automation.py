@@ -13,6 +13,7 @@ Justynn's 2026-10-27 rulings, pinned as behavior:
 - Emergency intake books onto the docket (job + appointment); missed or
   double-booked appointments auto-reschedule and the customer is told why.
 """
+
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
@@ -31,6 +32,7 @@ DENVER = ZoneInfo("America/Denver")
 # ---------------------------------------------------------------------------
 # Fake DB (house pattern, mirrors test_missed_call.py)
 # ---------------------------------------------------------------------------
+
 
 class FakeResult:
     def __init__(self, data):
@@ -58,8 +60,7 @@ class FakeQuery:
         return self
 
     def order(self, col, desc=False):
-        self._rows.sort(key=lambda r: (r.get(col) is None, r.get(col)),
-                        reverse=desc)
+        self._rows.sort(key=lambda r: (r.get(col) is None, r.get(col)), reverse=desc)
         return self
 
     def limit(self, n):
@@ -129,6 +130,7 @@ class FakeDB:
 # Fake providers
 # ---------------------------------------------------------------------------
 
+
 class FakeTelephony:
     def __init__(self, events):
         self.events = events
@@ -165,24 +167,35 @@ class FakeVoiceAgent:
 # Fixtures — named for the family, per Zeke's habit
 # ---------------------------------------------------------------------------
 
+
 def _seed_shop(db, *, enabled=True, after_hours_auto=True):
-    db._tables["organizations"].append({
-        "id": ORG_ID, "name": "Kreighton's Test HVAC", "state": "CO",
-        "plan": "trades_pro", "subscription_status": "active",
-    })
-    db._tables["org_phone_numbers"].append({
-        "org_id": ORG_ID, "phone_number": SHOP_NUMBER,
-    })
-    db._tables["phone_automation_settings"].append({
-        "org_id": ORG_ID,
-        "enabled": enabled,
-        "after_hours_auto": after_hours_auto,
-        "timezone": "America/Denver",
-        "open_days": [1, 2, 3, 4, 5],
-        "open_time": "07:00",
-        "close_time": "19:00",
-        "manual_active_until": None,
-    })
+    db._tables["organizations"].append(
+        {
+            "id": ORG_ID,
+            "name": "Kreighton's Test HVAC",
+            "state": "CO",
+            "plan": "trades_pro",
+            "subscription_status": "active",
+        }
+    )
+    db._tables["org_phone_numbers"].append(
+        {
+            "org_id": ORG_ID,
+            "phone_number": SHOP_NUMBER,
+        }
+    )
+    db._tables["phone_automation_settings"].append(
+        {
+            "org_id": ORG_ID,
+            "enabled": enabled,
+            "after_hours_auto": after_hours_auto,
+            "timezone": "America/Denver",
+            "open_days": [1, 2, 3, 4, 5],
+            "open_time": "07:00",
+            "close_time": "19:00",
+            "manual_active_until": None,
+        }
+    )
 
 
 @pytest.fixture()
@@ -194,8 +207,7 @@ def world():
 
 
 def _global_on():
-    return mock.patch.object(
-        pa, "_global_enabled", lambda: True)
+    return mock.patch.object(pa, "_global_enabled", lambda: True)
 
 
 def _at(hour, minute=0, day=27):
@@ -206,6 +218,7 @@ def _at(hour, minute=0, day=27):
 # ---------------------------------------------------------------------------
 # Coverage: after-hours auto-mode, manual activation, toggles
 # ---------------------------------------------------------------------------
+
 
 def test_ai_does_not_answer_when_global_flag_off(world):
     db, tel, agent, _ = world
@@ -273,20 +286,27 @@ def test_manual_activation_expires(world):
 # Session start: AI disclosure first, toll, refusal when inactive
 # ---------------------------------------------------------------------------
 
+
 def test_start_ai_call_speaks_disclosure_first_and_flags_it(world):
     db, tel, agent, _ = world
     with _global_on():
         session = pa.start_ai_call(
-            db, org_id=ORG_ID, call_sid="CA-tw284-1", from_number=CALLER,
-            telephony=tel, voice_agent=agent, now=_at(22),
+            db,
+            org_id=ORG_ID,
+            call_sid="CA-tw284-1",
+            from_number=CALLER,
+            telephony=tel,
+            voice_agent=agent,
+            now=_at(22),
         )
     assert session["ai_disclosure_given"] is True
     assert agent.utterances, "agent said nothing"
     first = agent.utterances[0].lower()
     assert "ai" in first and "automated" in first  # it discloses what it is
     assert "Kreighton's Test HVAC" in agent.utterances[0]
-    tolls = [t for t in db._tables["toll_events"]
-             if t.get("event_type") == "call.ai_handled"]
+    tolls = [
+        t for t in db._tables["toll_events"] if t.get("event_type") == "call.ai_handled"
+    ]
     assert len(tolls) == 1
 
 
@@ -295,8 +315,13 @@ def test_start_ai_call_refused_when_answering_inactive(world):
     with _global_on():
         with pytest.raises(pa.PhoneAutomationError) as excinfo:
             pa.start_ai_call(
-                db, org_id=ORG_ID, call_sid="CA-tw284-2", from_number=CALLER,
-                telephony=tel, voice_agent=agent, now=_at(11),
+                db,
+                org_id=ORG_ID,
+                call_sid="CA-tw284-2",
+                from_number=CALLER,
+                telephony=tel,
+                voice_agent=agent,
+                now=_at(11),
             )
     assert excinfo.value.status == 409
     assert agent.utterances == []
@@ -306,12 +331,18 @@ def test_start_ai_call_refused_when_answering_inactive(world):
 # Recording: per-call toggle, spoken announcement, audit log
 # ---------------------------------------------------------------------------
 
+
 def _started_session(world):
     db, tel, agent, events = world
     with _global_on():
         session = pa.start_ai_call(
-            db, org_id=ORG_ID, call_sid="CA-tw284-rec", from_number=CALLER,
-            telephony=tel, voice_agent=agent, now=_at(22),
+            db,
+            org_id=ORG_ID,
+            call_sid="CA-tw284-rec",
+            from_number=CALLER,
+            telephony=tel,
+            voice_agent=agent,
+            now=_at(22),
         )
     return db, tel, agent, events, session
 
@@ -325,54 +356,84 @@ def test_recording_toggle_on_speaks_announcement_before_recording_starts(world):
     db, tel, agent, events, session = _started_session(world)
     events.clear()
     pa.set_recording(
-        db, org_id=ORG_ID, session_id=session["id"], on=True,
-        actor="owner", telephony=tel, voice_agent=agent, now=_at(22, 5),
+        db,
+        org_id=ORG_ID,
+        session_id=session["id"],
+        on=True,
+        actor="owner",
+        telephony=tel,
+        voice_agent=agent,
+        now=_at(22, 5),
     )
     kinds = [k for k, _ in events]
     assert kinds == ["speak", "recording_start"]
     spoken = events[0][1].lower().strip(".")
     assert spoken == "this call is now being recorded"
-    row = [s for s in db._tables["ai_call_sessions"]
-           if s["id"] == session["id"]][0]
+    row = [s for s in db._tables["ai_call_sessions"] if s["id"] == session["id"]][0]
     assert row["recording_enabled"] is True
     audit = db._tables["call_recording_events"]
     assert len(audit) == 1
     assert audit[0]["event"] == "recording_enabled"
-    assert audit[0]["announcement_text"].lower().strip(".") == \
-        "this call is now being recorded"
+    assert (
+        audit[0]["announcement_text"].lower().strip(".")
+        == "this call is now being recorded"
+    )
     assert audit[0]["actor"] == "owner"
 
 
 def test_recording_toggle_off_stops_and_audits_without_announcement(world):
     db, tel, agent, events, session = _started_session(world)
     pa.set_recording(
-        db, org_id=ORG_ID, session_id=session["id"], on=True,
-        actor="owner", telephony=tel, voice_agent=agent, now=_at(22, 5),
+        db,
+        org_id=ORG_ID,
+        session_id=session["id"],
+        on=True,
+        actor="owner",
+        telephony=tel,
+        voice_agent=agent,
+        now=_at(22, 5),
     )
     events.clear()
     utterances_before = len(agent.utterances)
     pa.set_recording(
-        db, org_id=ORG_ID, session_id=session["id"], on=False,
-        actor="owner", telephony=tel, voice_agent=agent, now=_at(22, 9),
+        db,
+        org_id=ORG_ID,
+        session_id=session["id"],
+        on=False,
+        actor="owner",
+        telephony=tel,
+        voice_agent=agent,
+        now=_at(22, 9),
     )
     assert [k for k, _ in events] == ["recording_stop"]
     assert len(agent.utterances) == utterances_before  # no announcement on off
     audit = db._tables["call_recording_events"]
-    assert [a["event"] for a in audit] == [
-        "recording_enabled", "recording_disabled"]
+    assert [a["event"] for a in audit] == ["recording_enabled", "recording_disabled"]
     assert audit[1]["announcement_text"] is None
 
 
 def test_recording_toggle_idempotent_when_already_on(world):
     db, tel, agent, events, session = _started_session(world)
     pa.set_recording(
-        db, org_id=ORG_ID, session_id=session["id"], on=True,
-        actor="owner", telephony=tel, voice_agent=agent, now=_at(22, 5),
+        db,
+        org_id=ORG_ID,
+        session_id=session["id"],
+        on=True,
+        actor="owner",
+        telephony=tel,
+        voice_agent=agent,
+        now=_at(22, 5),
     )
     events.clear()
     pa.set_recording(
-        db, org_id=ORG_ID, session_id=session["id"], on=True,
-        actor="owner", telephony=tel, voice_agent=agent, now=_at(22, 6),
+        db,
+        org_id=ORG_ID,
+        session_id=session["id"],
+        on=True,
+        actor="owner",
+        telephony=tel,
+        voice_agent=agent,
+        now=_at(22, 6),
     )
     assert events == []  # no second announcement, no duplicate audit
     assert len(db._tables["call_recording_events"]) == 1
@@ -389,31 +450,41 @@ SHOP_LINE = "+13035550103"
 
 def test_replace_and_list_contacts_masked_and_ordered(world):
     db, tel, agent, _ = world
-    pa.replace_emergency_contacts(db, ORG_ID, [
-        {"phone_number": SHOP_LINE, "label": "Shop line", "priority": 3},
-        {"phone_number": AMBER, "label": "Amber (owner)", "priority": 1},
-        {"phone_number": MARCUS_LINE, "label": "Office", "priority": 2},
-    ])
+    pa.replace_emergency_contacts(
+        db,
+        ORG_ID,
+        [
+            {"phone_number": SHOP_LINE, "label": "Shop line", "priority": 3},
+            {"phone_number": AMBER, "label": "Amber (owner)", "priority": 1},
+            {"phone_number": MARCUS_LINE, "label": "Office", "priority": 2},
+        ],
+    )
     listed = pa.list_emergency_contacts(db, ORG_ID)
-    assert [c["label"] for c in listed] == [
-        "Amber (owner)", "Office", "Shop line"]
+    assert [c["label"] for c in listed] == ["Amber (owner)", "Office", "Shop line"]
     for c in listed:
         assert AMBER not in str(c.values())
-        assert c["phone_masked"].endswith("0101") or \
-            c["phone_masked"].endswith("0102") or \
-            c["phone_masked"].endswith("0103")
+        assert (
+            c["phone_masked"].endswith("0101")
+            or c["phone_masked"].endswith("0102")
+            or c["phone_masked"].endswith("0103")
+        )
 
 
 # ---------------------------------------------------------------------------
 # Escalation: priority order, stop on ack, bounded exhaustion fallback
 # ---------------------------------------------------------------------------
 
+
 def _seed_contacts(db):
-    pa.replace_emergency_contacts(db, ORG_ID, [
-        {"phone_number": AMBER, "label": "Amber (owner)", "priority": 1},
-        {"phone_number": MARCUS_LINE, "label": "Office", "priority": 2},
-        {"phone_number": SHOP_LINE, "label": "Shop line", "priority": 3},
-    ])
+    pa.replace_emergency_contacts(
+        db,
+        ORG_ID,
+        [
+            {"phone_number": AMBER, "label": "Amber (owner)", "priority": 1},
+            {"phone_number": MARCUS_LINE, "label": "Office", "priority": 2},
+            {"phone_number": SHOP_LINE, "label": "Shop line", "priority": 3},
+        ],
+    )
 
 
 def test_escalation_attempts_in_priority_order_and_stops_on_ack(world):
@@ -428,9 +499,13 @@ def test_escalation_attempts_in_priority_order_and_stops_on_ack(world):
         return False
 
     chain = pa.start_escalation(
-        db, org_id=ORG_ID, session_id=None,
+        db,
+        org_id=ORG_ID,
+        session_id=None,
         message="Emergency: no heat, booked 11pm",
-        telephony=tel, ack_probe=probe, now=_at(22, 15),
+        telephony=tel,
+        ack_probe=probe,
+        now=_at(22, 15),
     )
     assert chain["status"] == "acknowledged"
     assert acked["done"] is True
@@ -444,10 +519,14 @@ def test_escalation_unacknowledged_exhausts_bounded_rounds(world):
     db, tel, agent, _ = world
     _seed_contacts(db)
     chain = pa.start_escalation(
-        db, org_id=ORG_ID, session_id=None,
+        db,
+        org_id=ORG_ID,
+        session_id=None,
         message="Emergency: burst pipe",
-        telephony=tel, ack_probe=lambda contact: False,
-        max_rounds=2, now=_at(23, 40),
+        telephony=tel,
+        ack_probe=lambda contact: False,
+        max_rounds=2,
+        now=_at(23, 40),
     )
     assert chain["status"] == "exhausted"
     # Bounded: 3 contacts x 2 rounds, never more.
@@ -461,14 +540,22 @@ def test_acknowledge_escalation_marks_chain(world):
     db, tel, agent, _ = world
     _seed_contacts(db)
     chain = pa.start_escalation(
-        db, org_id=ORG_ID, session_id=None, message="Emergency",
-        telephony=tel, ack_probe=lambda contact: False,
-        max_rounds=1, now=_at(23, 50),
+        db,
+        org_id=ORG_ID,
+        session_id=None,
+        message="Emergency",
+        telephony=tel,
+        ack_probe=lambda contact: False,
+        max_rounds=1,
+        now=_at(23, 50),
     )
     contacts = pa._active_contacts(db, ORG_ID)
     updated = pa.acknowledge_escalation(
-        db, org_id=ORG_ID, chain_id=chain["id"],
-        contact_id=contacts[0]["id"], now=_at(23, 55),
+        db,
+        org_id=ORG_ID,
+        chain_id=chain["id"],
+        contact_id=contacts[0]["id"],
+        now=_at(23, 55),
     )
     assert updated["status"] == "acknowledged"
 
@@ -476,30 +563,36 @@ def test_acknowledge_escalation_marks_chain(world):
 OTHER_ORG = "org-tw284-other"
 
 
-def test_acknowledge_escalation_cross_org_chain_is_404_and_writes_nothing(
-        world):
+def test_acknowledge_escalation_cross_org_chain_is_404_and_writes_nothing(world):
     """M1 (Rosa): org B cannot ack org A's chain. The chain is looked up
     by id + org; absent in the caller's org -> 404, chain untouched,
     and no ack event can be injected into org A's escalation_events."""
     db, tel, agent, _ = world
     _seed_contacts(db)
     chain = pa.start_escalation(
-        db, org_id=ORG_ID, session_id=None, message="Emergency",
-        telephony=tel, ack_probe=lambda contact: False,
-        max_rounds=1, now=_at(23, 50),
+        db,
+        org_id=ORG_ID,
+        session_id=None,
+        message="Emergency",
+        telephony=tel,
+        ack_probe=lambda contact: False,
+        max_rounds=1,
+        now=_at(23, 50),
     )
     contact = pa._active_contacts(db, ORG_ID)[0]
     events_before = len(db._tables["escalation_events"])
     with pytest.raises(pa.PhoneAutomationError) as excinfo:
         pa.acknowledge_escalation(
-            db, org_id=OTHER_ORG, chain_id=chain["id"],
-            contact_id=contact["id"], now=_at(23, 55),
+            db,
+            org_id=OTHER_ORG,
+            chain_id=chain["id"],
+            contact_id=contact["id"],
+            now=_at(23, 55),
         )
     assert excinfo.value.status == 404
     assert db._tables["escalation_chains"][0]["status"] == "exhausted"
     assert len(db._tables["escalation_events"]) == events_before
-    assert not [e for e in db._tables["escalation_events"]
-                if e["channel"] == "ack"]
+    assert not [e for e in db._tables["escalation_events"] if e["channel"] == "ack"]
 
 
 def test_acknowledge_escalation_wrong_org_contact_is_rejected(world):
@@ -509,38 +602,54 @@ def test_acknowledge_escalation_wrong_org_contact_is_rejected(world):
     db, tel, agent, _ = world
     _seed_contacts(db)
     chain = pa.start_escalation(
-        db, org_id=ORG_ID, session_id=None, message="Emergency",
-        telephony=tel, ack_probe=lambda contact: False,
-        max_rounds=1, now=_at(23, 50),
+        db,
+        org_id=ORG_ID,
+        session_id=None,
+        message="Emergency",
+        telephony=tel,
+        ack_probe=lambda contact: False,
+        max_rounds=1,
+        now=_at(23, 50),
     )
-    db._tables["emergency_contacts"].append({
-        "id": "emergency_contacts-foreign", "org_id": OTHER_ORG,
-        "phone_number": "+13035550177", "phone_hash": "x",
-        "label": "Other shop owner", "priority": 1, "is_active": True,
-        "created_at": _at(23, 0).isoformat(),
-    })
+    db._tables["emergency_contacts"].append(
+        {
+            "id": "emergency_contacts-foreign",
+            "org_id": OTHER_ORG,
+            "phone_number": "+13035550177",
+            "phone_hash": "x",
+            "label": "Other shop owner",
+            "priority": 1,
+            "is_active": True,
+            "created_at": _at(23, 0).isoformat(),
+        }
+    )
     events_before = len(db._tables["escalation_events"])
     with pytest.raises(pa.PhoneAutomationError) as excinfo:
         pa.acknowledge_escalation(
-            db, org_id=ORG_ID, chain_id=chain["id"],
-            contact_id="emergency_contacts-foreign", now=_at(23, 55),
+            db,
+            org_id=ORG_ID,
+            chain_id=chain["id"],
+            contact_id="emergency_contacts-foreign",
+            now=_at(23, 55),
         )
     assert excinfo.value.status == 404
     assert db._tables["escalation_chains"][0]["status"] == "exhausted"
     assert len(db._tables["escalation_events"]) == events_before
-    assert not [e for e in db._tables["escalation_events"]
-                if e["channel"] == "ack"]
+    assert not [e for e in db._tables["escalation_events"] if e["channel"] == "ack"]
 
 
 # ---------------------------------------------------------------------------
 # Emergency intake -> docket booking
 # ---------------------------------------------------------------------------
 
+
 def test_emergency_intake_books_job_and_appointment_and_confirms(world):
     db, tel, agent, events, session = _started_session(world)
     _seed_contacts(db)
     result = pa.record_emergency_intake(
-        db, org_id=ORG_ID, session_id=session["id"],
+        db,
+        org_id=ORG_ID,
+        session_id=session["id"],
         details={
             "caller_name": "Amber's neighbor",
             "phone": CALLER,
@@ -548,7 +657,9 @@ def test_emergency_intake_books_job_and_appointment_and_confirms(world):
             "address": "123 Test St, Denver",
             "requested_at": _at(23).astimezone(timezone.utc).isoformat(),
         },
-        telephony=tel, ack_probe=lambda contact: True, now=_at(22, 20),
+        telephony=tel,
+        ack_probe=lambda contact: True,
+        now=_at(22, 20),
     )
     job = db._tables["jobs"][0]
     assert job["job_type"] == "emergency"
@@ -556,8 +667,7 @@ def test_emergency_intake_books_job_and_appointment_and_confirms(world):
     appt = db._tables["appointments"][0]
     assert appt["job_id"] == job["id"]
     assert result["appointment_id"] == appt["id"]
-    row = [s for s in db._tables["ai_call_sessions"]
-           if s["id"] == session["id"]][0]
+    row = [s for s in db._tables["ai_call_sessions"] if s["id"] == session["id"]][0]
     assert row["appointment_id"] == appt["id"]
     # Customer got a confirmation; the owner got rung (escalation started).
     assert any(to == CALLER for to, _ in tel.sms)
@@ -568,19 +678,31 @@ def test_emergency_intake_books_job_and_appointment_and_confirms(world):
 # Auto-reschedule: next free slot + customer told why
 # ---------------------------------------------------------------------------
 
-def _seed_appointment(db, *, appt_id, scheduled_at, technician_id=None,
-                      customer_phone=CALLER):
-    db._tables["customers"].append({
-        "id": f"cust-{appt_id}", "org_id": ORG_ID,
-        "name": "Test Customer", "phone": customer_phone,
-    })
-    db._tables["appointments"].append({
-        "id": appt_id, "org_id": ORG_ID, "job_id": None,
-        "customer_id": f"cust-{appt_id}",
-        "technician_id": technician_id,
-        "visit_type": "job_visit",
-        "scheduled_at": scheduled_at, "no_show": False, "notes": None,
-    })
+
+def _seed_appointment(
+    db, *, appt_id, scheduled_at, technician_id=None, customer_phone=CALLER
+):
+    db._tables["customers"].append(
+        {
+            "id": f"cust-{appt_id}",
+            "org_id": ORG_ID,
+            "name": "Test Customer",
+            "phone": customer_phone,
+        }
+    )
+    db._tables["appointments"].append(
+        {
+            "id": appt_id,
+            "org_id": ORG_ID,
+            "job_id": None,
+            "customer_id": f"cust-{appt_id}",
+            "technician_id": technician_id,
+            "visit_type": "job_visit",
+            "scheduled_at": scheduled_at,
+            "no_show": False,
+            "notes": None,
+        }
+    )
 
 
 def test_auto_reschedule_no_show_moves_and_tells_customer_why(world):
@@ -590,12 +712,15 @@ def test_auto_reschedule_no_show_moves_and_tells_customer_why(world):
     _seed_appointment(db, appt_id="appt-a", scheduled_at=tue_9am)
     _seed_appointment(db, appt_id="appt-busy", scheduled_at=tue_930)
     result = pa.auto_reschedule_appointment(
-        db, org_id=ORG_ID, appointment_id="appt-a", reason="no_show",
-        telephony=tel, now=_at(8),
+        db,
+        org_id=ORG_ID,
+        appointment_id="appt-a",
+        reason="no_show",
+        telephony=tel,
+        now=_at(8),
     )
     # 09:30 is taken, so the next free slot is 10:00 Denver.
-    new_local = datetime.fromisoformat(
-        result["new_scheduled_at"]).astimezone(DENVER)
+    new_local = datetime.fromisoformat(result["new_scheduled_at"]).astimezone(DENVER)
     assert (new_local.hour, new_local.minute) == (10, 0)
     row = [a for a in db._tables["appointments"] if a["id"] == "appt-a"][0]
     assert row["scheduled_at"] == result["new_scheduled_at"]
@@ -608,16 +733,21 @@ def test_auto_reschedule_no_show_moves_and_tells_customer_why(world):
 def test_auto_reschedule_double_booked_detects_conflict(world):
     db, tel, agent, _ = world
     tue_9am = _at(9).astimezone(timezone.utc).isoformat()
-    _seed_appointment(db, appt_id="appt-a", scheduled_at=tue_9am,
-                      technician_id="tech-1")
-    _seed_appointment(db, appt_id="appt-clash", scheduled_at=tue_9am,
-                      technician_id="tech-1")
-    result = pa.auto_reschedule_appointment(
-        db, org_id=ORG_ID, appointment_id="appt-a", reason="double_booked",
-        telephony=tel, now=_at(8),
+    _seed_appointment(
+        db, appt_id="appt-a", scheduled_at=tue_9am, technician_id="tech-1"
     )
-    new_local = datetime.fromisoformat(
-        result["new_scheduled_at"]).astimezone(DENVER)
+    _seed_appointment(
+        db, appt_id="appt-clash", scheduled_at=tue_9am, technician_id="tech-1"
+    )
+    result = pa.auto_reschedule_appointment(
+        db,
+        org_id=ORG_ID,
+        appointment_id="appt-a",
+        reason="double_booked",
+        telephony=tel,
+        now=_at(8),
+    )
+    new_local = datetime.fromisoformat(result["new_scheduled_at"]).astimezone(DENVER)
     assert (new_local.hour, new_local.minute) == (9, 30)
     sms = [body for to, body in tel.sms if to == CALLER]
     assert sms and "scheduling conflict" in sms[0].lower()
@@ -629,8 +759,12 @@ def test_auto_reschedule_rejects_unknown_reason(world):
     _seed_appointment(db, appt_id="appt-a", scheduled_at=tue_9am)
     with pytest.raises(pa.PhoneAutomationError) as excinfo:
         pa.auto_reschedule_appointment(
-            db, org_id=ORG_ID, appointment_id="appt-a", reason="vibes",
-            telephony=tel, now=_at(8),
+            db,
+            org_id=ORG_ID,
+            appointment_id="appt-a",
+            reason="vibes",
+            telephony=tel,
+            now=_at(8),
         )
     assert excinfo.value.status == 400
 
@@ -639,10 +773,12 @@ def test_auto_reschedule_rejects_unknown_reason(world):
 # Migration: tables, RLS, org isolation (static contract, house pattern)
 # ---------------------------------------------------------------------------
 
+
 def test_migration_creates_tables_with_rls_org_isolation():
     sql = (
         Path(__file__).resolve().parents[2]
-        / "supabase" / "migration_phone_automation.sql"
+        / "supabase"
+        / "migration_phone_automation.sql"
     ).read_text()
     for table in (
         "phone_automation_settings",
