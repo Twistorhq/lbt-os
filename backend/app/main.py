@@ -24,8 +24,9 @@ from .data_layer.science.high_tc import router as sci_hightc_router
 from .data_layer.science.pfas import router as sci_pfas_router
 from .data_layer.science.subseasonal import router as sci_subseasonal_router
 from .data_layer.science.turbulence import router as sci_turbulence_router
-from .flags import router as flags_router
 from .flows import router as flows_router
+from .flags import router as flags_router
+from .telemetry import router as telemetry_router
 from .identity import oauth as identity_oauth
 from .identity import router as identity_router
 from .identity import saml as identity_saml
@@ -54,7 +55,6 @@ from .routers import (
 )
 from .services.scheduler import start_scheduler, stop_scheduler
 from .social import router as social_router
-from .telemetry import router as telemetry_router
 from .verify import router as verify_router
 
 configure_logging(level="DEBUG" if settings.app_env != "production" else "INFO")
