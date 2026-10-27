@@ -75,6 +75,17 @@ class Settings(BaseSettings):
     # (fail-closed); no schedule ever fires without this key.
     flows_tick_key: str | None = None
 
+    # TW-284 AI phone automation — global kill switch, fail-closed OFF.
+    # Per-shop toggles live in phone_automation_settings; nothing answers
+    # unless this flag AND the shop toggle AND a coverage mode all say yes.
+    # The Twilio number purchase stays a manual Justynn step; no live
+    # activation happens from config alone (the media-stream bridge URL is
+    # set only at go-live).
+    phone_automation_enabled: bool = False
+    openai_realtime_model: str = "gpt-realtime"
+    phone_automation_max_rounds: int = 2  # bounded escalation rounds
+    phone_automation_voice_stream_url: str | None = None
+
     # Integration / OAuth
     integration_secret_key: str | None = None
     quickbooks_client_id: str | None = None
