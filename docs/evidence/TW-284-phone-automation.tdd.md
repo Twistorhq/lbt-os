@@ -92,6 +92,48 @@ here per Marcus's dispatch (the TW-704/TW-710 lane: built branch + tests
   77ea8d0. Final diff vs origin/main is exactly the 6 TW-284 files
   (plus this doc).
 
+## Fix round — Rosa REQUEST CHANGES (2026-10-27)
+
+Rosa's review (`docs/reviews/TW-284-review.md`) returned two majors.
+Fix scope was exactly M1 + M2; the four nits were left untouched.
+Commits on top of `4b9df7e`: `2886fe4` (RED), `87560a9` (GREEN),
+`1c55b3f` (M2 format), plus this evidence update.
+
+- **M1 (tenant boundary)** — `acknowledge_escalation` now takes
+  `org_id`: the chain is looked up by `id` + `org_id` (absent in the
+  caller's org → 404 "escalation chain not found", matching the
+  router's cross-org → 404 promise), the acknowledging contact must
+  exist in that org (else 404 "emergency contact not found"), and the
+  chain update is org-scoped. The router passes `auth.org_id`.
+  RED: the 3 ack tests failed against the old signature (21 passed).
+  GREEN: 24 passed — the 22 original tests plus 2 new ones:
+  `test_acknowledge_escalation_cross_org_chain_is_404_and_writes_nothing`
+  (org B cannot flip org A's chain; zero ack events injected) and
+  `test_acknowledge_escalation_wrong_org_contact_is_rejected`
+  (chain in org, contact from another org → 404, nothing written).
+- **M2 (style gate)** — `ruff format` run on exactly the three
+  authored files (`phone_automation.py`, `voice_providers.py`,
+  `test_phone_automation.py`); `ruff format --check` now passes on
+  all three and `ruff check` is clean on all 5 touched files.
+  `calls.py`/`config.py` were NOT reformatted — they still report
+  would-reformat, identical to clean main (inherited state).
+- **Full suite, paired same-session runs** (`--continue-on-collection-errors`,
+  junit node sets compared): branch 1545 tests, 20 failed / 1517
+  passed / 8 errors (28 bad nodes); clean-main control (`8c4194f`,
+  `control-main-tw284` worktree) 1521 tests, 21 failed / 1492 passed /
+  8 errors (29 bad nodes). Collection delta is exactly +24 (the
+  TW-284 test file, all passing). The branch-only failed/error node
+  set is **empty** — zero new failures, merge bar met. The single
+  control-only node is `test_durable_turns::test_effect_applied_before_crash_is_not_duplicated_on_resume`,
+  a flake: it passes 3/3 in isolation on the control worktree and 1/1
+  on the branch; it is in neither tree's changes (TW-284 touches no
+  durable-turn code). Absolute pass counts in this session run ~31
+  below Rosa's paired runs in BOTH worktrees symmetrically
+  (sandbox environment variance); the paired same-session node-set
+  comparison is the bar and it holds.
+- **Lint posture unchanged**: `ruff check app tests` reports exactly
+  the 1 pre-existing finding (main.py import sort) in both worktrees.
+
 ## Plan-safety notes
 
 - No untrusted plan content was encountered. The brief came from Marcus
