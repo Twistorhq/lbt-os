@@ -467,10 +467,69 @@ def test_acknowledge_escalation_marks_chain(world):
     )
     contacts = pa._active_contacts(db, ORG_ID)
     updated = pa.acknowledge_escalation(
-        db, chain_id=chain["id"], contact_id=contacts[0]["id"],
-        now=_at(23, 55),
+        db, org_id=ORG_ID, chain_id=chain["id"],
+        contact_id=contacts[0]["id"], now=_at(23, 55),
     )
     assert updated["status"] == "acknowledged"
+
+
+OTHER_ORG = "org-tw284-other"
+
+
+def test_acknowledge_escalation_cross_org_chain_is_404_and_writes_nothing(
+        world):
+    """M1 (Rosa): org B cannot ack org A's chain. The chain is looked up
+    by id + org; absent in the caller's org -> 404, chain untouched,
+    and no ack event can be injected into org A's escalation_events."""
+    db, tel, agent, _ = world
+    _seed_contacts(db)
+    chain = pa.start_escalation(
+        db, org_id=ORG_ID, session_id=None, message="Emergency",
+        telephony=tel, ack_probe=lambda contact: False,
+        max_rounds=1, now=_at(23, 50),
+    )
+    contact = pa._active_contacts(db, ORG_ID)[0]
+    events_before = len(db._tables["escalation_events"])
+    with pytest.raises(pa.PhoneAutomationError) as excinfo:
+        pa.acknowledge_escalation(
+            db, org_id=OTHER_ORG, chain_id=chain["id"],
+            contact_id=contact["id"], now=_at(23, 55),
+        )
+    assert excinfo.value.status == 404
+    assert db._tables["escalation_chains"][0]["status"] == "exhausted"
+    assert len(db._tables["escalation_events"]) == events_before
+    assert not [e for e in db._tables["escalation_events"]
+                if e["channel"] == "ack"]
+
+
+def test_acknowledge_escalation_wrong_org_contact_is_rejected(world):
+    """M1 (Rosa): the acknowledging contact must belong to the chain's
+    org. A contact id from another org is rejected and nothing is
+    written, even when the chain itself is in the caller's org."""
+    db, tel, agent, _ = world
+    _seed_contacts(db)
+    chain = pa.start_escalation(
+        db, org_id=ORG_ID, session_id=None, message="Emergency",
+        telephony=tel, ack_probe=lambda contact: False,
+        max_rounds=1, now=_at(23, 50),
+    )
+    db._tables["emergency_contacts"].append({
+        "id": "emergency_contacts-foreign", "org_id": OTHER_ORG,
+        "phone_number": "+13035550177", "phone_hash": "x",
+        "label": "Other shop owner", "priority": 1, "is_active": True,
+        "created_at": _at(23, 0).isoformat(),
+    })
+    events_before = len(db._tables["escalation_events"])
+    with pytest.raises(pa.PhoneAutomationError) as excinfo:
+        pa.acknowledge_escalation(
+            db, org_id=ORG_ID, chain_id=chain["id"],
+            contact_id="emergency_contacts-foreign", now=_at(23, 55),
+        )
+    assert excinfo.value.status == 404
+    assert db._tables["escalation_chains"][0]["status"] == "exhausted"
+    assert len(db._tables["escalation_events"]) == events_before
+    assert not [e for e in db._tables["escalation_events"]
+                if e["channel"] == "ack"]
 
 
 # ---------------------------------------------------------------------------
