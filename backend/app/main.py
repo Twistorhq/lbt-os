@@ -38,6 +38,7 @@ from .routers import (
     audit,
     bi,
     calls,
+    consults,
     customers,
     expenses,
     integrations,
@@ -141,6 +142,7 @@ app.include_router(verify_router.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
 app.include_router(bi.router, prefix="/api/v1")
 app.include_router(calls.router, prefix="/api/v1")
+app.include_router(consults.router, prefix="/api/v1")
 app.include_router(organizations.router, prefix="/api/v1")
 app.include_router(leads.router, prefix="/api/v1")
 app.include_router(customers.router, prefix="/api/v1")
