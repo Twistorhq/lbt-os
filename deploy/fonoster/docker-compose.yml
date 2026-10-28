@@ -1,0 +1,113 @@
+# Fonoster self-host stack for Twistor Trades AI answering (TW-727).
+# Prepared by Twistor Holdings LLC
+#
+# CONFIG ONLY. This file deploys nothing by sitting in the repo, and no
+# service here is running. Go-live is a separate step on Justynn's
+# word: carrier signup / SIP trunk / number purchase are his manual
+# steps, and no credentials live in this file — copy .env.example to
+# .env (never committed) when the stack is actually deployed.
+#
+# Service set and images follow Fonoster's own upstream compose
+# (fonoster/fonoster, MIT). Fonoster image tags pin through
+# FONOSTER_IMAGE_TAG (platform release v0.34.3, 2026-10-26) —
+# re-verify the tags against the release before deploying.
+
+services:
+  postgres:
+    image: postgres:16.2-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${FONOSTER_DB_USER:-fonoster}
+      POSTGRES_PASSWORD: ${FONOSTER_DB_PASSWORD:?set in .env at go-live}
+      POSTGRES_DB: ${FONOSTER_DB_NAME:-fonoster}
+    volumes:
+      - fonoster-pgdata:/var/lib/postgresql/data
+
+  nats:
+    image: nats:2
+    restart: unless-stopped
+    ports:
+      - "4222:4222"
+
+  influxdb:
+    image: influxdb:2
+    restart: unless-stopped
+    ports:
+      - "8086:8086"
+    volumes:
+      - fonoster-influx:/var/lib/influxdb2
+
+  apiserver:
+    image: fonoster/apiserver:${FONOSTER_IMAGE_TAG:-v0.34.3}
+    restart: unless-stopped
+    depends_on:
+      - postgres
+      - nats
+    ports:
+      - "50051:50051" # gRPC API (the backend's provider endpoint)
+    environment:
+      # Exact keys are taken from the upstream .env.example for the
+      # pinned release at deploy time; secrets only ever live in .env.
+      APISERVER_DB_HOST: postgres
+      APISERVER_EVENTS_BROKER: nats://nats:4222
+
+  autopilot:
+    image: fonoster/autopilot:${FONOSTER_IMAGE_TAG:-v0.34.3}
+    restart: unless-stopped
+    depends_on:
+      - apiserver
+      - ollama
+    ports:
+      - "50061:50061" # Autopilot voice server
+    environment:
+      # Think runs local: Autopilot's LLM is the Ollama service below.
+      OLLAMA_ENDPOINT: http://ollama:11434
+      # Hear/Speak provider keys (Deepgram by default) are configured
+      # as Fonoster workspace integrations at go-live, never here.
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - fonoster-ollama:/root/.ollama
+    # At go-live: ollama pull llama3.1 (the agent YAML's think model).
+
+  routr:
+    image: fonoster/routr-one:${FONOSTER_IMAGE_TAG:-v0.34.3}
+    restart: unless-stopped
+    depends_on:
+      - apiserver
+    ports:
+      - "5060:5060/udp" # SIP signaling — the carrier trunk lands here
+      - "5061:5061"
+      - "5062:5062"
+      - "5063:5063"
+
+  rtpengine:
+    image: fonoster/rtpengine:${FONOSTER_IMAGE_TAG:-v0.34.3}
+    restart: unless-stopped
+    ports:
+      - "10000-10100:10000-10100/udp" # RTP media relay range
+
+  asterisk:
+    image: fonoster/asterisk:${FONOSTER_IMAGE_TAG:-v0.34.3}
+    restart: unless-stopped
+    depends_on:
+      - routr
+    ports:
+      - "6060:6060"
+
+  dashboard:
+    image: fonoster/dashboard:${FONOSTER_IMAGE_TAG:-v0.34.3}
+    restart: unless-stopped
+    depends_on:
+      - apiserver
+    ports:
+      - "3030:3030"
+
+volumes:
+  fonoster-pgdata:
+  fonoster-influx:
+  fonoster-ollama:

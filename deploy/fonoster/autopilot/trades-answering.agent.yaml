@@ -1,0 +1,105 @@
+# Twistor Trades AI answering agent — Fonoster Autopilot application.
+# Prepared by Twistor Holdings LLC
+#
+# CONFIG ONLY (TW-727). Nothing is deployed by this file sitting in the
+# repo. Go-live deploy is a separate step on Justynn's word:
+#   fonoster applications:create -f trades-answering.agent.yaml
+#
+# Behavior contract (Justynn's TW-284 rulings, enforced together with
+# the backend service in backend/app/services/phone_automation.py):
+# - The FIRST utterance is the AI disclosure
+#   (conversationSettings.firstMessage below). Never replace it with a
+#   greeting that hides what the agent is.
+# - Recording is OFF by default and toggles per call from the backend.
+#   Switching it ON speaks exactly "This call is now being recorded."
+#   BEFORE recording starts (phone_automation.set_recording).
+# - Emergencies: collect the caller's name, callback number, address,
+#   and what is happening, then call book_emergency_visit. The backend
+#   books the docket job + appointment, confirms the customer by
+#   message, and runs the escalation chain across ALL of the owner's
+#   emergency numbers in priority order until one acknowledges
+#   (bounded rounds; an unacknowledged chain lands in a visible
+#   exhausted state, never silently dropped).
+# - Exactly one call.ai_handled toll is emitted per AI-handled call,
+#   by the backend at session start. The agent never emits tolls.
+#
+# Provider posture (TW-727 research, see
+# docs/evidence/TW-727-fonoster-provider.tdd.md):
+# - think: Ollama on the self-host — fully local, no per-minute LLM fee.
+# - hear: Deepgram (cloud). Fonoster's catalog lists Deepgram and
+#   Google for speech-to-text; there is no local STT product today, so
+#   a fully-local hear path does NOT exist yet. The Deepgram key lives
+#   in the Fonoster workspace integrations, never in this file.
+# - speak: Deepgram (cloud). ElevenLabs, Azure, and Google are the
+#   other catalog options; all are cloud services today.
+
+name: twistor-trades-answering
+type: AUTOPILOT
+
+speechToText:
+  productRef: stt.deepgram
+  config:
+    model: nova-3
+    languageCode: multi
+
+textToSpeech:
+  productRef: tts.deepgram
+  config:
+    voice: aura-asteria-en
+
+intelligence:
+  productRef: llm.ollama
+  config:
+    languageModel:
+      provider: ollama
+      model: llama3.1
+      temperature: 0.3
+      maxTokens: 250
+      # Tool bindings (webhooks into the Twistor backend) are wired at
+      # go-live; the names and contracts below are the TW-284 surface.
+      tools:
+        - name: book_emergency_visit
+          description: >-
+            Book an emergency visit for the caller. Call only after
+            collecting the caller's name, callback number, address,
+            and a plain description of the problem. The backend creates
+            the job and appointment, confirms the customer, and starts
+            owner escalation.
+        - name: escalate_to_owner
+          description: >-
+            Start the emergency escalation chain: every emergency
+            number the owner set at signup is rung in priority order
+            until one acknowledges. Use when the caller reports an
+            emergency that cannot wait for a booked visit.
+        - name: set_call_recording
+          description: >-
+            Toggle recording for THIS call only. When turning recording
+            ON, the backend speaks "This call is now being recorded."
+            before recording starts, and the change is audit-logged.
+            Recording is off unless this tool turns it on.
+      knowledgeBase: []
+    conversationSettings:
+      firstMessage: >-
+        Hi, this is the automated AI assistant answering for the shop.
+        I'm an AI assistant, not a person. I can take a message, book an
+        emergency visit, and reach the owner right away if it's urgent.
+      systemPrompt: >-
+        You are the phone assistant for a home-services shop. You have
+        already disclosed that you are an AI assistant in your first
+        message; never claim to be a person. Be brief and calm. For
+        emergencies (no heat, no water, flooding, gas smell), collect
+        the caller's name, callback number, address, and what is
+        happening, then call book_emergency_visit and confirm the time
+        out loud. If the caller asks for the owner urgently, call
+        escalate_to_owner. Recording stays off unless set_call_recording
+        turns it on for this call; when it does, the caller hears
+        "This call is now being recorded." before anything is recorded.
+        Never invent prices, arrival guarantees, or shop policies.
+      systemErrorMessage: >-
+        I'm sorry, I'm having trouble right now. Please call back, or
+        tell me your number and the shop will return your call.
+      goodbyeMessage: Thanks for calling. The shop has your message.
+      idleOptions:
+        message: Are you still there?
+        timeout: 10000
+        maxTimeoutCount: 2
