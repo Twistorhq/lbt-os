@@ -47,11 +47,21 @@ def mint_access_token(
 
 def verify_access_token(keypairs, token: str, issuer: str = ISSUER) -> dict:
     """Verify against the keypair whose kid matches the token header (M3:
-    rotation grace — previous kid still verifies during the window)."""
+    rotation grace — previous kid still verifies during the window).
+
+    TW-721: strict kid resolution, no fallback. Every identity token is
+    minted by mint_access_token, which always stamps the signing
+    keypair's kid, so a token whose kid is missing or matches no
+    configured keypair is not a legitimate identity token and is
+    rejected outright — the named key is the only key tried."""
     if isinstance(keypairs, Keypair):
         keypairs = [keypairs]
     kid = get_kid(token)
-    candidates = [kp for kp in keypairs if kp.kid == kid] or keypairs
+    if kid is None:
+        raise TokenError("invalid token: missing kid header")
+    candidates = [kp for kp in keypairs if kp.kid == kid]
+    if not candidates:
+        raise TokenError(f"invalid token: unknown kid {kid!r}")
     last_err: Exception | None = None
     for kp in candidates:
         try:
