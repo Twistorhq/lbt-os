@@ -1,4 +1,6 @@
-"""TW-284 AI phone automation service (Path A: Twilio + OpenAI Realtime).
+"""TW-284 AI phone automation service (default provider: Fonoster,
+TW-727; the TW-284 Path A pairing — Twilio + OpenAI Realtime — is
+deprecated and kept only as a selectable rollback path).
 
 Implements Justynn's 2026-10-27 rulings:
 - Coverage 24/7, on as needed: after-hours auto-mode (per-shop hours
@@ -18,9 +20,10 @@ Implements Justynn's 2026-10-27 rulings:
 
 Nothing here goes live on its own: the global kill switch
 (settings.phone_automation_enabled) defaults OFF, providers fail closed
-without credentials, and the Twilio number purchase is Justynn's manual
-step. PII doctrine (TW-552): raw numbers live only in bronze columns
-(caller_number, emergency_contacts.phone_number); API-facing lists mask.
+without credentials, and the carrier signup / number purchase is
+Justynn's manual step. PII doctrine (TW-552): raw numbers live only in
+bronze columns (caller_number, emergency_contacts.phone_number);
+API-facing lists mask.
 """
 
 import logging
@@ -216,7 +219,7 @@ def start_ai_call(
         .limit(1)
         .execute()
     ).data or []
-    if existing:  # Twilio webhook retry — never disclose or toll twice.
+    if existing:  # Provider webhook retry — never disclose or toll twice.
         return existing[0]
 
     org_rows = (
@@ -229,7 +232,7 @@ def start_ai_call(
         .insert(
             {
                 "org_id": org_id,
-                "twilio_call_sid": call_sid,
+                "twilio_call_sid": call_sid,  # provider call ref (name predates TW-727)
                 "caller_number": from_number,  # bronze only
                 "caller_hash": _hash_number(from_number),
                 "customer_id": _match_customer(db, org_id, from_number),
@@ -393,7 +396,7 @@ def start_escalation(
 
     ack_probe(contact) -> bool reports whether that contact acknowledged
     during their attempt window. In production the probe reads the ack
-    state recorded by the Twilio DTMF/status webhook via
+    state recorded by the provider DTMF/status webhook via
     acknowledge_escalation(); the default probe never acks, so a chain
     started without a live ack channel walks to exhaustion by design.
     """

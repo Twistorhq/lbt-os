@@ -78,13 +78,28 @@ class Settings(BaseSettings):
     # TW-284 AI phone automation — global kill switch, fail-closed OFF.
     # Per-shop toggles live in phone_automation_settings; nothing answers
     # unless this flag AND the shop toggle AND a coverage mode all say yes.
-    # The Twilio number purchase stays a manual Justynn step; no live
-    # activation happens from config alone (the media-stream bridge URL is
-    # set only at go-live).
+    # Carrier signup / number purchase stays a manual Justynn step; no
+    # live activation happens from config alone.
     phone_automation_enabled: bool = False
-    openai_realtime_model: str = "gpt-realtime"
     phone_automation_max_rounds: int = 2  # bounded escalation rounds
+    # Legacy Path A fields (TW-284), deprecated for AI answering by
+    # TW-727 — used only when phone_provider = "twilio_openai".
+    openai_realtime_model: str = "gpt-realtime"
     phone_automation_voice_stream_url: str | None = None
+
+    # TW-727 AI-answering provider selection. Fonoster (self-hosted,
+    # MIT) is the DEFAULT — it replaces the paid Twilio + OpenAI voice
+    # path for TW-284. "twilio_openai" selects the deprecated Path A
+    # factories; unknown values fail closed in the factories. The
+    # Fonoster API server is gRPC (default port 50051); credentials are
+    # the workspace access-key pair from the self-host stack
+    # (deploy/fonoster/). Config alone activates nothing.
+    phone_provider: str = "fonoster"  # "fonoster" | "twilio_openai" (deprecated)
+    fonoster_api_endpoint: str | None = None  # e.g. fonoster.internal:50051
+    fonoster_access_key_id: str | None = None
+    fonoster_access_key_secret: str | None = None
+    fonoster_from_number: str | None = None  # shop number on the SIP trunk
+    fonoster_autopilot_app_ref: str | None = None  # set at go-live deploy
 
     # Integration / OAuth
     integration_secret_key: str | None = None

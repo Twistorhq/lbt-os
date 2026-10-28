@@ -16,24 +16,19 @@ TW-284 suite's fake-injection pattern), plus the TW-727 contracts:
 - The self-host compose package declares the Fonoster services.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 from zoneinfo import ZoneInfo
 
 import pytest
 import yaml
-
-from app.config import settings
-from app.services import phone_automation as pa
-from app.services import voice_providers as vp
 from test_phone_automation import (
     AMBER,
     CALLER,
     MARCUS_LINE,
     ORG_ID,
     OTHER_ORG,
-    SHOP_LINE,
     SHOP_NUMBER,
     FakeDB,
     _at,
@@ -42,6 +37,10 @@ from test_phone_automation import (
     _seed_contacts,
     _seed_shop,
 )
+
+from app.config import settings
+from app.services import phone_automation as pa
+from app.services import voice_providers as vp
 
 DENVER = ZoneInfo("America/Denver")
 CALL_REF = "FN-tw727-1"
@@ -370,7 +369,9 @@ def test_fonoster_auto_reschedule_no_show_moves_and_tells_customer_why(fworld):
 def test_fonoster_auto_reschedule_double_booked_detects_conflict(fworld):
     db, tel, agent, client, _ = fworld
     tue_9am = _at(9).astimezone(timezone.utc).isoformat()
-    _seed_appointment(db, appt_id="appt-a", scheduled_at=tue_9am, technician_id="tech-1")
+    _seed_appointment(
+        db, appt_id="appt-a", scheduled_at=tue_9am, technician_id="tech-1"
+    )
     _seed_appointment(
         db, appt_id="appt-clash", scheduled_at=tue_9am, technician_id="tech-1"
     )

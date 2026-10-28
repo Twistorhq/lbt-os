@@ -95,9 +95,10 @@ def missed_calls(
 
 
 # ---------------------------------------------------------------------------
-# TW-284 AI phone automation (Path A). Data endpoints are org-scoped via
-# get_auth; provider-facing actions fail closed (503) until Twilio/OpenAI
-# credentials and the go-live bridge exist — nothing half-live.
+# TW-284 AI phone automation. Data endpoints are org-scoped via
+# get_auth; provider-facing actions fail closed (503) until the
+# selected provider (Fonoster by default, TW-727) is configured and
+# its go-live bridge exists — nothing half-live.
 # ---------------------------------------------------------------------------
 
 def _providers_or_503():
