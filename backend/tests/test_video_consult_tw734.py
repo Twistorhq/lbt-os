@@ -26,7 +26,6 @@ from unittest import mock
 
 import pytest
 from test_phone_automation import (
-    AMBER,
     CALLER,
     ORG_ID,
     FakeDB,
@@ -457,7 +456,9 @@ def test_leave_message_survives_unwired_transcriber(world):
     )
     assert msg["transcript"] is None
     assert msg["transcription_status"] == "pending"
-    assert db._tables["video_consult_messages"][0]["recording_ref"].endswith("msg-2.webm")
+    assert db._tables["video_consult_messages"][0]["recording_ref"].endswith(
+        "msg-2.webm"
+    )
 
 
 def test_convert_from_live_books_visit_and_confirms(world):
@@ -519,7 +520,14 @@ def test_per_minute_started_minute_rule_and_one_toll(world):
     db, *_ = world
     # 61 seconds of tech time bills 2 started minutes at $2.00/min.
     ended = vc.end_session(
-        db, org_id=ORG_ID, session_id=created["id"], now=_at(10, 2, ) + timedelta(seconds=1)
+        db,
+        org_id=ORG_ID,
+        session_id=created["id"],
+        now=_at(
+            10,
+            2,
+        )
+        + timedelta(seconds=1),
     )
     assert ended["billable_minutes"] == 2
     assert ended["charge_cents"] == 400

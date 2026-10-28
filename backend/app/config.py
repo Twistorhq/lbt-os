@@ -101,6 +101,15 @@ class Settings(BaseSettings):
     fonoster_from_number: str | None = None  # shop number on the SIP trunk
     fonoster_autopilot_app_ref: str | None = None  # set at go-live deploy
 
+    # TW-734 video consult — global kill switch, fail-closed OFF.
+    # Per-shop enable + pricing live in video_consult_settings. The
+    # room base URL is Twistor's own Jitsi (TW-729 package, target
+    # meet.twistor.co — NOT deployed); unset means the room provider
+    # fails closed and no consult can start. Config alone activates
+    # nothing.
+    video_consult_enabled: bool = False
+    video_consult_jitsi_base_url: str | None = None
+
     # Integration / OAuth
     integration_secret_key: str | None = None
     quickbooks_client_id: str | None = None
@@ -209,6 +218,7 @@ TOLL_RATES: dict[str, int] = {
     "missed_call.detected": 10,   # $0.10 per detected missed call
     "sms.auto_reply":         5,  # $0.05 per auto-SMS
     "call.ai_handled":       50,  # $0.50 per AI-handled call
+    "consult.session":       50,  # TW-734: $0.50 flat-mode/answering toll per consult session; per-minute mode passes amount_cents at $0.05/billable minute
     "bi.embed_view":          5,  # $0.05 per public embed view (TW-570)
     "bi.connector_sync":     25,  # $0.25 per connector sync (TW-570)
     # TW-593 science data layer (V1 defaults; dynamic volume tiers stamped per doctrine)
