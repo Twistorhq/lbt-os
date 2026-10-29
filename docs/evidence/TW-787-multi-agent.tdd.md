@@ -90,13 +90,22 @@ lifts that to a roster:
   `INCLUDED_AGENT_POWER_UNITS = 10`. One standard agent unit is one
   hired agent's task budget. Contract: the budget governs the agent's
   queued-task throughput and concurrent task slots in Spec 3's runtime
-  (TW-769), which reads `power_units` off the identity record; the
-  registry derives the value from the constants (never per-row data),
-  so retuning is a one-line config change. The included agent's record
-  carries 10 units; every hire carries 1. Hires therefore buy
-  concurrency, dedicated roles/presence, and volume ABOVE the
-  baseline — never basic capability the first agent lacks. Pinned by
-  test (included 10 vs hire 1, constants and roster views).
+  (TW-769), which reads the `power_units` attribute off the in-process
+  identity record; the registry derives the value from the constants
+  (never per-row data), so retuning is a one-line config change. The
+  included agent's record carries 10 units; every hire carries 1.
+  Hires therefore buy concurrency, dedicated roles/presence, and
+  volume ABOVE the baseline — never basic capability the first agent
+  lacks. Pinned by test (included 10 vs hire 1, on the record objects
+  and the constants).
+  **Internal-only (Justynn's word, Oct 29, 2026): this power standard
+  is an internal build standard and is never named to the customer —
+  no "10-agent power," no "10x," no multiplier language in any API
+  response, UI string, error message, customer-visible doc, or feed
+  copy. The field is excluded from every serialized view
+  (`Field(exclude=True)`, and the hand-built default view omits it);
+  externally the first agent is simply the standard agent. A test
+  pins the absence from the roster and identity views.**
 
 ## Commands run and results
 
@@ -121,19 +130,20 @@ New tests (written first, RED confirmed before implementation):
 
 Results:
 
-- New files: 39 passed (identity roster 19, perms scoping 11,
+- New files: 40 passed (identity roster 20, perms scoping 11,
   migration + rate contract 9).
 - Affected modules together (identity, agentperms, fencing, tolls):
-  204 passed, 0 failed.
+  204 passed before the internal-only serialization follow-up; the
+  identity suites re-run at 88 passed after it.
 - TW-767 + TW-768 suites unchanged and green inside the above.
 
 Full-suite regression evidence (clean-main control invariant):
 
-- Branch: 20 failed, 1835 passed, 76 skipped, 8 collection errors.
+- Branch: 20 failed, 1836 passed, 76 skipped, 8 collection errors.
 - Clean-main control (829e42e, same environment): 20 failed, 1796
   passed, 76 skipped, 8 collection errors.
 - Failed/error node sets BYTE-IDENTICAL (28 nodes each, diff empty);
-  the branch adds exactly the 39 new passing tests. Zero regressions.
+  the branch adds exactly the 40 new passing tests. Zero regressions.
   The 8 collection errors are the known sandbox lxml/xmlsec
   mismatch, present identically on the control.
 

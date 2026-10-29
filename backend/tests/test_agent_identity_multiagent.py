@@ -245,9 +245,20 @@ class TestIncludedAgentPower:
         hired = _hire(db, name="Max")
         assert included.power_units == 10
         assert hired.power_units == 1
-        views = {v["agent_slug"]: v for v in service.roster_view(db, ORG_A)}
-        assert views["primary"]["power_units"] == 10
-        assert views["max"]["power_units"] == 1
+        roster = {a.agent_slug: a for a in service.list_agents(db, ORG_A)}
+        assert roster["primary"].power_units == 10
+        assert roster["max"].power_units == 1
+
+    def test_power_budget_is_never_serialized_to_a_customer_surface(self, db):
+        """Internal-only (Justynn, Oct 29, 2026): no power value or
+        multiplier language in any API view — externally the first
+        agent is simply the standard agent."""
+        _included(db)
+        _hire(db, name="Max")
+        for view in service.roster_view(db, ORG_A):
+            assert "power_units" not in view
+        assert "power_units" not in service.identity_view(db, ORG_A)
+        assert "power_units" not in service.identity_view(db, ORG_B)
 
 
 class TestRoleAndArchetype:

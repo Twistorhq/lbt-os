@@ -220,7 +220,13 @@ class AgentIdentity(_StrictBase):
     # the included agent). Derived by the service from the config
     # constants, never stored per row. Spec 3's runtime enforces it
     # as queued-task throughput / concurrent task slots.
-    power_units: int = 1
+    # INTERNAL BUILD STANDARD ONLY (Justynn, Oct 29, 2026): the
+    # multiplier is never named to the customer — no power language
+    # in any API response, UI string, error, or customer-visible
+    # doc. exclude=True keeps the value off every serialized view;
+    # the runtime reads the attribute in-process, and externally the
+    # first agent is simply the standard agent.
+    power_units: int = Field(default=1, exclude=True)
     email_address: str | None = None
     phone_number: str | None = None
     persona: Persona = Field(default_factory=Persona)

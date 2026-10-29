@@ -207,7 +207,6 @@ def _default_view(org_id: str) -> dict[str, Any]:
         "role": "everything",
         "archetype_key": None,
         "included_with_subscription": False,
-        "power_units": INCLUDED_AGENT_POWER_UNITS,
         "email_address": None,
         "phone_number": None,
         "persona": default_persona().model_dump(mode="json"),
