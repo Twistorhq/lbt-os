@@ -206,6 +206,8 @@ and add no new drift.
   TW-779 made the permission mutations. A hire posts a charge to the
   org, so whether hiring should be an owner-only act is a live
   question for the Rosa/Rex gate — flagged, not silently decided here.
+  RESOLVED in the fix round below: both gates ruled it must be gated
+  (TW-789/TW-790), and it now is.
 - `app/config.py` fails `ruff format --check` at clean main (pre-
   existing drift across the file, including the TOLL_RATES block);
   the TW-787 edit matches the file's existing alignment style and adds
@@ -237,3 +239,52 @@ and add no new drift.
 - Phone resolution returns the one agent bound to the number; email
   resolution returns the addressed agent. Inbound enqueue already
   queues against the resolved agent's identity id.
+
+## Fix round — the roster mutation role gate (TW-789 / TW-790)
+
+Both gates landed on the same finding. Rosa REQUEST CHANGES (95%):
+her live probe with a real MEMBER token hired an agent through
+POST /agent-identity/agents, got 200, and a 2500-cent agent.hire
+toll row posted. Rex's parallel pass returned HOLD: TW-789 [HIGH]
+on the hire endpoint, TW-790 [MEDIUM] on the role/archetype
+assignment endpoints — a money mutation authorized by membership
+alone is the TH-010 defect (TW-779), and the no-limit ruling makes
+it unbounded.
+
+Fix, same branch: `backend/app/agent_identity/router.py` now carries
+the agentperms gate verbatim in pattern — `MUTATION_ROLES =
+("owner", "admin")` and a `_require_mutation_role` dependency
+(verified Identity claims; a missing role claim fails closed) —
+applied to all three TW-787 mutation endpoints: POST /agents
+(hire), POST /agents/{agent_id}/role, POST /agents/{agent_id}/
+archetype. The gate runs as a dependency before the handler, so a
+refused token writes nothing. Reads stay member-visible (Spec 6
+precedent). Nothing else in the diff was touched; the pre-existing
+TW-767 mutation endpoints are TW-791, a separate pre-pilot ticket,
+explicitly out of this round.
+
+Tests: `backend/tests/test_agent_identity_rolegate.py`, 9 tests,
+VER-008 style with real minted Identity tokens (owner, admin,
+member, role-less) against the real router:
+
+- member hire → 403; agt_identities still holds only the included
+  agent; zero agent.hire toll rows.
+- role-less hire → 403; nothing written.
+- member role assignment → 403; the agent's role is unchanged.
+- member archetype assignment → 403; archetype_key still None.
+- role-less role + archetype assignment → 403 on both; unchanged.
+- owner hire → 200, exactly one agent.hire toll at
+  AGENT_HIRE_FEE_CENTS; owner role assignment → 200; owner
+  archetype assignment → 200.
+- admin hire + role + archetype → 200 end to end.
+- member reads stay open: GET /agents, GET /agents/{id}, GET /me
+  all 200. A missing token on a mutation is 401 with no toll.
+
+Results: the new file passes 9/9; the identity + agentperms sets
+pass 204/204 (195 prior + 9 new). Full backend suite against a
+same-environment clean-main control run at 829e42e: control 20
+failed / 1829 passed / 8 errors; branch 20 failed / 1878 passed /
+8 errors — the failed/error node sets are byte-identical (28
+nodes, diff empty), and the pass delta is exactly the amendment's
+49 new tests (40 build + 9 fix round). Ruff check and format
+--check clean on both touched .py files.

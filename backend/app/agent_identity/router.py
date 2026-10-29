@@ -4,7 +4,10 @@ Two surfaces:
 - Registry (JWT): the caller's org comes from the Twistor Identity JWT
   (claims["org"]); every endpoint 403s without an active org. Sofia's
   Spec 6 surfaces (Agent Card, Permission Center) consume these; Spec 3's
-  runtime reads the channel configs.
+  runtime reads the channel configs. The roster mutations TW-787 added
+  (hire, role assignment, archetype assignment) additionally require an
+  owner/admin role claim (TW-789/TW-790, the TW-779 pattern); reads stay
+  member-visible.
 - Inbound webhook (Svix-signed, NO JWT): Resend delivers mail addressed
   to an agent here. The signature is the credential. Unconfigured secret
   refuses (503, fail-closed, the flows_tick_key pattern); a bad
@@ -58,6 +61,34 @@ def _require_org(claims: dict = Depends(_verified_claims)) -> str:
     if not org_id:
         raise HTTPException(status_code=403, detail="no active org on token")
     return org_id
+
+
+# Roles the Identity service issues that may mutate the roster
+# (idn_org_memberships carries owner/admin/member). A missing role
+# claim fails closed, like every other check on this surface.
+MUTATION_ROLES = ("owner", "admin")
+
+
+def _require_mutation_role(claims: dict = Depends(_verified_claims)) -> None:
+    """TW-789 / TW-790 (the TW-779 pattern): hiring an agent and
+    assigning its role or archetype are owner acts.
+
+    A hire posts a real agent.hire charge and mints a new agent
+    identity that immediately inherits the org-wide grants; a role
+    or archetype assignment shapes what an existing agent may do.
+    A staff/member token — a shared login, a phished credential, an
+    unoffboarded ex-employee — must be refused before anything is
+    written, exactly as the permission ledger refuses it (TH-010).
+    Reads stay member-visible (Spec 6 precedent).
+    """
+    if claims.get("role") not in MUTATION_ROLES:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "hire, role assignment, and archetype assignment "
+                "require an owner or admin role"
+            ),
+        )
 
 
 def _require_actor(claims: dict = Depends(_verified_claims)) -> str:
@@ -140,6 +171,7 @@ def hire_agent(
     body: HireIn,
     org_id: str = Depends(_require_org),
     actor: str = Depends(_require_actor),
+    _role_gate: None = Depends(_require_mutation_role),
     db: Client = Depends(get_db),
 ) -> dict[str, Any]:
     """Hire an additional agent (TW-787). Posts the one-time
@@ -163,6 +195,7 @@ def assign_role(
     body: RoleIn,
     org_id: str = Depends(_require_org),
     actor: str = Depends(_require_actor),
+    _role_gate: None = Depends(_require_mutation_role),
     db: Client = Depends(get_db),
 ) -> dict[str, Any]:
     identity = _handle(
@@ -177,6 +210,7 @@ def assign_archetype(
     body: ArchetypeIn,
     org_id: str = Depends(_require_org),
     actor: str = Depends(_require_actor),
+    _role_gate: None = Depends(_require_mutation_role),
     db: Client = Depends(get_db),
 ) -> dict[str, Any]:
     identity = _handle(
