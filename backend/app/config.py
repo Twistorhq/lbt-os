@@ -75,6 +75,14 @@ class Settings(BaseSettings):
     # (fail-closed); no schedule ever fires without this key.
     flows_tick_key: str | None = None
 
+    # Twistor Agent Identity (TW-767) — per-shop agent email identity.
+    # Addresses are allocated as <org-slug>-<org-id-prefix>@<domain> on
+    # this Twistor-controlled domain. The inbound webhook secret is the
+    # Resend (Svix) signing secret; unset = the inbound webhook refuses
+    # every delivery (fail-closed) until it is configured.
+    agent_email_domain: str = "agents.twistor.co"
+    agent_inbound_webhook_secret: str | None = None
+
     # TW-284 AI phone automation — global kill switch, fail-closed OFF.
     # Per-shop toggles live in phone_automation_settings; nothing answers
     # unless this flag AND the shop toggle AND a coverage mode all say yes.

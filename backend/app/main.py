@@ -13,6 +13,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from .agent_identity import router as agent_identity_router
 from .config import settings
 
 # TW-593 science data layer V1 — six lanes. Each router carries its own
@@ -24,9 +25,8 @@ from .data_layer.science.high_tc import router as sci_hightc_router
 from .data_layer.science.pfas import router as sci_pfas_router
 from .data_layer.science.subseasonal import router as sci_subseasonal_router
 from .data_layer.science.turbulence import router as sci_turbulence_router
-from .flows import router as flows_router
 from .flags import router as flags_router
-from .telemetry import router as telemetry_router
+from .flows import router as flows_router
 from .identity import oauth as identity_oauth
 from .identity import router as identity_router
 from .identity import saml as identity_saml
@@ -56,6 +56,7 @@ from .routers import (
 )
 from .services.scheduler import start_scheduler, stop_scheduler
 from .social import router as social_router
+from .telemetry import router as telemetry_router
 from .verify import router as verify_router
 
 configure_logging(level="DEBUG" if settings.app_env != "production" else "INFO")
@@ -136,6 +137,7 @@ app.include_router(identity_saml.saml_router, prefix="/api/v1")
 app.include_router(notify_router.router, prefix="/api/v1")
 app.include_router(flows_router.router, prefix="/api/v1")
 app.include_router(flags_router.router, prefix="/api/v1")
+app.include_router(agent_identity_router.router, prefix="/api/v1")
 app.include_router(telemetry_router.router, prefix="/api/v1")
 app.include_router(social_router.router, prefix="/api/v1")
 app.include_router(verify_router.router, prefix="/api/v1")
