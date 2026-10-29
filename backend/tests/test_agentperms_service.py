@@ -114,6 +114,57 @@ def db():
     return FakeDb()
 
 
+def _insert_grant_row(db, org, action_class, *, status="granted", cap_cents=None):
+    """Write a grant row directly, past GrantStatement.
+
+    Models the write paths that bypass the model layer's cap law —
+    a future Spec 3/5 writer, an ops repair, a data fix. The
+    execution gate and the schema are the last lines; these rows
+    are how the fix-round tests prove both hold.
+    """
+    return (
+        db.table("agt_grants")
+        .insert(
+            {
+                "org_id": org,
+                "agent_identity_id": None,
+                "action_class": action_class,
+                "status": status,
+                "scope": {},
+                "cap_cents": cap_cents,
+                "granted_by": "ops-repair",
+                "granted_at": "2026-10-29T00:00:00+00:00",
+                "updated_at": "2026-10-29T00:00:00+00:00",
+                "version": 1,
+            }
+        )
+        .execute()
+        .data[0]
+    )
+
+
+def _insert_copy_row(db, org, *, purge_after=None):
+    """Write a retained-copy row directly, past register_retained_copy
+    (a racing runtime write that lands unscheduled)."""
+    return (
+        db.table("agt_retained_copies")
+        .insert(
+            {
+                "org_id": org,
+                "agent_identity_id": None,
+                "copy_kind": "email_index",
+                "locator": "store://org-1/late-landing",
+                "registered_by": "spec3-runtime",
+                "created_at": "2026-10-29T00:00:00+00:00",
+                "purge_after": purge_after,
+                "purged_at": None,
+            }
+        )
+        .execute()
+        .data[0]
+    )
+
+
 def _grant_all(db, org=ORG):
     service.grant_permission(db, org, "email.send", actor=OWNER)
     service.grant_permission(db, org, "sms.send", actor=OWNER)
@@ -172,6 +223,62 @@ class TestCheckFailsClosed:
         service.deny_permission(db, ORG, "email.send", actor=OWNER)
         service.grant_permission(db, ORG, "email.send", actor=OWNER)
         assert service.check_permission(db, ORG, "email.send").allowed
+
+
+# -- the cap law holds at the gate, past the model layer -------------------
+
+
+class TestCapLawAtTheGate:
+    """Rosa's fix-round probes, as tests: rows written past
+    GrantStatement (an ops repair, a future writer) must not turn a
+    cap-less money grant into an uncapped, amount-optional one. The
+    gate branches on the money class, not on cap presence."""
+
+    def test_capless_money_grant_denies_any_amount(self, db):
+        _insert_grant_row(db, ORG, "payment.charge", cap_cents=None)
+        for amount in (1, 1_000_000_000):
+            d = service.check_permission(db, ORG, "payment.charge", amount_cents=amount)
+            assert not d.allowed and d.reason == "cap_missing", amount
+
+    def test_capless_money_grant_denies_no_amount(self, db):
+        # Both defects present (no cap, no amount): the denial is
+        # what the gate owes; cap_missing takes precedence because
+        # the broken grant is the primary fact — the row denies for
+        # every request shape, amount or not. (amount_required is
+        # the reason for a properly capped row presented without
+        # an amount; see TestCheckFailsClosed.)
+        _insert_grant_row(db, ORG, "purchase", cap_cents=None)
+        d = service.check_permission(db, ORG, "purchase")
+        assert not d.allowed and d.reason == "cap_missing"
+
+    def test_capless_grant_raises_permanent_denial_at_require(self, db):
+        _insert_grant_row(db, ORG, "purchase", cap_cents=None)
+        with pytest.raises(service.PermissionDenied) as err:
+            service.require_permission(db, ORG, "purchase", amount_cents=100)
+        assert err.value.decision.reason == "cap_missing"
+        assert err.value._twistor_permanent is True
+
+    def test_capped_money_row_past_the_model_still_enforces_cap(self, db):
+        _insert_grant_row(db, ORG, "payment.charge", cap_cents=2500)
+        assert service.check_permission(
+            db, ORG, "payment.charge", amount_cents=2500
+        ).allowed
+        over = service.check_permission(db, ORG, "payment.charge", amount_cents=2501)
+        assert not over.allowed and over.reason == "cap_exceeded"
+
+    def test_negative_amount_is_a_denial_never_a_raise(self, db):
+        service.grant_permission(db, ORG, "purchase", actor=OWNER, cap_cents=1000)
+        d = service.check_permission(db, ORG, "purchase", amount_cents=-1)
+        assert not d.allowed and d.reason == "invalid_amount"
+        with pytest.raises(service.PermissionDenied) as err:
+            service.require_permission(db, ORG, "purchase", amount_cents=-1)
+        assert err.value.decision.reason == "invalid_amount"
+        assert err.value._twistor_permanent is True
+
+    def test_negative_amount_denied_on_uncapped_class_too(self, db):
+        service.grant_permission(db, ORG, "email.send", actor=OWNER)
+        d = service.check_permission(db, ORG, "email.send", amount_cents=-5)
+        assert not d.allowed and d.reason == "invalid_amount"
 
 
 # -- revocation: one motion ------------------------------------------------
@@ -376,3 +483,106 @@ class TestPurge:
         assert result["purged"] == [] and len(result["failures"]) == 1
         copy = service.list_retained_copies(db, ORG)[0]
         assert copy["purged_at"] is None
+
+    def test_zero_copy_revocation_completes(self, db):
+        # The pilot-common case Rosa probed: revoke-all with no
+        # retained copies at all. Completion must not wait for an
+        # org to be "touched" by a purge — 72h past due it completes.
+        _grant_all(db)
+        revocation = service.revoke(
+            db, ORG, models.RevokeStatement(strength="all"), actor=OWNER
+        )
+        due = datetime.fromisoformat(revocation["purge_due_at"])
+        result = service.run_purge(db, now=due + timedelta(hours=72))
+        assert revocation["id"] in result["completed_revocations"]
+        stored = service.list_revocations(db, ORG)[0]
+        assert stored["purge_completed_at"] is not None
+
+    def test_copy_registered_after_revocation_gets_the_clock(self, db):
+        # In-flight work landing late (Spec 3's normal case): the
+        # copy registers onto the covering revocation's stated
+        # clock, purges on it, and the revocation completes.
+        _grant_all(db)
+        revocation = service.revoke(
+            db, ORG, models.RevokeStatement(strength="all"), actor=OWNER
+        )
+        copy = service.register_retained_copy(
+            db,
+            ORG,
+            copy_kind="task_scratch",
+            locator="store://org-1/late-scratch",
+            registered_by="spec3-runtime",
+        )
+        assert copy["purge_after"] == revocation["purge_due_at"]
+        due = datetime.fromisoformat(revocation["purge_due_at"])
+        result = service.run_purge(db, now=due + timedelta(seconds=1))
+        assert copy["id"] in result["purged"]
+        assert revocation["id"] in result["completed_revocations"]
+        stored = service.list_retained_copies(db, ORG)[0]
+        assert stored["purged_at"] is not None
+
+    def test_unscheduled_copy_of_revoked_org_is_swept(self, db):
+        # A copy row that lands unscheduled through any write path
+        # (inserted past register_retained_copy) is swept onto the
+        # clock by run_purge, then purged on it.
+        _grant_all(db)
+        revocation = service.revoke(
+            db, ORG, models.RevokeStatement(strength="all"), actor=OWNER
+        )
+        copy = _insert_copy_row(db, ORG)
+        assert copy["purge_after"] is None
+        due = datetime.fromisoformat(revocation["purge_due_at"])
+        result = service.run_purge(db, now=due + timedelta(seconds=1))
+        assert copy["id"] in result["swept"]
+        assert copy["id"] in result["purged"]
+        stored = service.list_retained_copies(db, ORG)[0]
+        assert stored["purge_after"] == revocation["purge_due_at"]
+        assert stored["purged_at"] is not None
+
+    def test_purge_completed_event_records_hook_presence(self, db):
+        # The audit feed must never overstate a registry-level
+        # purge as physical deletion: the event says whether a
+        # purge hook was wired (Finding 6).
+        _grant_all(db)
+        service.register_retained_copy(
+            db,
+            ORG,
+            copy_kind="email_index",
+            locator="store://org-1/mail-index",
+            registered_by="spec3-runtime",
+        )
+        revocation = service.revoke(
+            db, ORG, models.RevokeStatement(strength="all"), actor=OWNER
+        )
+        due = datetime.fromisoformat(revocation["purge_due_at"])
+        service.run_purge(db, now=due + timedelta(seconds=1))
+        events = [
+            e for e in service.list_history(db, ORG) if e["kind"] == "purge_completed"
+        ]
+        assert len(events) == 1 and events[0]["detail"]["purge_hook"] == "none"
+
+        _grant_all(db, org=OTHER_ORG)
+        service.register_retained_copy(
+            db,
+            OTHER_ORG,
+            copy_kind="email_index",
+            locator="store://org-2/mail-index",
+            registered_by="spec3-runtime",
+        )
+        revocation2 = service.revoke(
+            db, OTHER_ORG, models.RevokeStatement(strength="all"), actor=OWNER
+        )
+        due2 = datetime.fromisoformat(revocation2["purge_due_at"])
+        deleted = []
+        service.run_purge(
+            db,
+            now=due2 + timedelta(seconds=1),
+            purge_hook=lambda copy: deleted.append(copy["id"]),
+        )
+        events2 = [
+            e
+            for e in service.list_history(db, OTHER_ORG)
+            if e["kind"] == "purge_completed"
+        ]
+        assert len(deleted) == 1
+        assert len(events2) == 1 and events2[0]["detail"]["purge_hook"] == "wired"

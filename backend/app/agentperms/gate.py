@@ -42,6 +42,11 @@ def guarded_step(
     The wrapper preserves the step's name and idempotency declaration
     (the durable-turns journal governs on resume; a wrapped step must
     journal identically to the step it wraps).
+
+    amount_cents is bound here, at wrap time. A step whose amount is
+    only known at execution must not rely on this wrapper for the
+    check — call LedgerFence.check inside the handler with the live
+    amount instead (Spec 3: this means you).
     """
     original = step.handler
 

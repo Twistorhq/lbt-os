@@ -5,8 +5,9 @@ The ledger is a code gate, not a policy document (TW-764 Spec 2):
 - check_permission() is consulted at execution time by every agent
   action (via gate.py inside the durable-turns runtime, and directly
   by Specs 4/5). It fails closed: no grant row, an explicit deny, a
-  revoked grant, an amount over the cap, or a money action presented
-  without an amount all deny.
+  revoked grant, an amount over the cap, a money action presented
+  without an amount, a money grant whose cap is missing, or a
+  negative amount all deny.
 - revoke() is one owner motion in three strengths. It flips the
   affected grants, cuts the agent's access tokens (via the Spec 1
   token hook), schedules every retained working copy for purge on a
@@ -43,8 +44,8 @@ from typing import Any, Callable
 
 from .models import (
     ACTION_CLASSES,
+    MONEY_CLASSES,
     GrantStatement,
-    LedgerError,
     PermissionDecision,
     RevokeStatement,
     channel_of,
@@ -290,6 +291,14 @@ def check_permission(
 
     Consulted at execution time, never cached into a task at intake:
     a grant revoked after a task queued must still stop the task.
+
+    Money enforcement branches on the action class (MONEY_CLASSES),
+    never on whether the stored row happens to carry a cap: a money
+    row written past the model layer with cap_cents NULL is a broken
+    grant, and the gate denies it (cap_missing) rather than treating
+    it as uncapped. The migration pins the same law as CHECK
+    constraints on agt_grants, so the schema and the gate cannot
+    drift apart.
     """
     channel = channel_of(action_class)
     grant = _fetch_grant(db, org_id, action_class)
@@ -307,14 +316,23 @@ def check_permission(
         return PermissionDecision(allowed=False, reason="denied", **base)
     if grant["status"] == "revoked":
         return PermissionDecision(allowed=False, reason="revoked", **base)
-    cap = grant.get("cap_cents")
-    if cap is not None:
+    if amount_cents is not None and amount_cents < 0:
+        # A negative amount is a malformed request, not a transient
+        # failure: deny it as a decision, on every class, so the
+        # gate path never raises a retryable error and never waves
+        # it through on an uncapped class.
+        return PermissionDecision(allowed=False, reason="invalid_amount", **base)
+    if action_class in MONEY_CLASSES:
+        cap = grant.get("cap_cents")
+        if cap is None:
+            # Granted money row with no cap: the cap law was
+            # bypassed on the write path. Fail closed — a missing
+            # cap is a broken grant, never an unlimited one.
+            return PermissionDecision(allowed=False, reason="cap_missing", **base)
         if amount_cents is None:
             # A capped money action presented without an amount can
             # never be shown to be under the cap. Deny, don't wave.
             return PermissionDecision(allowed=False, reason="amount_required", **base)
-        if amount_cents < 0:
-            raise LedgerError(f"amount_cents must be >= 0, got {amount_cents}")
         if amount_cents > cap:
             return PermissionDecision(allowed=False, reason="cap_exceeded", **base)
     return PermissionDecision(allowed=True, reason="granted", **base)
@@ -536,6 +554,18 @@ def assert_accepting_work(db: Any, org_id: str) -> None:
 # -- retained working copies + purge --------------------------------------
 
 
+def _latest_revoke_all(db: Any, org_id: str) -> dict[str, Any] | None:
+    """The org's most recent revoke-all row, if any.
+
+    Its purge_due_at is the stated clock a late-landing retained
+    copy inherits (list_revocations is newest first).
+    """
+    for revocation in list_revocations(db, org_id):
+        if revocation["strength"] == "all":
+            return revocation
+    return None
+
+
 def register_retained_copy(
     db: Any,
     org_id: str,
@@ -546,7 +576,19 @@ def register_retained_copy(
     agent_identity_id: str | None = None,
 ) -> dict[str, Any]:
     """Register a retained working copy (locator only, never content)
-    so a later revocation can schedule its purge."""
+    so a later revocation can schedule its purge.
+
+    Late-landing work is the normal case, not an edge: if the org's
+    agent already stands revoked when a copy registers (in-flight
+    work settling after the owner's motion), the copy goes straight
+    onto the covering revocation's stated purge clock. A copy of a
+    revoked agent never sits unscheduled.
+    """
+    purge_after: str | None = None
+    if agent_status(db, org_id) == "revoked":
+        covering = _latest_revoke_all(db, org_id)
+        if covering is not None:
+            purge_after = covering.get("purge_due_at")
     row = {
         "org_id": org_id,
         "agent_identity_id": agent_identity_id,
@@ -554,7 +596,7 @@ def register_retained_copy(
         "locator": locator,
         "registered_by": registered_by,
         "created_at": _ts(_now()),
-        "purge_after": None,
+        "purge_after": purge_after,
         "purged_at": None,
     }
     return db.table("agt_retained_copies").insert(row).execute().data[0]
@@ -573,17 +615,63 @@ def run_purge(
 ) -> dict[str, Any]:
     """Execute every due purge across orgs.
 
+    First, a sweep: a retained copy of an org whose agent stands
+    revoked that somehow carries no purge deadline (any write path
+    that landed it unscheduled) is stamped onto the covering
+    revocation's stated clock, so no copy of a revoked agent sits
+    outside the purge lifecycle.
+
     A copy is due when purge_after is set, purged_at is NULL, and the
     deadline has passed. purge_hook performs the physical deletion
     (Spec 3's runtime wires it); a copy whose hook raises stays
-    unpurged and is reported in failures — never stamped clean.
-    Revocations whose copies are all purged are completed.
+    unpurged and is reported in failures — never stamped clean. The
+    purge_completed event records whether a hook was wired, so the
+    audit feed never overstates a registry-level purge as physical
+    deletion.
+
+    Completion is then evaluated for EVERY revocation past its
+    purge deadline — including orgs with zero retained copies, the
+    pilot-common case — and a revocation completes when its org has
+    no outstanding scheduled copies left.
     """
     moment = now or _now()
+
+    # Sweep: unscheduled copies of revoked orgs onto the clock.
+    swept: list[str] = []
+    status_cache: dict[str, str] = {}
+    all_copies = db.table("agt_retained_copies").select("*").execute().data or []
+    for copy in all_copies:
+        if copy.get("purged_at") is not None or copy.get("purge_after") is not None:
+            continue
+        org_id = copy["org_id"]
+        if org_id not in status_cache:
+            status_cache[org_id] = agent_status(db, org_id)
+        if status_cache[org_id] != "revoked":
+            continue
+        covering = _latest_revoke_all(db, org_id)
+        if covering is None:
+            continue
+        db.table("agt_retained_copies").update(
+            {"purge_after": covering.get("purge_due_at")}
+        ).eq("id", copy["id"]).execute()
+        swept.append(copy["id"])
+        _record_event(
+            db,
+            org_id,
+            "purge_scheduled",
+            SYSTEM_ACTOR,
+            detail={
+                "copy_id": copy["id"],
+                "revocation_id": covering["id"],
+                "purge_due_at": covering.get("purge_due_at"),
+                "source": "run_purge_sweep",
+            },
+            agent_identity_id=copy.get("agent_identity_id"),
+        )
+
     res = db.table("agt_retained_copies").select("*").execute()
     purged: list[str] = []
     failures: list[dict[str, str]] = []
-    touched_orgs: set[str] = set()
     for copy in res.data or []:
         due = _parse_ts(copy.get("purge_after"))
         if due is None or copy.get("purged_at") is not None or due > moment:
@@ -598,37 +686,45 @@ def run_purge(
             "id", copy["id"]
         ).execute()
         purged.append(copy["id"])
-        touched_orgs.add(copy["org_id"])
         _record_event(
             db,
             copy["org_id"],
             "purge_completed",
             SYSTEM_ACTOR,
-            detail={"copy_id": copy["id"], "copy_kind": copy.get("copy_kind")},
+            detail={
+                "copy_id": copy["id"],
+                "copy_kind": copy.get("copy_kind"),
+                "purge_hook": "wired" if purge_hook is not None else "none",
+            },
             agent_identity_id=copy.get("agent_identity_id"),
         )
+
+    # Completion: every past-due revocation whose org has no
+    # outstanding scheduled copies — zero-copy revocations included.
     completed_revocations: list[str] = []
-    for org_id in touched_orgs:
-        remaining = [
-            c
-            for c in list_retained_copies(db, org_id)
-            if c.get("purge_after") is not None and c.get("purged_at") is None
-        ]
-        if remaining:
+    outstanding_cache: dict[str, bool] = {}
+    all_revocations = db.table("agt_revocations").select("*").execute().data or []
+    for revocation in all_revocations:
+        if revocation.get("purge_completed_at") is not None:
             continue
-        for revocation in list_revocations(db, org_id):
-            due = _parse_ts(revocation.get("purge_due_at"))
-            if (
-                revocation.get("purge_completed_at") is None
-                and due is not None
-                and due <= moment
-            ):
-                db.table("agt_revocations").update(
-                    {"purge_completed_at": _ts(moment)}
-                ).eq("id", revocation["id"]).execute()
-                completed_revocations.append(revocation["id"])
+        due = _parse_ts(revocation.get("purge_due_at"))
+        if due is None or due > moment:
+            continue
+        org_id = revocation["org_id"]
+        if org_id not in outstanding_cache:
+            outstanding_cache[org_id] = any(
+                c.get("purged_at") is None and c.get("purge_after") is not None
+                for c in list_retained_copies(db, org_id)
+            )
+        if outstanding_cache[org_id]:
+            continue
+        db.table("agt_revocations").update({"purge_completed_at": _ts(moment)}).eq(
+            "id", revocation["id"]
+        ).execute()
+        completed_revocations.append(revocation["id"])
     return {
         "purged": purged,
         "failures": failures,
         "completed_revocations": completed_revocations,
+        "swept": swept,
     }

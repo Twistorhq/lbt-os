@@ -32,9 +32,12 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 -- Current permission state. One row per (org, action class).
 -- No row = no grant = denied (fail closed at the check, not here).
--- cap_cents is required for the money classes (payment.charge,
--- purchase) and must be NULL for every other class; the model
--- layer enforces both halves, the CHECK enforces non-negative.
+-- The cap law is pinned in BOTH layers: the model layer enforces
+-- it at construction AND CHECK constraints enforce it in the
+-- schema, so a write path that bypasses the model (a future
+-- writer, an ops repair) still cannot state a broken grant:
+-- granted money rows require cap_cents, and cap_cents may exist
+-- only on the money classes.
 CREATE TABLE IF NOT EXISTS agt_grants (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
@@ -47,6 +50,14 @@ CREATE TABLE IF NOT EXISTS agt_grants (
     status TEXT NOT NULL DEFAULT 'granted' CHECK (status IN ('granted', 'denied', 'revoked')),
     scope JSONB NOT NULL DEFAULT '{}',
     cap_cents BIGINT CHECK (cap_cents IS NULL OR cap_cents >= 0),
+    CONSTRAINT agt_grants_cap_only_on_money CHECK (
+        cap_cents IS NULL OR action_class IN ('payment.charge', 'purchase')
+    ),
+    CONSTRAINT agt_grants_granted_money_requires_cap CHECK (
+        status <> 'granted'
+        OR action_class NOT IN ('payment.charge', 'purchase')
+        OR cap_cents IS NOT NULL
+    ),
     granted_by TEXT NOT NULL,
     granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -54,6 +65,26 @@ CREATE TABLE IF NOT EXISTS agt_grants (
     UNIQUE (org_id, action_class)
 );
 CREATE INDEX IF NOT EXISTS idx_agt_grants_org ON agt_grants(org_id);
+
+-- Cap-law constraints for a table that pre-dates them (fresh
+-- installs carry them inline in the CREATE TABLE above). Adding
+-- one over violating rows fails loud, which is the point: the
+-- broken rows surface instead of silently gaining a pass.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'agt_grants_cap_only_on_money'
+    ) THEN
+        ALTER TABLE agt_grants ADD CONSTRAINT agt_grants_cap_only_on_money
+            CHECK (cap_cents IS NULL OR action_class IN ('payment.charge', 'purchase'));
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'agt_grants_granted_money_requires_cap'
+    ) THEN
+        ALTER TABLE agt_grants ADD CONSTRAINT agt_grants_granted_money_requires_cap
+            CHECK (status <> 'granted' OR action_class NOT IN ('payment.charge', 'purchase') OR cap_cents IS NOT NULL);
+    END IF;
+END $$;
 
 -- Append-only change history + audit-feed source for permission
 -- events, including the system-generated revocation receipt.

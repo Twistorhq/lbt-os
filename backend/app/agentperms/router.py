@@ -6,6 +6,13 @@ the append-only history (the audit feed's permission source) and
 revocation receipts. Every mutation is attributed to the caller
 from the Identity JWT; the caller's active org scopes everything.
 
+Mutations are additionally role-gated (TW-779 / TH-010): the token
+must carry an owner or admin role claim. Org membership alone once
+authorized grants and revoke-all — any staff token could arm the
+money classes or stop the shop's agent — so a non-owner token gets
+a clean 403 and nothing is written. Reads stay member-visible:
+Spec 6 renders the ledger to the org; consent is the owner's act.
+
 The execution-time check is deliberately NOT an HTTP endpoint: it
 is an in-process service call (service.check_permission) made by
 the agent runtime at the moment of action. A network hop at that
@@ -57,6 +64,26 @@ def _require_org(claims: dict = Depends(_verified_claims)) -> str:
     return org_id
 
 
+# Roles the Identity service issues that may mutate the ledger
+# (idn_org_memberships carries owner/admin/member). A missing role
+# claim fails closed, like every other check in this package.
+MUTATION_ROLES = ("owner", "admin")
+
+
+def _require_mutation_role(claims: dict = Depends(_verified_claims)) -> None:
+    """TW-779 (TR-008): grant, deny, and revoke are owner acts.
+
+    A staff/member token — a shared login, a phished credential, an
+    unoffboarded ex-employee — must not be able to arm the agent's
+    money classes at an arbitrary cap or revoke-all in one call.
+    """
+    if claims.get("role") not in MUTATION_ROLES:
+        raise HTTPException(
+            status_code=403,
+            detail="grant, deny, and revoke require an owner or admin role",
+        )
+
+
 def _require_actor(claims: dict = Depends(_verified_claims)) -> str:
     return str(claims.get("sub") or claims.get("email") or "unknown")
 
@@ -90,6 +117,7 @@ def post_grant(
     body: GrantBody,
     org_id: str = Depends(_require_org),
     actor: str = Depends(_require_actor),
+    _role_gate: None = Depends(_require_mutation_role),
     db: Client = Depends(get_db),
 ):
     try:
@@ -110,6 +138,7 @@ def post_deny(
     body: DenyBody,
     org_id: str = Depends(_require_org),
     actor: str = Depends(_require_actor),
+    _role_gate: None = Depends(_require_mutation_role),
     db: Client = Depends(get_db),
 ):
     try:
@@ -123,6 +152,7 @@ def post_revoke(
     body: RevokeBody,
     org_id: str = Depends(_require_org),
     actor: str = Depends(_require_actor),
+    _role_gate: None = Depends(_require_mutation_role),
     db: Client = Depends(get_db),
 ):
     try:

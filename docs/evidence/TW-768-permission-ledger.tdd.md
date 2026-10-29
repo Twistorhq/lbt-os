@@ -90,3 +90,63 @@ Design checkpoint posted on TW-768 at design time for the Rex
 Grim threat-model pass (this diff touches the PII/permission
 lifecycle, a Rosa-amended Grim trigger). Build proceeded in
 parallel per dispatch; the pass must clear before merge.
+
+## Fix round (Rosa REQUEST CHANGES + Rex TW-779, 2026-10-29)
+
+Rosa's review returned three majors, each confirmed by her own
+adversarial probes; Rex's Grim change review (run-2) added one
+merge-blocking finding in this diff (TW-779, TH-010). All four
+are fixed here; the other Grim findings are separate tickets
+(TW-780 through TW-785) and were not chased in this round.
+
+- Finding 1 (MAJOR) + Finding 4 (nit): check_permission now
+  branches on MONEY_CLASSES, not cap presence. A granted money
+  row written past the model layer with cap_cents NULL denies
+  cap_missing (never uncapped); amount None on a money class
+  denies amount_required; a negative amount returns an
+  invalid_amount denial decision on every class instead of
+  raising a retryable LedgerError. The migration pins both
+  halves of the cap law as CHECK constraints on agt_grants
+  (agt_grants_cap_only_on_money,
+  agt_grants_granted_money_requires_cap), inline for fresh
+  installs and add-if-missing for pre-existing tables.
+- Finding 2 (MAJOR): run_purge evaluates completion for EVERY
+  revocation past purge_due_at with no outstanding scheduled
+  copies — the zero-copy revocation (pilot-common) now completes
+  instead of rendering purge-pending forever.
+- Finding 3 (MAJOR): a retained copy registered while the org's
+  agent stands revoked is stamped at registration with the
+  covering revocation's purge_due_at; run_purge also sweeps any
+  unscheduled copy of a revoked org onto that clock, so
+  late-landing in-flight work can never sit outside the purge
+  lifecycle.
+- Finding 5 (nit): guarded_step's docstring states amount_cents
+  is bound at wrap time; dynamic-amount steps must call
+  LedgerFence.check in-handler with the live amount.
+- Finding 6 (nit): purge_completed event detail records
+  purge_hook as 'wired' or 'none', so the audit feed never
+  overstates a registry-level purge as physical deletion.
+- TW-779 (HIGH, TR-008): the router now role-gates mutations —
+  grant, deny, and revoke require an owner or admin role claim
+  on the Identity token (MUTATION_ROLES); a member/staff token
+  or a role-less token gets a clean 403 and nothing is written.
+  Reads stay member-visible per Spec 6.
+
+Fix-round tests: 21 new (72 agentperms total, all passing) —
+past-the-model cap-law probes (direct row inserts: cap-less
+money rows deny for any amount and for no amount; capped rows
+past the model still enforce), negative-amount denial semantics,
+zero-copy revocation completion, register-after-revoke clock,
+run_purge sweep of an unscheduled copy, purge-hook presence in
+the event detail, migration CHECK pins, and the VER-008
+two-token router tests (real minted Identity tokens: member
+cannot grant/deny/revoke, owner and admin can, member can read,
+missing token is 401).
+
+Regression evidence, fix round: full backend suite on the
+branch — 20 failed / 1713 passed / 8 collection errors; the
+failed/error node set is byte-identical to a same-environment
+clean-main control at 7c08f8d (20 failed / 1641 passed / 8
+errors), diff empty. The 21 new passes are exactly the delta
+over the original 51. Ruff check + format --check clean on all
+authored and edited files.

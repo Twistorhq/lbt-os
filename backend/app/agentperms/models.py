@@ -183,7 +183,7 @@ class PermissionDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     allowed: bool
-    reason: str  # 'granted' | 'no_grant' | 'denied' | 'revoked' | 'cap_exceeded' | 'amount_required'
+    reason: str  # 'granted' | 'no_grant' | 'denied' | 'revoked' | 'cap_missing' | 'cap_exceeded' | 'amount_required' | 'invalid_amount'
     action_class: str
     channel: str
     grant_id: str | None = None

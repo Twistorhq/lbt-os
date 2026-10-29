@@ -65,6 +65,29 @@ class TestRlsDenyAll:
             assert "USING (false)" in SQL
 
 
+class TestCapLawPinnedInSchema:
+    """Rosa's fix round: the cap law lives in the schema as well as
+    the model layer, so a write path that bypasses GrantStatement
+    still cannot state a broken grant."""
+
+    def test_cap_only_on_money_classes(self):
+        assert "agt_grants_cap_only_on_money" in SQL
+        assert (
+            "cap_cents IS NULL OR action_class IN ('payment.charge', 'purchase')" in SQL
+        )
+
+    def test_granted_money_rows_require_cap(self):
+        assert "agt_grants_granted_money_requires_cap" in SQL
+        assert "status <> 'granted'" in SQL
+        assert "cap_cents IS NOT NULL" in SQL
+
+    def test_constraints_added_for_preexisting_tables(self):
+        # The migration is idempotent and re-runnable: the cap-law
+        # constraints are also added via the add-if-missing guard.
+        assert "ALTER TABLE agt_grants ADD CONSTRAINT" in SQL
+        assert "pg_constraint" in SQL
+
+
 class TestNeverStoreContent:
     def test_retained_copies_hold_no_content_column(self):
         section = SQL.split("CREATE TABLE IF NOT EXISTS agt_retained_copies")[1]
