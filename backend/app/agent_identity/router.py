@@ -68,6 +68,20 @@ class ProvisionIn(BaseModel):
     agent_name: str
 
 
+class HireIn(BaseModel):
+    agent_name: str
+    role: str = "general"
+    archetype_key: str | None = None
+
+
+class RoleIn(BaseModel):
+    role: str
+
+
+class ArchetypeIn(BaseModel):
+    archetype_key: str | None = None
+
+
 class PersonaPatchIn(BaseModel):
     patch: dict[str, Any]
 
@@ -99,19 +113,91 @@ def _handle(fn):
 def get_my_identity(
     org_id: str = Depends(_require_org), db: Client = Depends(get_db)
 ) -> dict[str, Any]:
-    """The org's identity record, or the fail-closed default view."""
+    """The org's primary (included) agent record, or the fail-closed
+    default view."""
     return service.identity_view(db, org_id)
+
+
+@router.get("/agents")
+def list_agents(
+    org_id: str = Depends(_require_org), db: Client = Depends(get_db)
+) -> list[dict[str, Any]]:
+    """The org's roster (TW-787): included agent first, then hires."""
+    return service.roster_view(db, org_id)
+
+
+@router.get("/agents/{agent_id}")
+def get_agent(
+    agent_id: str,
+    org_id: str = Depends(_require_org),
+    db: Client = Depends(get_db),
+) -> dict[str, Any]:
+    return _handle(lambda: service.identity_view(db, org_id, agent_id))
+
+
+@router.post("/agents")
+def hire_agent(
+    body: HireIn,
+    org_id: str = Depends(_require_org),
+    actor: str = Depends(_require_actor),
+    db: Client = Depends(get_db),
+) -> dict[str, Any]:
+    """Hire an additional agent (TW-787). Posts the one-time
+    agent.hire toll as part of the hire."""
+    identity = _handle(
+        lambda: service.hire_agent(
+            db,
+            org_id,
+            body.agent_name,
+            actor,
+            role=body.role,
+            archetype_key=body.archetype_key,
+        )
+    )
+    return identity.model_dump(mode="json")
+
+
+@router.post("/agents/{agent_id}/role")
+def assign_role(
+    agent_id: str,
+    body: RoleIn,
+    org_id: str = Depends(_require_org),
+    actor: str = Depends(_require_actor),
+    db: Client = Depends(get_db),
+) -> dict[str, Any]:
+    identity = _handle(
+        lambda: service.assign_role(db, org_id, agent_id, body.role, actor)
+    )
+    return identity.model_dump(mode="json")
+
+
+@router.post("/agents/{agent_id}/archetype")
+def assign_archetype(
+    agent_id: str,
+    body: ArchetypeIn,
+    org_id: str = Depends(_require_org),
+    actor: str = Depends(_require_actor),
+    db: Client = Depends(get_db),
+) -> dict[str, Any]:
+    identity = _handle(
+        lambda: service.assign_archetype(
+            db, org_id, agent_id, body.archetype_key, actor
+        )
+    )
+    return identity.model_dump(mode="json")
 
 
 @router.get("/channels/{channel}")
 def get_channel_config(
     channel: str,
+    agent_id: str | None = None,
     org_id: str = Depends(_require_org),
     db: Client = Depends(get_db),
 ) -> dict[str, Any]:
-    """One channel's read of the identity (phone | email | sms). The
-    identity block is byte-identical across channels by construction."""
-    return _handle(lambda: service.channel_config(db, org_id, channel))
+    """One channel's read of one agent's identity (phone | email |
+    sms). The identity block is byte-identical across channels, per
+    agent, by construction."""
+    return _handle(lambda: service.channel_config(db, org_id, channel, agent_id))
 
 
 @router.post("")
@@ -130,23 +216,27 @@ def provision(
 @router.patch("/persona")
 def patch_persona(
     body: PersonaPatchIn,
+    agent_id: str | None = None,
     org_id: str = Depends(_require_org),
     actor: str = Depends(_require_actor),
     db: Client = Depends(get_db),
 ) -> dict[str, Any]:
-    identity = _handle(lambda: service.update_persona(db, org_id, body.patch, actor))
+    identity = _handle(
+        lambda: service.update_persona(db, org_id, body.patch, actor, agent_id)
+    )
     return identity.model_dump(mode="json")
 
 
 @router.patch("/coverage")
 def patch_coverage(
     body: CoverageIn,
+    agent_id: str | None = None,
     org_id: str = Depends(_require_org),
     actor: str = Depends(_require_actor),
     db: Client = Depends(get_db),
 ) -> dict[str, Any]:
     identity = _handle(
-        lambda: service.update_coverage(db, org_id, body.coverage, actor)
+        lambda: service.update_coverage(db, org_id, body.coverage, actor, agent_id)
     )
     return identity.model_dump(mode="json")
 
@@ -154,12 +244,15 @@ def patch_coverage(
 @router.post("/phone")
 def bind_phone(
     body: PhoneBindIn,
+    agent_id: str | None = None,
     org_id: str = Depends(_require_org),
     actor: str = Depends(_require_actor),
     db: Client = Depends(get_db),
 ) -> dict[str, Any]:
     identity = _handle(
-        lambda: service.bind_phone_number(db, org_id, body.phone_number, actor)
+        lambda: service.bind_phone_number(
+            db, org_id, body.phone_number, actor, agent_id
+        )
     )
     return identity.model_dump(mode="json")
 
@@ -167,11 +260,14 @@ def bind_phone(
 @router.post("/status")
 def change_status(
     body: StatusIn,
+    agent_id: str | None = None,
     org_id: str = Depends(_require_org),
     actor: str = Depends(_require_actor),
     db: Client = Depends(get_db),
 ) -> dict[str, Any]:
-    identity = _handle(lambda: service.set_status(db, org_id, body.status, actor))
+    identity = _handle(
+        lambda: service.set_status(db, org_id, body.status, actor, agent_id)
+    )
     return identity.model_dump(mode="json")
 
 

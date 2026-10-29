@@ -1,10 +1,18 @@
 """TW-767 Twistor Agent Identity — persona, coverage, identity record.
 
 Spec 1 of TW-764 (the Instinct-shape build for Twistor Trades) and the
-foundation of the TW-766 Agent Model Standard: one named agent per shop,
-with ONE email address and ONE phone number, a persistent persona, and
-coverage hours. Spec 3 assembles task prompts from the persona record
-defined here; Spec 6 renders the Agent Card from the identity record.
+foundation of the TW-766 Agent Model Standard: each agent is a named
+employee of the shop, with ONE email address and ONE phone number, a
+persistent persona, and coverage hours. Spec 3 assembles task prompts
+from the persona record defined here; Spec 6 renders the Agent Card
+from the identity record.
+
+TW-787 amendment: a shop runs a ROSTER of agents. The first agent is
+the subscription's included everything agent; additional agents are
+hires carrying a role and an archetype slot (the TW-788 catalog loads
+onto the slot; the slot and its mechanics live here). TW-766 is
+unchanged and now reads per agent: one identity, one email, one
+number, one persona — per agent, never shared across the roster.
 
 Fail-closed defaults are a property of these models, not of callers:
 a default Coverage is mode 'unconfigured' (the agent initiates nothing
@@ -49,6 +57,45 @@ COVERAGE_MODES = ("unconfigured", "always", "windows")
 IDENTITY_STATUSES = ("unprovisioned", "active", "suspended")
 _HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
+# TW-787: the roster role vocabulary. 'everything' is the included
+# generalist's role; a hire defaults to 'general' until the customer
+# assigns it a specific task in the UI (Spec 6). The migration pins
+# the same set as a CHECK constraint so the layers cannot drift.
+AGENT_ROLES = (
+    "everything",
+    "general",
+    "hr",
+    "sales",
+    "marketing",
+    "ads",
+    "seo",
+    "inbox",
+    "payroll",
+    "frontend_dev",
+    "backend_dev",
+    "executive",
+)
+
+# The included agent's slug: stable, and its email keeps the TW-767
+# allocation formula exactly (addresses already issued never move).
+PRIMARY_AGENT_SLUG = "primary"
+
+_SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+
+def validate_archetype_key(key: str | None) -> None:
+    """An archetype key is a slug naming a TW-788 catalog entry, or
+    None (generalist, no archetype loaded). Format only: the catalog
+    itself is TW-788's, and an unknown-but-well-formed key is stored
+    as-is so catalog additions never need a registry migration."""
+    if key is None:
+        return
+    if not _SLUG.match(key):
+        raise IdentityError(
+            f"archetype key {key!r} is not a slug (lowercase letters, "
+            "digits, single hyphens)"
+        )
+
 
 class VoiceSettings(_StrictBase):
     """How the agent sounds. voice_id binds to the TW-284/Fonoster voice
@@ -89,9 +136,9 @@ class RapportSettings(_StrictBase):
 
 
 class Persona(_StrictBase):
-    """The persistent persona record. One record per shop; the phone,
-    email, and text lanes all read THIS object, so the employee who
-    writes the email is the employee who answered the phone."""
+    """The persistent persona record. One record per agent; the phone,
+    email, and text lanes all read THIS agent's object, so the employee
+    who writes the email is the employee who answered the phone."""
 
     voice: VoiceSettings = Field(default_factory=VoiceSettings)
     tone: str = "warm, direct, plain-spoken"
@@ -158,11 +205,22 @@ class Coverage(_StrictBase):
 
 class AgentIdentity(_StrictBase):
     """The full identity record as the API returns it: one record the
-    Spec 6 Agent Card renders and Spec 3's runtime reads."""
+    Spec 6 Agent Card renders and Spec 3's runtime reads. One record
+    per agent; an org's roster is a list of these (TW-787)."""
 
     id: str | None = None
     org_id: str
     agent_name: str
+    agent_slug: str | None = None
+    role: str = "everything"
+    archetype_key: str | None = None
+    included_with_subscription: bool = False
+    # Task budget in standard agent units (config: STANDARD_AGENT_
+    # POWER_UNITS per hired agent, INCLUDED_AGENT_POWER_UNITS for
+    # the included agent). Derived by the service from the config
+    # constants, never stored per row. Spec 3's runtime enforces it
+    # as queued-task throughput / concurrent task slots.
+    power_units: int = 1
     email_address: str | None = None
     phone_number: str | None = None
     persona: Persona = Field(default_factory=Persona)
@@ -181,6 +239,16 @@ class AgentIdentity(_StrictBase):
                 f"unknown identity status {self.status!r}; "
                 f"want one of {IDENTITY_STATUSES}"
             )
+        if self.role not in AGENT_ROLES:
+            raise IdentityError(
+                f"unknown agent role {self.role!r}; want one of {AGENT_ROLES}"
+            )
+        if self.agent_slug is not None and not _SLUG.match(self.agent_slug):
+            raise IdentityError(
+                f"agent slug {self.agent_slug!r} is not a slug (lowercase "
+                "letters, digits, single hyphens)"
+            )
+        validate_archetype_key(self.archetype_key)
 
 
 def default_persona() -> Persona:

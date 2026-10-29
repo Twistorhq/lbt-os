@@ -36,6 +36,7 @@ def guarded_step(
     step: StepDef,
     *,
     amount_cents: int | None = None,
+    agent_identity_id: str | None = None,
 ) -> StepDef:
     """Wrap a StepDef so its handler runs only under a live grant.
 
@@ -47,11 +48,22 @@ def guarded_step(
     only known at execution must not rely on this wrapper for the
     check — call LedgerFence.check inside the handler with the live
     amount instead (Spec 3: this means you).
+
+    agent_identity_id names the acting agent (TW-787 roster): the
+    check reads that agent's grant scope. Spec 3's runtime passes
+    the turn's agent id here — a step running for agent A must never
+    be fenced by agent B's grants, or waved through by them.
     """
     original = step.handler
 
     def handler(ctx: Any) -> Any:
-        service.require_permission(db, org_id, action_class, amount_cents=amount_cents)
+        service.require_permission(
+            db,
+            org_id,
+            action_class,
+            amount_cents=amount_cents,
+            agent_identity_id=agent_identity_id,
+        )
         return original(ctx)
 
     return replace(step, handler=handler)
@@ -60,16 +72,23 @@ def guarded_step(
 class LedgerFence:
     """Execution-time fence for non-StepDef call sites."""
 
-    def __init__(self, db: Any, org_id: str):
+    def __init__(self, db: Any, org_id: str, *, agent_identity_id: str | None = None):
         self._db = db
         self._org_id = org_id
+        self._agent_identity_id = agent_identity_id
 
     def check(self, action_class: str, *, amount_cents: int | None = None):
         """Raise PermissionDenied unless the action is granted now."""
         return service.require_permission(
-            self._db, self._org_id, action_class, amount_cents=amount_cents
+            self._db,
+            self._org_id,
+            action_class,
+            amount_cents=amount_cents,
+            agent_identity_id=self._agent_identity_id,
         )
 
     def assert_accepting_work(self) -> None:
         """Raise AgentWorkRefused if the agent stands fully revoked."""
-        service.assert_accepting_work(self._db, self._org_id)
+        service.assert_accepting_work(
+            self._db, self._org_id, agent_identity_id=self._agent_identity_id
+        )
