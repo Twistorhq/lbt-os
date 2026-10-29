@@ -14,6 +14,7 @@ from slowapi.errors import RateLimitExceeded
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .agent_identity import router as agent_identity_router
+from .agentperms import router as agentperms_router
 from .config import settings
 
 # TW-593 science data layer V1 — six lanes. Each router carries its own
@@ -27,7 +28,6 @@ from .data_layer.science.subseasonal import router as sci_subseasonal_router
 from .data_layer.science.turbulence import router as sci_turbulence_router
 from .flags import router as flags_router
 from .flows import router as flows_router
-from .agentperms import router as agentperms_router
 from .identity import oauth as identity_oauth
 from .identity import router as identity_router
 from .identity import saml as identity_saml
