@@ -21,9 +21,9 @@ import binascii
 import html
 import re
 import unicodedata
-from urllib.parse import unquote
 from dataclasses import dataclass, field
 from typing import Any, Callable
+from urllib.parse import unquote
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
@@ -242,9 +242,7 @@ _INJECTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"(follow|following|obey|obeying)\b"
             + _GAP40
             + r"\b(instructions?|directives?|guidelines|orders|rules)\b"
-            r"|\bact\s+as\s+if\b"
-            + _GAP60
-            + r"\binstructions?\b)",
+            r"|\bact\s+as\s+if\b" + _GAP60 + r"\binstructions?\b)",
             re.I,
         ),
     ),
@@ -523,8 +521,7 @@ def scan_injections(content: str) -> list[str]:
             _SENSITIVE_NOUN_DOC.search(text)
             and _STRONG_DESTINATION.search(text)
             and (
-                _EXFIL_VERB_DOC.search(text)
-                or _OVERRIDE_FLAG_NAMES.intersection(found)
+                _EXFIL_VERB_DOC.search(text) or _OVERRIDE_FLAG_NAMES.intersection(found)
             )
         ):
             found.append("exfiltrate_send")
