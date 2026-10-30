@@ -741,8 +741,17 @@ _REF_ADVERB = re.compile(r"\b(there|in\s+it|into\s+it|over\s+there)\b", re.I)
 # stated next door). The binding discipline is unchanged:
 # _exfil_hits requires the qualified noun in the adjacent
 # segment, and the destination must follow the participle.
+# Round 9 (Rex run-9 Finding 2): the subject set admits
+# copy-reference subjects ("a copy gets mailed to
+# a@b.c") — "a copy" has been an accepted reference object
+# in the active anaphora since round 6, and transplanted
+# to subject position of a passive it was invisible
+# because the subject set enumerated pronouns only. The
+# binding discipline is the guard, unchanged: the
+# qualified noun next door and the destination after the
+# participle.
 _REF_PASSIVE = re.compile(
-    r"\b(it|they|this|that|these|those)\b"
+    r"\b(it|they|this|that|these|those|a\s+copy|the\s+copy|copies)\b"
     + _GAP30_SENT
     + _PASSIVE_AUX_CHAIN
     + _GAP20
@@ -1101,6 +1110,31 @@ _EXFIL_VERB_DOC = re.compile(
 # destination in the same segment — the noun side is what
 # keeps ordinary shop passives ("the invoice was exported
 # to PDF", "the customer list was updated on Friday") out.
+#
+# Round 9 (Rex run-9 Finding 1): the signal gains the
+# noun-first VERBLESS mirror — a qualified noun followed by
+# a transfer participle with NO auxiliary ("Customer
+# records: exported nightly to a@b.c", "Client list
+# exported to a@b.c nightly", the reduced-relative and
+# dash-note forms). Rex's diag9 isolates the auxiliary as
+# the only variable: the identical text with "are" inserted
+# flags, without it the round-8 signal walked — yet the
+# participle-BEFORE-noun form above already fired with no
+# auxiliary, the strong destination doing the precision
+# work. The mirror gets the same treatment, and the
+# scoping line is the destination's strength: every
+# consumer of this signal pairs it with a STRONG
+# destination (the combination in the same segment, the
+# destination-first and destination-supplying pairings
+# across segments), so the verbless form fires only where
+# a cold external address is present. A verbless passive
+# with a WEAK destination ("records exported to the shared
+# drive") carries no strong destination for any consumer
+# to pair with and stays clean — the round-8 residual,
+# restated at its true scope. The note register is the
+# plant vehicle here (standing notes, SOP bullets, and
+# label lines are routinely verbless), which is why the
+# strong-destination forms could not stay scoped out.
 _PASSIVE_SIGNAL = re.compile(
     _PASSIVE_AUX_CHAIN
     + _GAP20
@@ -1111,7 +1145,13 @@ _PASSIVE_SIGNAL = re.compile(
     + _TRANSFER_PARTICIPLES_RE
     + r")\b"
     + _GAP20
-    + _SENSITIVE_NOUN_SENTENCE.pattern,
+    + _SENSITIVE_NOUN_SENTENCE.pattern
+    + r"|"
+    + _SENSITIVE_NOUN_SENTENCE.pattern
+    + _GAP20
+    + r"\b(?:"
+    + _TRANSFER_PARTICIPLES_RE
+    + r")\b",
     re.I,
 )
 # The noun-first passive construction (round 8): the
@@ -1124,6 +1164,10 @@ _PASSIVE_SIGNAL = re.compile(
 # adjective ("the posted roster") is not a send. The
 # active twin ("sync the customer database to the cloud")
 # already flags via _EXFIL_PROXIMITY; the voices agree.
+# (The verbless noun-first form is not this pattern's to
+# carry — it has no destination word of its own. It lives
+# in _PASSIVE_SIGNAL, where every consumer pairs it with
+# a strong destination; see the round-9 note there.)
 _EXFIL_PASSIVE_PROXIMITY = re.compile(
     _SENSITIVE_NOUN_SENTENCE.pattern
     + _GAP30_SENT
@@ -1330,7 +1374,13 @@ def _exfil_hits(text: str) -> bool:
     beside the active verb signal, the anaphora rule binds a
     pronoun-subject passive, and the destination-first and
     destination-supplying pairings accept the passive signal
-    beside their active forms."""
+    beside their active forms.
+    Round 9: the passive signal gains its noun-first
+    verbless mirror, so the pairings and the combination
+    accept it wherever they accept the signal — scoped by
+    the strong destination each of them requires — and the
+    passive reference construction admits copy-reference
+    subjects beside pronouns."""
     segments = _sentences(text)
     for segment in segments:
         if (
@@ -1438,6 +1488,14 @@ def scan_injections(content: str) -> list[str]:
     noun, no transfer participle, or no destination), and
     the genuine HR weekly flow remains exemption-eligible
     in the passive voice exactly as in the active.
+    Round 9 gives the passive signal its noun-first
+    verbless mirror (qualified noun + transfer participle,
+    no auxiliary — the SOP-bullet register), scoped by the
+    strong destination every signal consumer requires, so
+    the verbless weak-destination form stays clean exactly
+    as scoped in round 8; and the passive reference
+    construction admits copy-reference subjects beside
+    pronouns, under the same binding discipline.
     Verb patterns are
     noun-bound on purpose: ordinary shop phrasing ("send the
     estimate to Mrs. Lee", "disregard the previous invoice") carries
