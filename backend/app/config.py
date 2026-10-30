@@ -222,7 +222,27 @@ TRIAL_PERIOD_DAYS = 14
 # owns this vocabulary; M2/M3 emit events, the ledger prices them.
 # Percent-of-value events (e.g. booking.recovered at 10% of job value) are NOT
 # in this map: the emitter computes the amount and passes amount_cents.
+# TW-787: the one-time agent.hire fee, in cents. Justynn's band is
+# $20-$30 per additional agent; $25 is the default until he confirms
+# the exact number. This constant is the ONLY place the fee lives —
+# the rate table below and the provisioning path both read it here.
+AGENT_HIRE_FEE_CENTS = 2500
+
+# TW-787: agent power budget, in STANDARD AGENT UNITS. One standard
+# agent unit is one hired agent's task budget: its queued-task
+# throughput and concurrent task slots in Spec 3's runtime. The
+# subscription's INCLUDED agent is built to 10-agent power — its
+# budget is INCLUDED_AGENT_POWER_UNITS units — so a one-agent shop
+# is never underpowered; hired agents buy concurrency, dedicated
+# roles/presence, and volume ABOVE that baseline, never basic
+# capability the first agent lacks (Justynn's ruling, Oct 29, 2026).
+# Tunable here only; the registry derives each agent's power_units
+# from these two constants, never from per-row data.
+STANDARD_AGENT_POWER_UNITS = 1
+INCLUDED_AGENT_POWER_UNITS = 10
+
 TOLL_RATES: dict[str, int] = {
+    "agent.hire": AGENT_HIRE_FEE_CENTS,  # TW-787: one-time fee per additional agent hired
     "missed_call.detected": 10,   # $0.10 per detected missed call
     "sms.auto_reply":         5,  # $0.05 per auto-SMS
     "call.ai_handled":       50,  # $0.50 per AI-handled call

@@ -92,15 +92,22 @@ class GrantBody(BaseModel):
     action_class: str
     scope: dict[str, Any] = {}
     cap_cents: int | None = None
+    # TW-787: omit for an org-wide grant (every agent); set to scope
+    # the grant to one agent in the roster.
+    agent_identity_id: str | None = None
 
 
 class DenyBody(BaseModel):
     action_class: str
+    agent_identity_id: str | None = None
 
 
 class RevokeBody(BaseModel):
     strength: str
     target: str | None = None
+    # TW-787: omit to revoke org-wide (every agent halts); set to
+    # revoke one agent only.
+    agent_identity_id: str | None = None
 
 
 @router.get("/grants")
@@ -128,6 +135,7 @@ def post_grant(
             actor=actor,
             scope=body.scope,
             cap_cents=body.cap_cents,
+            agent_identity_id=body.agent_identity_id,
         )
     except LedgerError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -142,7 +150,13 @@ def post_deny(
     db: Client = Depends(get_db),
 ):
     try:
-        return service.deny_permission(db, org_id, body.action_class, actor=actor)
+        return service.deny_permission(
+            db,
+            org_id,
+            body.action_class,
+            actor=actor,
+            agent_identity_id=body.agent_identity_id,
+        )
     except LedgerError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -157,7 +171,13 @@ def post_revoke(
 ):
     try:
         statement = RevokeStatement(strength=body.strength, target=body.target)
-        revocation = service.revoke(db, org_id, statement, actor=actor)
+        revocation = service.revoke(
+            db,
+            org_id,
+            statement,
+            actor=actor,
+            agent_identity_id=body.agent_identity_id,
+        )
     except LedgerError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {

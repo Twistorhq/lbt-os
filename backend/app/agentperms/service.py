@@ -23,10 +23,17 @@ this module says so loudly instead of reporting a partial stop
 (the flags module's TW-208 audit leniency is deliberately not
 carried into a safety operation).
 
+TW-787 (multi-agent roster): grants are scoped. A row with
+agent_identity_id NULL is an ORG-WIDE grant covering every agent in
+the roster; a row naming an agent governs that agent alone and wins
+over the org-wide row for it. Revoking one agent flips its own rows
+and, where an org-wide grant covers it, writes a per-agent revoked
+SHADOW row — the roster-mate's access is never a side effect of
+another agent's revocation. An org revoke-all (no agent named)
+flips every row in the org and halts every agent. The FK to
+agt_identities landed with the TW-768 merge reconciliation.
+
 STUBS (parallel specs, noted per the TW-768 dispatch):
-- agent_identity_id is carried on every row by value; the identity
-  record itself is TW-767 (Spec 1), still in flight. No FK until
-  that migration lands.
 - Token cutting runs through the injectable token_cutter hook;
   Spec 1 owns the agent token store. With no hook wired, the
   receipt states 'no_hook_registered' — it never claims a cut that
@@ -149,17 +156,41 @@ def list_history(db: Any, org_id: str, *, limit: int = 100) -> list[dict[str, An
 # -- grants -------------------------------------------------------------
 
 
-def _fetch_grant(db: Any, org_id: str, action_class: str) -> dict[str, Any] | None:
+def _fetch_grants(db: Any, org_id: str, action_class: str) -> list[dict[str, Any]]:
+    """Every grant row for (org, class): the org-wide row (agent NULL)
+    plus one row per agent that carries a scoped grant."""
     res = (
         db.table("agt_grants")
         .select("*")
         .eq("org_id", org_id)
         .eq("action_class", action_class)
-        .limit(1)
         .execute()
     )
-    rows = res.data or []
-    return rows[0] if rows else None
+    return res.data or []
+
+
+def _pick_grant(
+    db: Any, org_id: str, action_class: str, agent_identity_id: str | None
+) -> dict[str, Any] | None:
+    """The row that governs an actor: the agent's own row when one
+    exists, else the org-wide row, else None (no grant). A caller
+    naming no agent reads the org-wide row only — per-agent rows
+    never leak into an org-level decision."""
+    rows = _fetch_grants(db, org_id, action_class)
+    org_wide: dict[str, Any] | None = None
+    for row in rows:
+        if row.get("agent_identity_id") is None:
+            org_wide = row
+        elif agent_identity_id is not None and row.get("agent_identity_id") == (
+            agent_identity_id
+        ):
+            return row
+    return org_wide
+
+
+def _fetch_grant(db: Any, org_id: str, action_class: str) -> dict[str, Any] | None:
+    """The org-wide grant row for (org, class), or None."""
+    return _pick_grant(db, org_id, action_class, None)
 
 
 def list_grants(db: Any, org_id: str) -> list[dict[str, Any]]:
@@ -177,7 +208,14 @@ def _set_grant(
     actor: str,
     agent_identity_id: str | None,
 ) -> dict[str, Any]:
-    existing = _fetch_grant(db, org_id, statement.action_class)
+    # The existing row IN THE SAME SCOPE: setting an org-wide grant
+    # must not rewrite a per-agent row, and setting a per-agent grant
+    # must not rewrite the org-wide row (TW-787). The update itself is
+    # keyed by the row's id for the same reason.
+    rows = _fetch_grants(db, org_id, statement.action_class)
+    existing = next(
+        (r for r in rows if r.get("agent_identity_id") == agent_identity_id), None
+    )
     now = _ts(_now())
     if existing is None:
         row = {
@@ -204,13 +242,10 @@ def _set_grant(
             "updated_at": now,
             "version": int(existing.get("version", 1)) + 1,
         }
-        if agent_identity_id is not None:
-            patch["agent_identity_id"] = agent_identity_id
         saved = (
             db.table("agt_grants")
             .update(patch)
-            .eq("org_id", org_id)
-            .eq("action_class", statement.action_class)
+            .eq("id", existing["id"])
             .execute()
             .data[0]
         )
@@ -286,11 +321,17 @@ def check_permission(
     action_class: str,
     *,
     amount_cents: int | None = None,
+    agent_identity_id: str | None = None,
 ) -> PermissionDecision:
-    """May the agent perform action_class right now?
+    """May this agent perform action_class right now?
 
     Consulted at execution time, never cached into a task at intake:
     a grant revoked after a task queued must still stop the task.
+
+    Scoping (TW-787): agent_identity_id names the acting agent; the
+    decision reads that agent's own grant row when one exists, else
+    the org-wide row. With no agent named, only the org-wide row
+    governs (the TW-768 singleton reading).
 
     Money enforcement branches on the action class (MONEY_CLASSES),
     never on whether the stored row happens to carry a cap: a money
@@ -301,7 +342,7 @@ def check_permission(
     drift apart.
     """
     channel = channel_of(action_class)
-    grant = _fetch_grant(db, org_id, action_class)
+    grant = _pick_grant(db, org_id, action_class, agent_identity_id)
     if grant is None:
         return PermissionDecision(
             allowed=False, reason="no_grant", action_class=action_class, channel=channel
@@ -344,9 +385,16 @@ def require_permission(
     action_class: str,
     *,
     amount_cents: int | None = None,
+    agent_identity_id: str | None = None,
 ) -> PermissionDecision:
     """check_permission that raises PermissionDenied on a refusal."""
-    decision = check_permission(db, org_id, action_class, amount_cents=amount_cents)
+    decision = check_permission(
+        db,
+        org_id,
+        action_class,
+        amount_cents=amount_cents,
+        agent_identity_id=agent_identity_id,
+    )
     if not decision.allowed:
         raise PermissionDenied(decision)
     return decision
@@ -373,6 +421,13 @@ def revoke(
     the system-generated receipt closes the motion in the history.
     Any step failing raises — a half-revocation reported as done
     is the exact failure this spec exists to prevent.
+
+    Scoping (TW-787): with agent_identity_id set, the motion covers
+    that agent alone — its own rows flip, and a class it holds only
+    through the org-wide row gets a per-agent revoked SHADOW row, so
+    the gate closes for this agent while every roster-mate keeps its
+    access. With no agent named, every row in scope flips: the org
+    motion halts every agent.
     """
     stmt = (
         statement
@@ -385,12 +440,55 @@ def revoke(
 
     revoked_grants: list[str] = []
     for action_class in affected:
-        grant = _fetch_grant(db, org_id, action_class)
-        if grant is None or grant["status"] == "revoked":
+        rows = _fetch_grants(db, org_id, action_class)
+        if agent_identity_id is None:
+            targets = [r for r in rows if r["status"] != "revoked"]
+            shadow_row = None
+        else:
+            targets = [
+                r
+                for r in rows
+                if r.get("agent_identity_id") == agent_identity_id
+                and r["status"] != "revoked"
+            ]
+            own_row = next(
+                (r for r in rows if r.get("agent_identity_id") == agent_identity_id),
+                None,
+            )
+            org_row = next(
+                (r for r in rows if r.get("agent_identity_id") is None), None
+            )
+            # The agent holds this class only through the org-wide
+            # grant: shadow it for this agent instead of flipping the
+            # row its roster-mates act under.
+            shadow_row = (
+                org_row
+                if own_row is None
+                and org_row is not None
+                and org_row["status"] == "granted"
+                else None
+            )
+        for row in targets:
+            db.table("agt_grants").update(
+                {"status": "revoked", "updated_at": _ts(now)}
+            ).eq("id", row["id"]).execute()
+        if shadow_row is not None:
+            db.table("agt_grants").insert(
+                {
+                    "org_id": org_id,
+                    "agent_identity_id": agent_identity_id,
+                    "action_class": action_class,
+                    "status": "revoked",
+                    "scope": {},
+                    "cap_cents": None,
+                    "granted_by": actor,
+                    "granted_at": _ts(now),
+                    "updated_at": _ts(now),
+                    "version": 1,
+                }
+            ).execute()
+        if not targets and shadow_row is None:
             continue
-        db.table("agt_grants").update({"status": "revoked", "updated_at": _ts(now)}).eq(
-            "org_id", org_id
-        ).eq("action_class", action_class).execute()
         revoked_grants.append(action_class)
         _record_event(
             db,
@@ -454,10 +552,14 @@ def revoke(
     )
 
     # Schedule retained working copies for purge on the stated clock.
+    # TW-787: a per-agent revocation schedules only that agent's
+    # copies; an org motion schedules the whole roster's.
     copies = (
         db.table("agt_retained_copies").select("*").eq("org_id", org_id).execute().data
         or []
     )
+    if agent_identity_id is not None:
+        copies = [c for c in copies if c.get("agent_identity_id") == agent_identity_id]
     scheduled = 0
     for copy in copies:
         if copy.get("purged_at") is not None:
@@ -519,14 +621,31 @@ def list_revocations(db: Any, org_id: str) -> list[dict[str, Any]]:
 # -- intake halt ----------------------------------------------------------
 
 
-def agent_status(db: Any, org_id: str) -> str:
+def agent_status(db: Any, org_id: str, agent_identity_id: str | None = None) -> str:
     """'active' while any class stands granted; 'revoked' when a
     revoke-all stands with nothing re-granted since.
 
     State-based, not clock-based: revoke() flips every granted row,
     so a standing revoke-all is exactly 'an all-revocation exists
     and no grant is currently granted'.
+
+    TW-787: with an agent named, the reading is that agent's — the
+    grants it acts under (its own rows, else org-wide) and the
+    revoke-alls that cover it (its own, or the org's).
     """
+    if agent_identity_id is not None:
+        for action_class in ACTION_CLASSES:
+            grant = _pick_grant(db, org_id, action_class, agent_identity_id)
+            if grant is not None and grant["status"] == "granted":
+                return "active"
+        revocations = list_revocations(db, org_id)
+        if any(
+            r["strength"] == "all"
+            and r.get("agent_identity_id") in (None, agent_identity_id)
+            for r in revocations
+        ):
+            return "revoked"
+        return "active"
     grants = list_grants(db, org_id)
     if any(g["status"] == "granted" for g in grants):
         return "active"
@@ -536,17 +655,26 @@ def agent_status(db: Any, org_id: str) -> str:
     return "active"
 
 
-def assert_accepting_work(db: Any, org_id: str) -> None:
+def assert_accepting_work(
+    db: Any, org_id: str, agent_identity_id: str | None = None
+) -> None:
     """Intake gate: a fully revoked agent accepts no new work.
 
     Spec 1's inbound path and Spec 3's task intake call this before
     queueing anything for the agent. Synchronous against current
     state, so refusal lands on the first call after revocation —
     the dossier's three-hour lag is zero here by construction.
+    TW-787: the check is per agent when an agent is named — one
+    revoked roster-mate never blocks another agent's intake.
     """
-    if agent_status(db, org_id) == "revoked":
+    if agent_status(db, org_id, agent_identity_id) == "revoked":
+        scope = (
+            f"agent {agent_identity_id} in org {org_id}"
+            if agent_identity_id
+            else f"org {org_id}"
+        )
         raise AgentWorkRefused(
-            f"org {org_id}: agent stands revoked (revoke-all); "
+            f"{scope}: agent stands revoked (revoke-all); "
             "not accepting work until the owner re-grants a permission"
         )
 
@@ -555,13 +683,34 @@ def assert_accepting_work(db: Any, org_id: str) -> None:
 
 
 def _latest_revoke_all(db: Any, org_id: str) -> dict[str, Any] | None:
-    """The org's most recent revoke-all row, if any.
+    """The org's most recent ORG-WIDE revoke-all row, if any.
 
     Its purge_due_at is the stated clock a late-landing retained
-    copy inherits (list_revocations is newest first).
-    """
+    copy inherits (list_revocations is newest first). TW-787: a
+    per-agent revoke-all does not set the org-wide clock — one
+    agent's revocation never schedules another agent's copies."""
     for revocation in list_revocations(db, org_id):
-        if revocation["strength"] == "all":
+        if (
+            revocation["strength"] == "all"
+            and revocation.get("agent_identity_id") is None
+        ):
+            return revocation
+    return None
+
+
+def _covering_revoke_all(
+    db: Any, org_id: str, agent_identity_id: str | None
+) -> dict[str, Any] | None:
+    """The most recent revoke-all covering a scope: for an agent, its
+    own revoke-all or the org-wide one; for the org, the org-wide
+    one. TW-787."""
+    if agent_identity_id is None:
+        return _latest_revoke_all(db, org_id)
+    for revocation in list_revocations(db, org_id):
+        if revocation["strength"] == "all" and revocation.get("agent_identity_id") in (
+            None,
+            agent_identity_id,
+        ):
             return revocation
     return None
 
@@ -578,15 +727,17 @@ def register_retained_copy(
     """Register a retained working copy (locator only, never content)
     so a later revocation can schedule its purge.
 
-    Late-landing work is the normal case, not an edge: if the org's
-    agent already stands revoked when a copy registers (in-flight
-    work settling after the owner's motion), the copy goes straight
-    onto the covering revocation's stated purge clock. A copy of a
-    revoked agent never sits unscheduled.
+    Late-landing work is the normal case, not an edge: if the agent
+    already stands revoked when a copy registers (in-flight work
+    settling after the owner's motion), the copy goes straight onto
+    the covering revocation's stated purge clock. A copy of a
+    revoked agent never sits unscheduled. TW-787: the standing and
+    the clock are read in the copy's own scope — its agent's, or the
+    org's for an org-level copy.
     """
     purge_after: str | None = None
-    if agent_status(db, org_id) == "revoked":
-        covering = _latest_revoke_all(db, org_id)
+    if agent_status(db, org_id, agent_identity_id) == "revoked":
+        covering = _covering_revoke_all(db, org_id, agent_identity_id)
         if covering is not None:
             purge_after = covering.get("purge_due_at")
     row = {
@@ -636,19 +787,24 @@ def run_purge(
     """
     moment = now or _now()
 
-    # Sweep: unscheduled copies of revoked orgs onto the clock.
+    # Sweep: unscheduled copies of revoked agents onto the clock.
+    # TW-787: the scope is the copy's own — a copy naming an agent is
+    # swept when THAT agent stands revoked, under the revocation
+    # covering it; an org-level copy follows the org's standing.
     swept: list[str] = []
-    status_cache: dict[str, str] = {}
+    status_cache: dict[tuple[str, str | None], str] = {}
     all_copies = db.table("agt_retained_copies").select("*").execute().data or []
     for copy in all_copies:
         if copy.get("purged_at") is not None or copy.get("purge_after") is not None:
             continue
         org_id = copy["org_id"]
-        if org_id not in status_cache:
-            status_cache[org_id] = agent_status(db, org_id)
-        if status_cache[org_id] != "revoked":
+        copy_agent = copy.get("agent_identity_id")
+        cache_key = (org_id, copy_agent)
+        if cache_key not in status_cache:
+            status_cache[cache_key] = agent_status(db, org_id, copy_agent)
+        if status_cache[cache_key] != "revoked":
             continue
-        covering = _latest_revoke_all(db, org_id)
+        covering = _covering_revoke_all(db, org_id, copy_agent)
         if covering is None:
             continue
         db.table("agt_retained_copies").update(
@@ -699,10 +855,12 @@ def run_purge(
             agent_identity_id=copy.get("agent_identity_id"),
         )
 
-    # Completion: every past-due revocation whose org has no
+    # Completion: every past-due revocation whose scope has no
     # outstanding scheduled copies — zero-copy revocations included.
+    # TW-787: a per-agent revocation completes on its own agent's
+    # copies; a roster-mate's outstanding purge never holds it open.
     completed_revocations: list[str] = []
-    outstanding_cache: dict[str, bool] = {}
+    outstanding_cache: dict[tuple[str, str | None], bool] = {}
     all_revocations = db.table("agt_revocations").select("*").execute().data or []
     for revocation in all_revocations:
         if revocation.get("purge_completed_at") is not None:
@@ -711,12 +869,16 @@ def run_purge(
         if due is None or due > moment:
             continue
         org_id = revocation["org_id"]
-        if org_id not in outstanding_cache:
-            outstanding_cache[org_id] = any(
-                c.get("purged_at") is None and c.get("purge_after") is not None
+        scope_agent = revocation.get("agent_identity_id")
+        cache_key = (org_id, scope_agent)
+        if cache_key not in outstanding_cache:
+            outstanding_cache[cache_key] = any(
+                c.get("purged_at") is None
+                and c.get("purge_after") is not None
+                and (scope_agent is None or c.get("agent_identity_id") == scope_agent)
                 for c in list_retained_copies(db, org_id)
             )
-        if outstanding_cache[org_id]:
+        if outstanding_cache[cache_key]:
             continue
         db.table("agt_revocations").update({"purge_completed_at": _ts(moment)}).eq(
             "id", revocation["id"]
