@@ -75,6 +75,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import sqlite3
 import time
 import uuid
@@ -331,6 +332,20 @@ class AgentTaskRuntime:
         conn.execute("PRAGMA journal_mode=WAL")
         return conn
 
+    def _register_secret_value(self, value: str) -> None:
+        """Register one string and its common encoded forms
+        (base64 standard and URL-safe, padding-stripped, and the
+        upper/lower case variants) for scrubbing (TW-824)."""
+        self._known_secrets.add(value)
+        encoded = base64.b64encode(value.encode()).decode()
+        self._known_secrets.add(encoded)
+        self._known_secrets.add(encoded.rstrip("="))
+        urlsafe = base64.urlsafe_b64encode(value.encode()).decode()
+        self._known_secrets.add(urlsafe)
+        self._known_secrets.add(urlsafe.rstrip("="))
+        self._known_secrets.add(value.upper())
+        self._known_secrets.add(value.lower())
+
     def _register_credentials(self, resolved: Any) -> None:
         """Register a resolved credential for scrubbing (TW-824).
 
@@ -345,20 +360,31 @@ class AgentTaskRuntime:
         one of those forms is scrubbed as well (H6, partial: split
         fragments and char-list renderings are NOT canonicalized —
         that remainder is ticketed separately, see the TW-769
-        evidence doc)."""
+        evidence doc).
+
+        Round 3 (Rex run-3, narrowed): registration also walks
+        string CONTENT. A composite leaf — the canonical
+        Authorization-header shape {"authorization": "Bearer
+        <SECRET>"} — embeds the token inside a larger string, so
+        the leaf's component tokens register as well: the leaf is
+        split on whitespace and on common separators/punctuation,
+        and every token of length >= 6 registers (with its encoded
+        forms, via the same helper). A handler echoing the BARE
+        token therefore scrubs exactly like a whole-leaf echo.
+        Transformed echoes of a token (hex, title-case, ROT13,
+        reversed, percent, zero-width, split base64) are NOT this
+        round's scope: they are ticketed as TW-832 [MED] and the
+        TW-831 fragmentation remainder."""
         if isinstance(resolved, str):
             if not resolved:
                 return
             leaf = resolved
-            self._known_secrets.add(leaf)
-            encoded = base64.b64encode(leaf.encode()).decode()
-            self._known_secrets.add(encoded)
-            self._known_secrets.add(encoded.rstrip("="))
-            urlsafe = base64.urlsafe_b64encode(leaf.encode()).decode()
-            self._known_secrets.add(urlsafe)
-            self._known_secrets.add(urlsafe.rstrip("="))
-            self._known_secrets.add(leaf.upper())
-            self._known_secrets.add(leaf.lower())
+            self._register_secret_value(leaf)
+            for chunk in leaf.split():
+                tokens = {chunk} | set(re.split(r"[^A-Za-z0-9]+", chunk))
+                for token in tokens:
+                    if len(token) >= 6:
+                        self._register_secret_value(token)
             return
         if isinstance(resolved, dict):
             for key, val in resolved.items():
@@ -378,7 +404,10 @@ class AgentTaskRuntime:
             return value
         if isinstance(value, str):
             out = value
-            for secret in self._known_secrets:
+            # Longest first: a registered component token must not
+            # partially redact a longer registered leaf and leave
+            # the leaf's remainder standing.
+            for secret in sorted(self._known_secrets, key=len, reverse=True):
                 out = out.replace(secret, "[redacted]")
             return out
         if isinstance(value, dict):

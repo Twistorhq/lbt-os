@@ -21,6 +21,7 @@ import binascii
 import html
 import re
 import unicodedata
+from urllib.parse import unquote
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -187,8 +188,18 @@ def _normalize_for_scan(text: str) -> str:
     ("&#105;gnore" -> "ignore"), combining marks are stripped via
     NFKD + a category-Mn filter ("i" + U+0301 -> "i"), and letter
     runs joined by any separator (".", "-", "/", "_") collapse
-    ("i.g.n.o.r.e" -> "ignore")."""
-    text = html.unescape(text or "")
+    ("i.g.n.o.r.e" -> "ignore").
+
+    Round 3 (Rex run-3): unescape and percent-decode run to a
+    fixpoint (max 3 passes), so double HTML entities
+    ("&amp;#105;gnore") and percent-encoded letters ("%69gnore")
+    fold to plain text before matching."""
+    text = text or ""
+    for _ in range(3):
+        folded = unquote(html.unescape(text))
+        if folded == text:
+            break
+        text = folded
     text = unicodedata.normalize("NFKD", text)
     text = "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
     text = unicodedata.normalize("NFC", text)
@@ -214,11 +225,26 @@ _GAP30 = r"[\s\S]{0,30}?"
 
 _INJECTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
+        # Round 3 (Rex run-3): the override family widens past the
+        # imperative verbs — instruction-NEGATION phrasings ("do not
+        # follow the instructions you were given", "stop following
+        # your instructions", "never follow", "do not obey"),
+        # "unlearn", and the act-as-if erasure ("act as if you never
+        # received any instructions") are the same instruction to
+        # drop the owner's instructions, in plain English.
         "ignore_instructions",
         re.compile(
-            r"\b(ignore|disregard|forget|overlook|disobey|pay\s+no\s+attention)\b"
+            r"(\b(ignore|disregard|forget|overlook|disobey|unlearn"
+            r"|pay\s+no\s+attention)\b"
             + _GAP60
-            + r"\b(instructions?|directives?|guidelines|rules|everything|all)\b",
+            + r"\b(instructions?|directives?|guidelines|rules|everything|all)\b"
+            r"|\b(do\s+not|don'?t|never|stop|cease)\s+"
+            r"(follow|following|obey|obeying)\b"
+            + _GAP40
+            + r"\b(instructions?|directives?|guidelines|orders|rules)\b"
+            r"|\bact\s+as\s+if\b"
+            + _GAP60
+            + r"\binstructions?\b)",
             re.I,
         ),
     ),
@@ -267,11 +293,14 @@ _INJECTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         "exfiltrate_send",
         re.compile(
             r"\b(send|forward|email|mail|upload|post|transmit|leak"
-            r"|exfiltrate|ship|text|message)\b"
+            r"|exfiltrate|ship|text|message|give|share|copy|dump"
+            r"|hand\s+over)\b"
             + _GAP60
             + r"\b((customer|client|patient|employee|contacts?|personal)\s+"
-            + r"(list|database|records?|roster|data|contacts?)"
-            + r"|the\s+(list|data)|database|roster|credentials|contacts)\b"
+            + r"(list|database|records?|roster|data|contacts?"
+            + r"|phone\s+numbers?|email\s+addresses|contact\s+details)"
+            + r"|the\s+(list|data)|database|roster|credentials|contacts"
+            + r"|phone\s+numbers?|email\s+addresses|contact\s+details)\b"
             + _GAP40
             + r"\b(to|at|@|https?://|out)\b",
             re.I,
@@ -282,11 +311,15 @@ _INJECTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         re.compile(r"\breveal\b" + _GAP40 + r"\b(prompt|instructions?|system)\b", re.I),
     ),
     (
+        # "follow" does not match the phrasal verb "follow up":
+        # "decode the VIN plate photo and follow up with the
+        # customer" is shop talk, not an encoded payload (Rex run-3
+        # benign FP, fixed at the pattern level).
         "encoded_payload",
         re.compile(
             r"\b(decode|decrypt|base64)\b"
             + _GAP30
-            + r"\b(follow|execute|obey|run|instructions?)\b",
+            + r"\b(follow(?!\s+up\b)|execute|obey|run|instructions?)\b",
             re.I,
         ),
     ),
@@ -302,7 +335,9 @@ _SQUASH_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "ignore_instructions",
         re.compile(
-            r"(ignore|disregard|forget|overlook|disobey|paynoattention)"
+            r"(ignore|disregard|forget|overlook|disobey|unlearn"
+            r"|paynoattention|donotfollow|donotobey|neverfollow"
+            r"|stopfollowing|actasif)"
             + _GAP60
             + r"(instructions?|directives?|guidelines|rules|everything|all)",
             re.I,
@@ -318,17 +353,25 @@ _SQUASH_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         ),
     ),
     (
+        # Destination set drops "out" in the squashed pass: with no
+        # word boundaries, "out" substring-matches inside "about"
+        # ("message the whole contacts list about the holiday
+        # hours" — Rex run-3 benign FP). "send the roster out" is
+        # still caught by the main pass, which has real boundaries.
         "exfiltrate_send",
         re.compile(
             r"(send|forward|email|mail|upload|post|transmit|leak"
-            r"|exfiltrate|ship|text|message)"
+            r"|exfiltrate|ship|text|message|give|share|copy|dump"
+            r"|handover)"
             + _GAP60
             + r"(customerlist|clientlist|patientlist|employeelist"
             r"|contactsdatabase|customerdatabase|clientdatabase"
             r"|customerdata|clientdata|clientroster|customerroster"
+            r"|customerphonenumbers|clientphonenumbers|phonenumbers"
+            r"|emailaddresses|contactdetails"
             r"|thelist|thedata|database|roster|credentials|contacts)"
             + _GAP40
-            + r"(to|at|https?|out)",
+            + r"(to|at|https?)",
             re.I,
         ),
     ),
@@ -368,11 +411,14 @@ def _squash_variants(squashed: str) -> list[str]:
 
 
 _B64_TOKEN = re.compile(r"[A-Za-z0-9+/]{16,}={0,2}")
+_HEX_TOKEN = re.compile(r"\b[0-9a-fA-F]{20,}\b")
 
 
 def _decoded_texts(content: str) -> list[str]:
-    """Base64-looking tokens in the content, decoded. An instruction
-    does not stop being one because it was encoded first."""
+    """Base64-looking and hex-looking tokens in the content,
+    decoded. An instruction does not stop being one because it was
+    encoded first (round 3: hex joins base64 — one decode pass
+    each, deterministic, no dependencies)."""
     out: list[str] = []
     for token in _B64_TOKEN.findall(content or ""):
         try:
@@ -382,7 +428,67 @@ def _decoded_texts(content: str) -> list[str]:
             continue
         if decoded and all(ch.isprintable() or ch in "\n\t" for ch in decoded):
             out.append(decoded)
+    for token in _HEX_TOKEN.findall(content or ""):
+        try:
+            raw = bytes.fromhex(token[: len(token) // 2 * 2])
+            decoded = raw.decode("utf-8")
+        except (UnicodeDecodeError, ValueError):
+            continue
+        if decoded and all(ch.isprintable() or ch in "\n\t" for ch in decoded):
+            out.append(decoded)
     return out
+
+
+# -- document-level signal combination (TW-818 round 3) -------------------
+#
+# The proximity patterns above have bounded windows by design; a
+# payload split by ~110 characters of ordinary prose walks between
+# them (Rex run-3 GAP probes). The rule that catches it without
+# flagging innocent prose is a COMBINATION, stated plainly:
+#
+#   a sensitive noun (customer list, phone numbers, roster, ...)
+#   AND a strong destination (an email address, a URL, or a phone
+#   number — not a bare "to"/"at", which innocent sentences carry)
+#   AND a signal verb: an exfiltration verb anywhere in the text,
+#   OR an override phrase anywhere in the text.
+#
+# The noun + strong-destination pair is the false-positive guard:
+# a document that merely mentions a list and an email address in
+# separate innocent sentences (no send-shaped verb, no override)
+# stays clean, as does every benign send whose object is not a
+# sensitive noun ("send the parts list to the supplier"). The
+# honest tradeoff: a benign document that DOES combine all three
+# signals across sentences (a send verb, a sensitive noun, and an
+# address, each innocent in isolation) will flag — safe direction,
+# and the flag is owner visibility, not an action.
+_SENSITIVE_NOUN_DOC = re.compile(
+    r"\b((customer|client|patient|employee|contacts?|personal)\s+"
+    r"(list|database|records?|roster|data|contacts?"
+    r"|phone\s+numbers?|email\s+addresses|contact\s+details)"
+    r"|the\s+(list|data)|database|roster|credentials|contacts"
+    r"|phone\s+numbers?|email\s+addresses|contact\s+details)\b",
+    re.I,
+)
+_STRONG_DESTINATION = re.compile(
+    r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]+"
+    r"|https?://\S+|\b\d{3}[-.\s]\d{4}\b)",
+    re.I,
+)
+_EXFIL_VERB_DOC = re.compile(
+    r"\b(send|forward|email|mail|upload|post|transmit|leak"
+    r"|exfiltrate|ship|text|message|give|share|copy|dump"
+    r"|hand\s+over)\b",
+    re.I,
+)
+_OVERRIDE_FLAG_NAMES = frozenset(
+    {
+        "ignore_instructions",
+        "override_rules",
+        "safety_bypass",
+        "new_instructions",
+        "system_impersonation",
+    }
+)
 
 
 def scan_injections(content: str) -> list[str]:
@@ -392,10 +498,13 @@ def scan_injections(content: str) -> list[str]:
 
     The scan normalizes first (TW-818: zero-width, homoglyph, and
     spacing evasions fold away; round 2 adds HTML entities,
-    combining marks, and separator-joined letters), crosses line
+    combining marks, and separator-joined letters; round 3 runs
+    unescape + percent-decode to a fixpoint and widens the plain-
+    English override/exfiltration families), crosses line
     breaks, scans leet / ROT13 / reversed decode passes over the
-    squashed form, and also scans anything base64-decoded out of
-    the content. Verb patterns are
+    squashed form, scans anything base64- or hex-decoded out of
+    the content, and applies the document-level signal
+    combination stated above the scan helpers. Verb patterns are
     noun-bound on purpose: ordinary shop phrasing ("send the
     estimate to Mrs. Lee", "disregard the previous invoice") carries
     no sensitive object and stays unflagged."""
@@ -409,6 +518,16 @@ def scan_injections(content: str) -> list[str]:
     for name, pat in _SQUASH_HEADER_PATTERNS:
         if name not in found and pat.search(text.replace(" ", "")):
             found.append(name)
+    if "exfiltrate_send" not in found:
+        if (
+            _SENSITIVE_NOUN_DOC.search(text)
+            and _STRONG_DESTINATION.search(text)
+            and (
+                _EXFIL_VERB_DOC.search(text)
+                or _OVERRIDE_FLAG_NAMES.intersection(found)
+            )
+        ):
+            found.append("exfiltrate_send")
     for decoded in _decoded_texts(content or ""):
         inner = _normalize_for_scan(decoded)
         hits = [name for name, pat in _INJECTION_PATTERNS if pat.search(inner)]
