@@ -73,6 +73,7 @@ runtime's agent, when both name one) before anything runs
 
 from __future__ import annotations
 
+import base64
 import json
 import sqlite3
 import time
@@ -329,6 +330,44 @@ class AgentTaskRuntime:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         return conn
+
+    def _register_credentials(self, resolved: Any) -> None:
+        """Register a resolved credential for scrubbing (TW-824).
+
+        The resolver contract returns Any: an OAuth-shaped bundle
+        ({"access_token": ..., "kind": "bearer"}) is a permitted
+        resolution, so registration walks the value and registers
+        EVERY leaf string — dict keys and values, list/tuple/set
+        items, nested — not only a top-level str (Rex run-2 H7).
+        Alongside each leaf, its common encoded forms register too
+        (base64 standard and URL-safe, padding-stripped, and the
+        upper/lower case variants), so a handler echoing a leaf in
+        one of those forms is scrubbed as well (H6, partial: split
+        fragments and char-list renderings are NOT canonicalized —
+        that remainder is ticketed separately, see the TW-769
+        evidence doc)."""
+        if isinstance(resolved, str):
+            if not resolved:
+                return
+            leaf = resolved
+            self._known_secrets.add(leaf)
+            encoded = base64.b64encode(leaf.encode()).decode()
+            self._known_secrets.add(encoded)
+            self._known_secrets.add(encoded.rstrip("="))
+            urlsafe = base64.urlsafe_b64encode(leaf.encode()).decode()
+            self._known_secrets.add(urlsafe)
+            self._known_secrets.add(urlsafe.rstrip("="))
+            self._known_secrets.add(leaf.upper())
+            self._known_secrets.add(leaf.lower())
+            return
+        if isinstance(resolved, dict):
+            for key, val in resolved.items():
+                self._register_credentials(key)
+                self._register_credentials(val)
+            return
+        if isinstance(resolved, (list, tuple, set, frozenset)):
+            for item in resolved:
+                self._register_credentials(item)
 
     def _scrub(self, value: Any) -> Any:
         """Replace every known resolved credential value with a
@@ -843,8 +882,7 @@ class AgentTaskRuntime:
                 # raises can carry it into a persisted surface.
                 resolved = self._credential_resolver(step.credential_ref)
                 tctx.credentials[step.credential_ref] = resolved
-                if isinstance(resolved, str) and resolved:
-                    self._known_secrets.add(resolved)
+                self._register_credentials(resolved)
                 self._audit(
                     task_id,
                     "credential_resolved",

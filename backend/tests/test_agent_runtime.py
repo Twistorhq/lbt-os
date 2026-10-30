@@ -1355,9 +1355,7 @@ class TestCredentialRedactionRound2:
 
     def test_nested_bundle_leaves_are_redacted(self, db, tmp_path, tolls, tools):
         nested = {"tokens": [{"refresh": self.SECRET}], "kind": "oauth"}
-        rt = runtime(
-            db, tmp_path, tolls, tools, credential_resolver=lambda ref: nested
-        )
+        rt = runtime(db, tmp_path, tolls, tools, credential_resolver=lambda ref: nested)
         task = rt.enqueue(owner_task("book"))
 
         def echo(ctx):
@@ -1378,9 +1376,7 @@ class TestCredentialRedactionRound2:
         blob = str(rt.get_task(task["id"])) + str(rt.list_audit(task["id"])) + str(out)
         assert self.SECRET not in blob
 
-    def test_bundle_credential_exception_is_redacted(
-        self, db, tmp_path, tolls, tools
-    ):
+    def test_bundle_credential_exception_is_redacted(self, db, tmp_path, tolls, tools):
         rt = runtime(
             db,
             tmp_path,
@@ -1413,9 +1409,7 @@ class TestCredentialRedactionRound2:
         self, db, tmp_path, tolls, tools
     ):
         secret = "Sekret-Value-123"
-        rt = runtime(
-            db, tmp_path, tolls, tools, credential_resolver=lambda ref: secret
-        )
+        rt = runtime(db, tmp_path, tolls, tools, credential_resolver=lambda ref: secret)
         task = rt.enqueue(owner_task("book"))
 
         def transformed(ctx):

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import html
 import re
 import unicodedata
 from dataclasses import dataclass, field
@@ -180,14 +181,28 @@ def _normalize_for_scan(text: str) -> str:
     unicode compatibility forms, zero-width characters, Cyrillic /
     Greek homoglyphs, whitespace runs, and spaced-out letter runs
     ("i g n o r e" -> "ignore"). Matching then runs over the whole
-    text, newlines included — a line break is not a hiding place."""
-    text = unicodedata.normalize("NFKC", text or "")
+    text, newlines included — a line break is not a hiding place.
+
+    Round 2 (Rex run-2): HTML entities are unescaped first
+    ("&#105;gnore" -> "ignore"), combining marks are stripped via
+    NFKD + a category-Mn filter ("i" + U+0301 -> "i"), and letter
+    runs joined by any separator (".", "-", "/", "_") collapse
+    ("i.g.n.o.r.e" -> "ignore")."""
+    text = html.unescape(text or "")
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
+    text = unicodedata.normalize("NFC", text)
     text = text.translate(_ZERO_WIDTH)
     text = "".join(_HOMOGLYPHS.get(ch, ch) for ch in text)
     text = re.sub(r"\s+", " ", text)
     text = re.sub(
         r"(?<![A-Za-z])(?:[A-Za-z] ){2,}[A-Za-z](?![A-Za-z])",
         lambda m: m.group(0).replace(" ", ""),
+        text,
+    )
+    text = re.sub(
+        r"(?<![A-Za-z])(?:[A-Za-z][.\-/_]){2,}[A-Za-z](?![A-Za-z])",
+        lambda m: re.sub(r"[.\-/_]", "", m.group(0)),
         text,
     )
     return text
@@ -201,7 +216,7 @@ _INJECTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "ignore_instructions",
         re.compile(
-            r"\b(ignore|disregard|forget|overlook)\b"
+            r"\b(ignore|disregard|forget|overlook|disobey|pay\s+no\s+attention)\b"
             + _GAP60
             + r"\b(instructions?|directives?|guidelines|rules|everything|all)\b",
             re.I,
@@ -227,19 +242,36 @@ _INJECTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ),
     ("new_instructions", re.compile(r"\bnew\s+instructions?\s*:", re.I)),
     (
+        # Header-shaped system claims only: a bracketed or quoted
+        # header, or "system message/prompt:". The bare noun must
+        # NOT flag — "The system: check the HVAC system" is shop
+        # talk (Rex run-2 benign FP).
         "system_impersonation",
-        re.compile(r"(^|[>\"']\s*|\s)system\s*(message|prompt)?\s*:", re.I),
+        re.compile(
+            r"(\[\s*system\s*\]|<<\s*sys(tem)?\s*>>|#{2,}\s*system\b"
+            r"|\bsystem\s+(message|prompt)\s*:|(^|[>\"']\s*)system\s*:)",
+            re.I,
+        ),
     ),
     (
         # A send-shaped verb plus a SENSITIVE object plus a
         # destination. A bare "send X to Y" is ordinary shop talk
-        # ("send the estimate to Mrs. Lee") and must not flag.
+        # ("send the estimate to Mrs. Lee") and must not flag; the
+        # object is noun-bound to qualified sensitive phrases
+        # ("customer list", "contacts database", "the list",
+        # "the data", a bare database/roster/credentials/contacts)
+        # so "send the parts list to the supplier" stays clean
+        # (Rex run-2: verb roster widened — exfiltrate, ship,
+        # text, message, mail — the noun bound is what keeps
+        # benign sends clean).
         "exfiltrate_send",
         re.compile(
-            r"\b(send|forward|email|upload|post|transmit|leak)\b"
+            r"\b(send|forward|email|mail|upload|post|transmit|leak"
+            r"|exfiltrate|ship|text|message)\b"
             + _GAP60
-            + r"\b(customer|client|patient|employee|contact)?\s*"
-            + r"(list|database|records?|roster|data|credentials|contacts)\b"
+            + r"\b((customer|client|patient|employee|contacts?|personal)\s+"
+            + r"(list|database|records?|roster|data|contacts?)"
+            + r"|the\s+(list|data)|database|roster|credentials|contacts)\b"
             + _GAP40
             + r"\b(to|at|@|https?://|out)\b",
             re.I,
@@ -260,15 +292,17 @@ _INJECTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ),
 )
 
-# Second pass over the text with ALL spacing removed, using
-# substring (not word-boundary) patterns: a fully spaced-out
-# payload ("i g n o r e  y o u r  i n s t r u c t i o n s")
-# collapses into one long token where \b anchors never fire.
+# Second pass over the text with ALL non-alphanumerics removed,
+# using substring (not word-boundary) patterns: a fully spaced-out
+# or separator-joined payload ("i g n o r e ...", "i.g.n.o.r.e",
+# "ign_ore") collapses into one long token where \b anchors never
+# fire. The exfiltration nouns are the qualified sensitive phrases
+# in squashed form, for the same benign reason as the main pass.
 _SQUASH_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "ignore_instructions",
         re.compile(
-            r"(ignore|disregard|forget|overlook)"
+            r"(ignore|disregard|forget|overlook|disobey|paynoattention)"
             + _GAP60
             + r"(instructions?|directives?|guidelines|rules|everything|all)",
             re.I,
@@ -283,16 +317,18 @@ _SQUASH_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             re.I,
         ),
     ),
-    ("new_instructions", re.compile(r"newinstructions?:", re.I)),
-    ("system_impersonation", re.compile(r"system(message|prompt)?:", re.I)),
     (
         "exfiltrate_send",
         re.compile(
-            r"(send|forward|email|upload|post|transmit|leak)"
+            r"(send|forward|email|mail|upload|post|transmit|leak"
+            r"|exfiltrate|ship|text|message)"
             + _GAP60
-            + r"(list|database|records?|roster|data|credentials|contacts)"
+            + r"(customerlist|clientlist|patientlist|employeelist"
+            r"|contactsdatabase|customerdatabase|clientdatabase"
+            r"|customerdata|clientdata|clientroster|customerroster"
+            r"|thelist|thedata|database|roster|credentials|contacts)"
             + _GAP40
-            + r"(to|at|@|https?://|out)",
+            + r"(to|at|https?|out)",
             re.I,
         ),
     ),
@@ -301,6 +337,35 @@ _SQUASH_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         re.compile(r"reveal" + _GAP40 + r"(prompt|instructions?|system)", re.I),
     ),
 )
+
+# Header patterns keep their colon, so they run over the
+# space-only squash (where ":" survives), never the alnum squash.
+# A bare squashed "system:" is excluded for the same benign reason
+# as the main pass.
+_SQUASH_HEADER_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("new_instructions", re.compile(r"newinstructions?:", re.I)),
+    ("system_impersonation", re.compile(r"system(message|prompt):", re.I)),
+)
+
+_LEET_TABLE = str.maketrans("103457", "ioeast")
+_ROT13_TABLE = str.maketrans(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+    "NOPQRSTUVWXYZABCDEFGHIJKLMnopqrstuvwxyzabcdefghijklm",
+)
+
+
+def _squash_variants(squashed: str) -> list[str]:
+    """Deterministic decode passes over the squashed form (TW-818
+    round 2): the text itself, leet-folded, ROT13-decoded, and
+    reversed. Each is cheap and total; a payload written in any of
+    these forms reads as plain English in exactly one variant."""
+    return [
+        squashed,
+        squashed.translate(_LEET_TABLE),
+        squashed.translate(_ROT13_TABLE),
+        squashed[::-1],
+    ]
+
 
 _B64_TOKEN = re.compile(r"[A-Za-z0-9+/]{16,}={0,2}")
 
@@ -326,16 +391,23 @@ def scan_injections(content: str) -> list[str]:
     on — only the pattern names reach the audit feed.
 
     The scan normalizes first (TW-818: zero-width, homoglyph, and
-    spacing evasions fold away), crosses line breaks, and also scans
-    anything base64-decoded out of the content. Verb patterns are
+    spacing evasions fold away; round 2 adds HTML entities,
+    combining marks, and separator-joined letters), crosses line
+    breaks, scans leet / ROT13 / reversed decode passes over the
+    squashed form, and also scans anything base64-decoded out of
+    the content. Verb patterns are
     noun-bound on purpose: ordinary shop phrasing ("send the
     estimate to Mrs. Lee", "disregard the previous invoice") carries
     no sensitive object and stays unflagged."""
     text = _normalize_for_scan(content or "")
     found = [name for name, pat in _INJECTION_PATTERNS if pat.search(text)]
-    squashed = text.replace(" ", "")
-    for name, pat in _SQUASH_PATTERNS:
-        if name not in found and pat.search(squashed):
+    squashed = re.sub(r"[^A-Za-z0-9]", "", text)
+    for variant in _squash_variants(squashed):
+        for name, pat in _SQUASH_PATTERNS:
+            if name not in found and pat.search(variant):
+                found.append(name)
+    for name, pat in _SQUASH_HEADER_PATTERNS:
+        if name not in found and pat.search(text.replace(" ", "")):
             found.append(name)
     for decoded in _decoded_texts(content or ""):
         inner = _normalize_for_scan(decoded)
