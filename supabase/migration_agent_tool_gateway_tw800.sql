@@ -14,11 +14,21 @@
 -- while a call waits for approval still fences it.
 --
 -- agt_tool_calls is append-only and hash-chained per org: each row
--- carries the previous row's hash, so a tampered or deleted row
--- breaks verification (service.verify_chain). The audit rows store
--- an args fingerprint (sha256 + key names), never arg values - the
--- values live only on the approval row, which needs them to execute
--- after the owner approves, and only until it is decided.
+-- carries the previous row's hash as the chain link, and row_hash
+-- covers the row's canonical content - org, call, seq, kind, tool,
+-- action class, channel, actor, grant attribution (grant_id), the
+-- args fingerprint and key names, the detail payload, and the row
+-- timestamp normalized to UTC Z form before hashing (the write and
+-- verify paths share one content function, so a PostgREST '+00:00'
+-- rendering of the same instant verifies identically). Rewriting
+-- any covered field, or deleting a row, breaks verification
+-- (service.verify_chain). Outside the hashed content: the
+-- surrogate id, and prev_hash itself - prev_hash is the link
+-- input, and a rewritten prev_hash fails the next row's link
+-- check. The audit rows store an args fingerprint (sha256 + key
+-- names), never arg values - the values live only on the approval
+-- row, which needs them to execute after the owner approves, and
+-- only until it is decided.
 --
 -- RLS deny-all (service role only). The backend filters org_id
 -- manually on every query (database.py discipline).
@@ -80,7 +90,8 @@ CREATE TABLE IF NOT EXISTS agt_tool_approvals (
     amount_cents BIGINT CHECK (amount_cents IS NULL OR amount_cents >= 0),
     requested_by TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN (
-        'pending', 'approved', 'denied', 'expired', 'executed', 'fenced'
+        'pending', 'approved', 'denied', 'expired', 'executed', 'fenced',
+        'execution_failed', 'tampered'
     )),
     decided_by TEXT,
     decided_at TIMESTAMPTZ,

@@ -78,6 +78,14 @@ APPROVAL_STATUSES: tuple[str, ...] = (
     "expired",
     "executed",
     "fenced",
+    # Terminal truth for an approved call whose execution failed:
+    # without it the row sits at 'approved' forever and reads as
+    # settled-and-ran when it did not run.
+    "execution_failed",
+    # Terminal state for a parked row whose stored args no longer
+    # match the fingerprint sealed at park time (TW-806): execution
+    # refused, the mismatch is on the audit chain.
+    "tampered",
 )
 
 

@@ -54,6 +54,8 @@ class TestMigrationContract:
             "expired",
             "executed",
             "fenced",
+            "execution_failed",
+            "tampered",
         ):
             assert f"'{status}'" in SQL
 

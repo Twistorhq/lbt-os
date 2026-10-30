@@ -103,3 +103,62 @@ class TestDecideRoleGate:
     def test_missing_token_is_401(self, client):
         r = client.post("/agent-tools/call", json={"tool": "flows.list"})
         assert r.status_code == 401
+
+    def test_second_decide_is_409(self, client, db, keypair):
+        approval_id = _park(db)
+        headers = _headers(keypair, OWNER_USER, "owner")
+        r = client.post(
+            f"/agent-tools/approvals/{approval_id}/decide",
+            json={"approve": False},
+            headers=headers,
+        )
+        assert r.status_code == 200
+        r = client.post(
+            f"/agent-tools/approvals/{approval_id}/decide",
+            json={"approve": True},
+            headers=headers,
+        )
+        assert r.status_code == 409
+
+
+class TestApprovalsReadGate:
+    """Approval rows are the one place arg VALUES live. The list is
+    member-visible but value-free; the single-row read that carries
+    values is owner/admin only (TW-800 fix round, finding 6)."""
+
+    def test_member_list_carries_no_arg_values(self, client, db, keypair):
+        approval_id = _park(db)
+        r = client.get(
+            "/agent-tools/approvals", headers=_headers(keypair, STAFF_USER, "member")
+        )
+        assert r.status_code == 200
+        approvals = r.json()["approvals"]
+        assert [a["id"] for a in approvals] == [approval_id]
+        assert "args" not in approvals[0]
+        assert "w1" not in str(approvals[0])
+
+    def test_member_cannot_read_approval_detail(self, client, db, keypair):
+        approval_id = _park(db)
+        r = client.get(
+            f"/agent-tools/approvals/{approval_id}",
+            headers=_headers(keypair, STAFF_USER, "member"),
+        )
+        assert r.status_code == 403
+
+    def test_owner_reads_approval_detail_with_args(self, client, db, keypair):
+        approval_id = _park(db)
+        r = client.get(
+            f"/agent-tools/approvals/{approval_id}",
+            headers=_headers(keypair, OWNER_USER, "owner"),
+        )
+        assert r.status_code == 200
+        approval = r.json()["approval"]
+        assert approval["id"] == approval_id
+        assert approval["args"] == {"workflow_id": "w1"}
+
+    def test_owner_detail_missing_is_404(self, client, keypair):
+        r = client.get(
+            "/agent-tools/approvals/nope",
+            headers=_headers(keypair, OWNER_USER, "owner"),
+        )
+        assert r.status_code == 404

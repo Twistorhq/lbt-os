@@ -12,6 +12,12 @@ or admin role claim. Approving a parked call is the owner saying
 "yes, this one" - a staff token must not be able to say it. Invokes
 stay member-visible: the agent acts under the caller's identity and
 the ledger + policy do the gating.
+
+Approval rows are the one place stored arg VALUES live (recipient
+addresses, message bodies, workflow inputs). The approvals LIST is
+member-visible but value-free (the service strips args from list
+payloads); the single-row read that carries values sits behind the
+same owner/admin gate as deciding.
 """
 
 from __future__ import annotations
@@ -111,6 +117,23 @@ def get_approvals(org_id: str = Depends(_require_org), db: Client = Depends(get_
         "org_id": org_id,
         "approvals": service.list_approvals(db, org_id, status="pending"),
     }
+
+
+@router.get("/approvals/{approval_id}")
+def get_approval(
+    approval_id: str,
+    org_id: str = Depends(_require_org),
+    _role_gate: None = Depends(_require_mutation_role),
+    db: Client = Depends(get_db),
+):
+    """One parked call WITH its stored arg values - owner/admin
+    only, same gate as deciding. The list endpoint never carries
+    values; this detail read is where Spec 6's owner surface gets
+    them."""
+    row = service.get_approval(db, org_id, approval_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="approval not found")
+    return {"org_id": org_id, "approval": row}
 
 
 @router.post("/approvals/{approval_id}/decide")

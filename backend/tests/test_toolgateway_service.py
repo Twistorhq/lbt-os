@@ -20,6 +20,8 @@ The behaviors pinned here:
 - an executor exception is a 'failed' outcome, never a crash.
 """
 
+from datetime import datetime
+
 import pytest
 
 from app.agentperms import service as ledger_service
@@ -458,6 +460,230 @@ class TestAuditChain:
         )
         with pytest.raises(GatewayError):
             service.decide(db, OTHER_ORG, out.approval_id, actor=OWNER, approve=True)
+
+
+# -- chain robustness: timestamp forms + full field coverage ----------------
+#
+# Rosa's TW-800 fix-round probes. The verbatim fake stores rows exactly
+# as written, which hid both bugs: production rows come back through
+# PostgREST with TIMESTAMPTZ rendered '+00:00' (not the inserted 'Z'
+# form), and the hashed content used to omit the attribution fields.
+
+
+def _executed_bound_call(db):
+    saved = grant(db, "email.send")
+    ex = Recorder(result={"id": "msg-1"})
+    out = service.invoke(
+        db,
+        ORG,
+        "notify.send",
+        {"channel": "email", "to": "a@b.co", "body": "hi"},
+        actor=AGENT,
+        executor=ex,
+    )
+    assert out.status == "executed"
+    return saved
+
+
+def _row(db, kind):
+    return [r for r in db.tables["agt_tool_calls"] if r["kind"] == kind][0]
+
+
+class TestChainTimestampForms:
+    def test_postgrest_offset_form_verifies(self, db):
+        # PostgREST renders TIMESTAMPTZ with '+00:00', not 'Z'. A
+        # healthy chain read back that way must still verify.
+        ex = Recorder()
+        service.invoke(db, ORG, "flows.list", {}, actor=AGENT, executor=ex)
+        service.invoke(db, ORG, "flows.list", {}, actor=AGENT, executor=ex)
+        for row in db.tables["agt_tool_calls"]:
+            row["at"] = row["at"].replace("Z", "+00:00")
+        assert service.verify_chain(db, ORG)["ok"] is True
+
+    def test_datetime_object_form_verifies(self, db):
+        ex = Recorder()
+        service.invoke(db, ORG, "flows.list", {}, actor=AGENT, executor=ex)
+        row = db.tables["agt_tool_calls"][0]
+        row["at"] = datetime.fromisoformat(row["at"].replace("Z", "+00:00"))
+        assert service.verify_chain(db, ORG)["ok"] is True
+
+
+class TestChainCoversAttributionFields:
+    def test_tampered_grant_id_breaks_verification(self, db):
+        _executed_bound_call(db)
+        assert service.verify_chain(db, ORG)["ok"] is True
+        _row(db, "executed")["grant_id"] = "00000000-0000-0000-0000-000000000000"
+        verdict = service.verify_chain(db, ORG)
+        assert verdict["ok"] is False
+        assert verdict["broken_seq"] == _row(db, "executed")["seq"]
+
+    def test_tampered_detail_breaks_verification(self, db):
+        _executed_bound_call(db)
+        _row(db, "executed")["detail"] = {"result_keys": ["forged"]}
+        assert service.verify_chain(db, ORG)["ok"] is False
+
+    def test_tampered_args_keys_breaks_verification(self, db):
+        _executed_bound_call(db)
+        _row(db, "executed")["args_keys"] = ["to"]
+        assert service.verify_chain(db, ORG)["ok"] is False
+
+    def test_tampered_channel_breaks_verification(self, db):
+        _executed_bound_call(db)
+        _row(db, "executed")["channel"] = "sms"
+        assert service.verify_chain(db, ORG)["ok"] is False
+
+
+# -- decide(): the atomic claim ------------------------------------------------
+
+
+class _SnapshotDb:
+    """Just enough of FakeDb for a select against frozen rows."""
+
+    def __init__(self, table, rows):
+        self.tables = {table: rows}
+        self.fail_on_insert = set()
+
+
+class _StaleApprovalsTable:
+    """Selects served from a frozen snapshot; writes hit the real
+    table. Models two decide requests that both read 'pending'
+    before either committed: the read is stale, the claim is not."""
+
+    def __init__(self, real_table, snapshot):
+        self._real = real_table
+        self._snapshot = snapshot
+
+    def select(self, _cols="*"):
+        shim = _SnapshotDb("agt_tool_approvals", self._snapshot)
+        return _Query(shim, "agt_tool_approvals", "select")
+
+    def insert(self, row):
+        return self._real.insert(row)
+
+    def update(self, payload):
+        return self._real.update(payload)
+
+    def upsert(self, payload, on_conflict=None):
+        return self._real.upsert(payload, on_conflict)
+
+
+class _StaleApprovalReadDb:
+    def __init__(self, real, snapshot):
+        self._real = real
+        self._snapshot = snapshot
+
+    def table(self, name):
+        if name == "agt_tool_approvals":
+            return _StaleApprovalsTable(self._real.table(name), self._snapshot)
+        return self._real.table(name)
+
+
+class TestDecideRace:
+    def test_concurrent_decide_executes_exactly_once(self, db):
+        ex = Recorder(result={"run_id": "r1"})
+        out = service.invoke(
+            db,
+            ORG,
+            "flows.trigger",
+            {"workflow_id": "w1"},
+            actor=AGENT,
+            executor=ex,
+        )
+        assert out.status == "pending_approval"
+        # Both racers fetched the row while it was pending.
+        snapshot = [dict(r) for r in db.tables["agt_tool_approvals"]]
+        winner = service.decide(
+            db, ORG, out.approval_id, actor=OWNER, approve=True, executor=ex
+        )
+        assert winner.status == "executed"
+        stale = _StaleApprovalReadDb(db, snapshot)
+        with pytest.raises(GatewayError):
+            service.decide(
+                stale, ORG, out.approval_id, actor=OWNER, approve=True, executor=ex
+            )
+        assert len(ex.calls) == 1
+        assert db.tables["agt_tool_approvals"][0]["status"] == "executed"
+
+
+# -- approval terminal states + error shape ----------------------------------
+
+
+class TestApprovalTerminalStates:
+    def test_failed_execution_marks_execution_failed(self, db):
+        ex = Recorder(raises=RuntimeError("workflow engine down"))
+        out = service.invoke(
+            db, ORG, "flows.trigger", {"workflow_id": "w1"}, actor=AGENT, executor=ex
+        )
+        done = service.decide(
+            db, ORG, out.approval_id, actor=OWNER, approve=True, executor=ex
+        )
+        assert done.status == "failed"
+        row = db.tables["agt_tool_approvals"][0]
+        # Not 'approved' forever: the row tells the truth.
+        assert row["status"] == "execution_failed"
+        assert service.verify_chain(db, ORG)["ok"] is True
+
+    def test_malformed_expires_at_is_a_gateway_error(self, db):
+        ex = Recorder()
+        out = service.invoke(
+            db, ORG, "flows.trigger", {"workflow_id": "w1"}, actor=AGENT, executor=ex
+        )
+        db.tables["agt_tool_approvals"][0]["expires_at"] = "not-a-timestamp"
+        with pytest.raises(GatewayError):
+            service.decide(
+                db, ORG, out.approval_id, actor=OWNER, approve=True, executor=ex
+            )
+        assert ex.calls == []
+
+    def test_tampered_stored_args_refuse_execution(self, db):
+        # Rex's TW-806 probe: the parked row's args are mutated
+        # after parking (flow-A becomes flow-B-ATTACKER). The owner
+        # approves in good faith; execution must refuse, because
+        # the stored args no longer match the fingerprint sealed
+        # at park time.
+        ex = Recorder()
+        out = service.invoke(
+            db,
+            ORG,
+            "flows.trigger",
+            {"workflow_id": "flow-A"},
+            actor=AGENT,
+            executor=ex,
+        )
+        assert out.status == "pending_approval"
+        row = db.tables["agt_tool_approvals"][0]
+        row["args"] = {"workflow_id": "flow-B-ATTACKER"}
+        done = service.decide(
+            db, ORG, out.approval_id, actor=OWNER, approve=True, executor=ex
+        )
+        assert done.status == "denied"
+        assert done.reason == "args_hash_mismatch"
+        assert ex.calls == []
+        assert row["status"] == "tampered"
+        # The mismatch is on the chain, fingerprints only.
+        denied = [r for r in service.list_calls(db, ORG) if r["kind"] == "denied"]
+        assert len(denied) == 1
+        assert denied[0]["detail"]["reason"] == "args_hash_mismatch"
+        assert "flow-B-ATTACKER" not in str(denied[0])
+        assert service.verify_chain(db, ORG)["ok"] is True
+
+    def test_list_approvals_never_carries_arg_values(self, db):
+        ex = Recorder()
+        service.invoke(
+            db,
+            ORG,
+            "flows.trigger",
+            {"workflow_id": "w1", "input": {"secret_note": "do-not-list"}},
+            actor=AGENT,
+            executor=ex,
+        )
+        pending = service.list_approvals(db, ORG)
+        assert len(pending) == 1
+        assert "args" not in pending[0]
+        assert "do-not-list" not in str(pending[0])
+        # The gated single-row read keeps the values execution needs.
+        full = service.get_approval(db, ORG, pending[0]["id"])
+        assert full["args"]["input"] == {"secret_note": "do-not-list"}
 
 
 # -- immediate use: the default executor, end to end -------------------------
