@@ -459,9 +459,13 @@ _EXFIL_NOUN_STR = (
     r"|phone\s+numbers?|email\s+addresses|contact\s+details)"
 )
 _EXFIL_PROXIMITY = re.compile(
-    r"\b" + _EXFIL_VERB_STR + r"\b"
+    r"\b"
+    + _EXFIL_VERB_STR
+    + r"\b"
     + _GAP60
-    + r"\b" + _EXFIL_NOUN_STR + r"\b"
+    + r"\b"
+    + _EXFIL_NOUN_STR
+    + r"\b"
     + _GAP40
     + r"\b(to|at|@|https?://|out)\b",
     re.I,
@@ -473,13 +477,17 @@ _READ_OUT = re.compile(
     + _GAP60
     + r"\bread\b"
     + _GAP40
-    + r"\b" + _EXFIL_NOUN_STR + r"\b",
+    + r"\b"
+    + _EXFIL_NOUN_STR
+    + r"\b",
     re.I,
 )
 # A send verb whose object is a bare reference ("a copy of it"):
 # the shape of the second half of a two-sentence reference split.
 _REF_SEND = re.compile(
-    r"\b" + _EXFIL_VERB_STR + r"\b"
+    r"\b"
+    + _EXFIL_VERB_STR
+    + r"\b"
     + _GAP40
     + r"\b(a\s+copy\s+of\s+(it|them)|copy\s+of\s+(it|them))\b",
     re.I,
