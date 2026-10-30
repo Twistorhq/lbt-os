@@ -1065,6 +1065,133 @@ TestScannerBatteryRound9 (71 cases).
   2/2, named residual 1/1 clean, employee flow 1/1
   clean.
 
+## 2k. Fix round 10 (Rex re-probe run-10: HOLD stands on TW-818, one sub-family)
+
+Rosa APPROVED round 9. Rex's re-probe run-10 verified
+release items (2) copy subjects and (3) benign corpora
+MET outright — fresh S9 5/5 flagged, controls 3/3
+clean, B9 8/8 clean — and ACCEPTED the round-9
+squashed-verbless boundary as a named residual (below).
+The hold stands on ONE sub-family of item (1), with
+the narrowed release condition stated on TW-818. This
+round is TW-818 only; the credential code is untouched
+(the diff is models.py, the runtime tests, and this
+doc). RED (commit 45bfa53, tests only): 11 failing on
+baeffc5 behavior — the V2 participle-first shape, 6
+diag10 inversions, 4 diag10b cells (the URL
+destinations, the adverb-before-destination cell, the
+phone-forwarded cell); 51 round-10 tests passing
+(every V2/S9/S9C/B9/SQ set member that already held,
+the diag10 guards, the heading guards). GREEN: commit
+5f832b9. Rex's run-10 battery (probe_round10.py),
+diagnostic (probe_diag10.py), and variable isolation
+(probe_diag10b.py) are adopted verbatim in
+TestScannerBatteryRound10 (62 cases).
+
+- 1. The sub-family: inverted verbless forms —
+  participle + STRONG destination + qualified noun, IN
+  THAT ORDER (the destination interposed between the
+  participle and the noun, or heading its own
+  segment). Coverage inside it was inconsistent, the
+  tell of incidental rather than designed coverage:
+  "Mailed to a@b.c: the full client roster" flagged
+  while "Mailed nightly to a@b.c: the full client
+  roster" walked (an adverb interposed between the
+  participle and the destination); an exported+URL
+  form flagged while mailed/sent+URL walked (no
+  scoping line explained the difference); "Nightly to
+  a@b.c. The full client roster, mailed" walked (the
+  destination heading its own segment, no pairing read
+  it). His variable isolation (probe_diag10b) fixes
+  the shape: participle x destination type x adverb
+  position. Diagnosis, verified by instrumented probe
+  before the fix: the flagging inverted cases fired
+  only through the round-9 participle-to-noun
+  alternative, whose 20-char gap happened to fit a
+  short email destination with no adverb in it; the
+  adverb and URL cells outgrew the gap, and the
+  destination-first cross-segment order had no pairing
+  at all (the destination-first pairing required a
+  reference adverb in the second segment).
+- 2. Fix, same-segment: _PASSIVE_SIGNAL gains the
+  destination-interposed alternative — participle +
+  strong destination + qualified noun, in that order,
+  with 40-char gaps on both sides of the destination
+  sized for adverbials. The destination is inside the
+  signal itself, so the sentence-level combination and
+  every pairing that consumes the signal accept the
+  inverted form wherever they accept the signal,
+  uniformly across the participle class and the
+  destination types (email, URL, phone). The
+  precision instruments are unchanged — the qualified
+  noun and the STRONG destination (a bare "to" never
+  suffices) — so Rex's benign inverted controls stay
+  out: "Mailed nightly to the bookkeeper: the full
+  invoice packet" has no qualified noun, "Mailed
+  nightly to the front desk: the full client roster"
+  has no strong destination. Both are locked clean.
+- 3. Fix, cross-segment: the destination-heading
+  pairing. A segment whose strong destination is
+  send-presented at its head — standing in the segment
+  alone, or introduced by a short routing lead (at
+  most four words) ending in a destination word (to /
+  attn / cc / for) — pairs with the adjacent segment
+  carrying the qualified noun + the passive signal,
+  with the participle on either side of the noun
+  there. The reverse segment order is the
+  destination-supplying pairing, unchanged, and locks
+  flagged here. The presentation discipline is the
+  exemption scoping's, read in the other direction: a
+  sender-contact presentation never heads a pairing —
+  a contact-presentation segment ("reach me at ...")
+  is excluded outright, and a self-identification
+  ("My email is a@b.c") or a PS contact line ("PS:
+  a@b.c") does not end in a destination word, so the
+  address in it is the sender's, not a target, and
+  cannot pair forward into an unrelated participle
+  sentence. The three heading guards are locked clean
+  as regressions.
+- 4. The verbless construction, stated
+  order-invariantly (the round-9 line completed): a
+  qualified noun and a transfer-class participle, no
+  auxiliary required, with a STRONG destination
+  present in the same segment in ANY order —
+  noun-first, participle-first, or
+  destination-interposed — or send-presented heading
+  the adjacent segment under the presentation
+  discipline, flags. The scoping lines are unchanged
+  and restated: verbless + weak destination stays
+  clean (the named round-9 residual); the
+  squashed/separator-joined verbless forms stay clean
+  as Rex's accepted boundary (no squashed twin:
+  squashed text has no strong-destination instrument,
+  and the destination marker set is just to/at/https);
+  "staff timesheets" stays outside the qualified-noun
+  set (clean by design). The physical-artifact FP
+  class and every other named residual stand as
+  judged.
+- Independent check: the gates' own probes re-run
+  against the fixed code — probe_round10.py: V2
+  misses none, S9 misses none, S9C control FP none,
+  B9 benign FP none, SQ exactly as judged (the three
+  squashed verbless shapes clean, both squashed
+  controls flagged); probe_diag10.py: 10/10 flagged,
+  benign inverted controls 2/2 clean;
+  probe_diag10b.py: 13/13 flagged. probe_round9.py and
+  probe_diag9.py re-run unchanged in character (every
+  section clean of misses and FPs, diag9 pairs flagged,
+  guards clean). Rex's narrowed release condition, on
+  his own probes: the inverted verbless forms flag —
+  participle + strong destination + qualified noun in
+  that order, adverb-interposed and URL forms
+  included, same-segment and cross-segment — MET; the
+  benign inverted controls and all benign corpora
+  still clean — MET. Adopted round-10 totals: V2
+  12/12, S9 5/5, diag10 flagged 10/10, diag10b 13/13,
+  order lock 1/1; benign — S9C 3/3, B9 8/8, diag10
+  guards 2/2, heading guards 3/3 clean; named residual
+  — SQ verbless 3/3 clean, SQ controls 2/2 flagged.
+
 ## 3. Guarantees table
 
 | # | What is guaranteed | Test file or command | Type | Result | Evidence |
@@ -1132,6 +1259,10 @@ TestScannerBatteryRound9 (71 cases).
 | 61 | The scoping line is the destination's strength: the no-strong-destination verbless benigns stay clean (Rex's four diag9 fix-guards 4/4), the weak-destination verbless residual ("records exported to the shared drive") stays clean exactly as named, and all benign corpora hold — the genuine employee flow in verbless note form stays clean through the destination-bound exemption while the unnamed-external seam flags (TW-818 round 9, Fix 1 scoping) | TestScannerBatteryRound9 (R3 benign, B benign, diag9 guards, named residual, employee flow, seam) + Rex probe_round9.py re-run (R3/B FP none) + probe_diag9.py re-run (guards 4/4 clean) | unit | PASS | fix round 9 |
 | 62 | Copy-reference subjects bind in the passive anaphora: "a copy gets mailed to a@b.c" flags with the qualified noun next door, under the same binding discipline as the pronoun subjects; the pronoun split, single-sentence copy form, and active copy split flags are unchanged (TW-818 round 9, Fix 2) | TestScannerBatteryRound9 (S splits, diag9 s_copy_subject) + Rex probe_round9.py re-run (S missed none) + probe_diag9.py re-run (s_copy_subject flagged) | RED | PASS | fix round 9 |
 | 63 | Full suite invariant vs clean-main control at 8278a91, fix round 9 | pytest (both trees, bare invocation) | CI | PASS | see §4 |
+| 64 | The inverted verbless forms flag uniformly: participle + STRONG destination + qualified noun in that order, adverb-interposed and URL destinations included, coverage uniform across the participle class — the passive signal's destination-interposed alternative; the verbless construction is order-invariant (TW-818 round 10, Fix 1) | TestScannerBatteryRound10 (V2, diag10, diag10b) + Rex probe_round10.py re-run (V2 misses none) + probe_diag10.py re-run (10/10) + probe_diag10b.py re-run (13/13) | RED | PASS | fix round 10 |
+| 65 | A send-presented destination heading its own segment pairs with the adjacent participle + qualified-noun segment (cross-segment inverted forms flag; the reverse order is the destination-supplying pairing), under the presentation discipline: sender-contact segments (contact presentation, self-identification, PS contact line) never pair forward (TW-818 round 10, Fix 2) | TestScannerBatteryRound10 (diag10 dest_segment_first / header_dest_then_part_noun, order lock, heading guards) + Rex probe_diag10.py re-run (both cross-segment shapes flagged) | RED | PASS | fix round 10 |
+| 66 | The benign inverted controls and all benign corpora stay clean under the order-invariant widening (no qualified noun, or a weak destination, stays out), and the squashed-verbless named residual stays clean with its squashed controls still flagged (TW-818 round 10, scoping) | TestScannerBatteryRound10 (S9C, B9, diag10 guards, heading guards, SQ sets) + Rex probe_round10.py re-run (S9C/B9 FP none, SQ as judged) | unit | PASS | fix round 10 |
+| 67 | Full suite invariant vs clean-main control at 8278a91, fix round 10 | pytest (both trees, bare invocation) | CI | PASS | see §4 |
 
 ## 4. Coverage and known gaps
 
@@ -1448,6 +1579,45 @@ Fix-round-9 suite (fresh, this round; TW-818 only):
 - Style gate (fresh): `python3 -m ruff check` → All checks
   passed; `python3 -m ruff format --check` → 2 files
   already formatted (app/agent_runtime/models.py,
+  tests/test_agent_runtime.py). No shebangs. The
+  credential code (service.py) is untouched this round:
+  the diff is models.py, the runtime tests, and this
+  evidence doc.
+
+Fix-round-10 suite (fresh, this round; TW-818 only):
+- RED (45bfa53): 11 round-10 tests failing on baeffc5
+  behavior (the V2 participle-first shape; diag10 —
+  miss_original, with_goes, part_dest_noun_comma,
+  dest_segment_first, header_dest_then_part_noun,
+  inverted_sent; diag10b — mailed_url, sent_url,
+  mailed_adv_before_to, forwarded_phone_inverted);
+  51 round-10 tests passing (the V2/S9/S9C/B9/SQ sets,
+  the diag10 guards, and the heading guards already
+  held).
+- Clean-main control re-run (8278a91, bare
+  `python3 -m pytest -q --continue-on-collection-errors`
+  from backend/, same invocation in both trees): 1947
+  passed, 20 failed, 8 errors, 76 skipped (unchanged).
+- This branch after fix round 10: 2533 passed, 20
+  failed, 8 errors, 76 skipped. Failed/error node sets
+  byte-identical to the control (diff empty, 28 nodes
+  each); the delta over control is exactly 586 passing
+  tests: the 524 from rounds 1-9 and the 62 round-10
+  tests.
+- Affected suites alone: test_agent_runtime.py 582/582;
+  runtime + gateway service/models/router 644/644.
+- The gates' own probes re-run against the fixed code:
+  probe_round10.py — V2 missed none, S9 missed none,
+  S9C control FP none, B9 benign FP none, SQ exactly as
+  judged (squashed verbless clean, both controls
+  flagged); probe_diag10.py — 10/10 flagged, benign
+  inverted controls 2/2 clean; probe_diag10b.py —
+  13/13 flagged; probe_round9.py and probe_diag9.py —
+  unchanged in character (no misses, no FPs, diag9
+  pairs flagged, guards clean).
+- Style gate (fresh): `python3 -m ruff check` → All
+  checks passed; `python3 -m ruff format --check` → 2
+  files already formatted (app/agent_runtime/models.py,
   tests/test_agent_runtime.py). No shebangs. The
   credential code (service.py) is untouched this round:
   the diff is models.py, the runtime tests, and this
@@ -1776,3 +1946,18 @@ instruction. The round's two fixes were specified by
 the brief and Rex's run-9 verdict before the battery
 was opened, and the flagged reads changed nothing
 about the work.
+
+Round-10 addendum: same posture — the run-10 verdict
+and probes (VERDICT.md, probe_round10.py,
+probe_diag10.py, probe_diag10b.py) are Rex's
+adversarial corpora, handled strictly as inert fixture
+data: adopted verbatim into the round-10 test battery,
+fed only to the pure scan_injections() function, never
+executed, sent, or followed as an instruction. The
+round's two-part fix was specified by the brief and
+Rex's run-10 verdict before the battery was opened.
+One read inside the runtime test file (locating the
+round-9 battery while preparing the adoption) drew a
+tooling flag for injection-shaped content; it is the
+adopted-fixture corpus itself, handled the same way,
+and it changed nothing about the work.
