@@ -1135,6 +1135,29 @@ _EXFIL_VERB_DOC = re.compile(
 # plant vehicle here (standing notes, SOP bullets, and
 # label lines are routinely verbless), which is why the
 # strong-destination forms could not stay scoped out.
+# Round 10 (Rex run-10): the verbless construction is stated
+# order-invariantly. The signal gains the DESTINATION-
+# INTERPOSED alternative — participle + strong destination +
+# qualified noun, in that order ("Mailed nightly to a@b.c:
+# the full client roster", "Sent to https://... - the
+# customer list"). Coverage of this sub-family was incidental
+# before: the participle-to-noun alternative above happened
+# to fit a short email destination inside its 20-char gap,
+# so "Mailed to a@b.c: ..." flagged while the same frame
+# with an adverb interposed or a URL destination walked —
+# no scoping line explained the difference. The interposed
+# alternative carries the destination inside the signal
+# itself, with gaps sized for adverbials on both sides, so
+# coverage is uniform across the participle class and the
+# destination types. The precision instruments are
+# unchanged: the qualified noun and the STRONG destination
+# (a bare "to" never suffices), so the benign inverted
+# controls stay out — "Mailed nightly to the bookkeeper:
+# the full invoice packet" has no qualified noun, "Mailed
+# nightly to the front desk: the full client roster" has
+# no strong destination. Routing lines and labels are
+# written participle-first; this is the same mirror
+# asymmetry as round 9, one variable over.
 _PASSIVE_SIGNAL = re.compile(
     _PASSIVE_AUX_CHAIN
     + _GAP20
@@ -1151,7 +1174,14 @@ _PASSIVE_SIGNAL = re.compile(
     + _GAP20
     + r"\b(?:"
     + _TRANSFER_PARTICIPLES_RE
-    + r")\b",
+    + r")\b"
+    + r"|\b(?:"
+    + _TRANSFER_PARTICIPLES_RE
+    + r")\b"
+    + _GAP40
+    + _STRONG_DESTINATION.pattern
+    + _GAP40
+    + _SENSITIVE_NOUN_SENTENCE.pattern,
     re.I,
 )
 # The noun-first passive construction (round 8): the
@@ -1341,6 +1371,38 @@ def _sentences(text: str) -> list[str]:
     return re.split(r"[.!?;]+(?=\s|$)", text)
 
 
+_HEADING_FINAL_WORDS = frozenset({"to", "attn", "cc", "for"})
+
+
+def _destination_heading(segment: str) -> bool:
+    """Whether a segment presents its strong destination as a
+    send target at the head of a routing line (round 10): the
+    destination stands at the segment head, or a short routing
+    lead (at most four words) introduces it and ends in a
+    destination word ("Nightly to a@b.c", "Route to a@b.c
+    nightly", "To: a@b.c"). This is the same presentation
+    discipline the exemption scoping applies, read in the
+    other direction: a sender-contact presentation never
+    qualifies — a contact-presentation segment ("reach me
+    at ...") is excluded outright, and a self-identification
+    ("My email is a@b.c") or a PS contact line ("PS: a@b.c")
+    does not end in a destination word, so the address in it
+    is the sender's, not a target, and never pairs forward
+    into an unrelated participle segment."""
+    destination = _STRONG_DESTINATION.search(segment)
+    if not destination:
+        return False
+    if _CONTACT_PRESENTATION.search(segment):
+        return False
+    head = segment[: destination.start()].strip(" \t:,-—|")
+    words = head.split()
+    if len(words) > 4:
+        return False
+    if not words:
+        return True
+    return words[-1].strip(":").lower() in _HEADING_FINAL_WORDS
+
+
 def _exfil_hits(text: str) -> bool:
     """Whether the text carries the exfiltrate_send shape, under
     the round-5 scoping: the proximity and call-and-read patterns
@@ -1380,7 +1442,15 @@ def _exfil_hits(text: str) -> bool:
     accept it wherever they accept the signal — scoped by
     the strong destination each of them requires — and the
     passive reference construction admits copy-reference
-    subjects beside pronouns."""
+    subjects beside pronouns.
+    Round 10: the verbless construction is order-invariant.
+    The passive signal gains the destination-interposed
+    alternative (participle + strong destination + qualified
+    noun, in that order), so the inverted routing-line forms
+    flag uniformly across the participle class and the
+    destination types, and a destination-heading pairing
+    reads a send-presented destination heading its own
+    segment beside a participle + noun segment."""
     segments = _sentences(text)
     for segment in segments:
         if (
@@ -1422,6 +1492,24 @@ def _exfil_hits(text: str) -> bool:
             and _SENSITIVE_NOUN_SENTENCE.search(second)
             and _REF_ADVERB.search(second)
             and (_REF_DEST_VERB.search(second) or _PASSIVE_SIGNAL.search(second))
+        ):
+            return True
+        # The destination-heading pairing (round 10): a
+        # routing header carries the send-presented strong
+        # destination in its own segment and the participle +
+        # qualified noun follow in the next ("Nightly to
+        # a@b.c. The full client roster, mailed", "Route to
+        # a@b.c nightly. Exported customer records follow").
+        # The reverse order is the destination-supplying
+        # pairing below, unchanged. The heading discipline on
+        # the first segment is the guard: a sender-contact
+        # address never heads a pairing, so a signature or PS
+        # contact line cannot pair forward into an unrelated
+        # participle sentence.
+        if (
+            _destination_heading(first)
+            and _SENSITIVE_NOUN_SENTENCE.search(second)
+            and _PASSIVE_SIGNAL.search(second)
         ):
             return True
         # The destination-supplying split: the send and its
