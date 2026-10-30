@@ -58,6 +58,7 @@ from .routers import (
 from .services.scheduler import start_scheduler, stop_scheduler
 from .social import router as social_router
 from .telemetry import router as telemetry_router
+from .toolgateway import router as toolgateway_router
 from .verify import router as verify_router
 
 configure_logging(level="DEBUG" if settings.app_env != "production" else "INFO")
@@ -140,6 +141,7 @@ app.include_router(flows_router.router, prefix="/api/v1")
 app.include_router(flags_router.router, prefix="/api/v1")
 app.include_router(agent_identity_router.router, prefix="/api/v1")
 app.include_router(agentperms_router.router, prefix="/api/v1")
+app.include_router(toolgateway_router.router, prefix="/api/v1")
 app.include_router(telemetry_router.router, prefix="/api/v1")
 app.include_router(social_router.router, prefix="/api/v1")
 app.include_router(verify_router.router, prefix="/api/v1")
