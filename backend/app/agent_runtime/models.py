@@ -269,12 +269,8 @@ _INJECTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"(follow|following|obey|obeying|listen\s+to|heed)\b"
             + _GAP40
             + r"\b(instructions?|directives?|guidelines|orders|rules"
-            r"|(anything|everything|whatever)\b"
-            + _GAP30
-            + r"\b(told|said|gave)\b)"
-            r"|\bact\s+as\s+if\b"
-            + _GAP60
-            + r"\binstructions?\b"
+            r"|(anything|everything|whatever)\b" + _GAP30 + r"\b(told|said|gave)\b)"
+            r"|\bact\s+as\s+if\b" + _GAP60 + r"\binstructions?\b"
             r"|\b(standing|your|his|her|their)\s+"
             r"(instructions?|orders|rules|guidelines|directives)\b"
             + _GAP30
@@ -434,9 +430,7 @@ _SQUASH_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"|emailaddresses|contactdetails"
             r"|customeremails?|clientemails?|customermail|clientmail"
             r"|thelist(?!of)|thedata(?!of)"
-            r"|database|roster|credentials|contacts)"
-            + _GAP40
-            + r"(to|at|https?)",
+            r"|database|roster|credentials|contacts)" + _GAP40 + r"(to|at|https?)",
             re.I,
         ),
     ),
