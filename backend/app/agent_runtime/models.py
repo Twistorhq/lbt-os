@@ -223,6 +223,10 @@ _GAP60 = r"[\s\S]{0,60}?"
 _GAP40 = r"[\s\S]{0,40}?"
 _GAP30 = r"[\s\S]{0,30}?"
 _GAP20 = r"[\s\S]{0,20}?"
+# A gap tempered to stay inside one sentence (no sentence-final
+# punctuation followed by whitespace), for constructions that are
+# single-clause by nature — the override state branch (round 6).
+_GAP30_SENT = r"(?:(?![.!?]\s)[\s\S]){0,30}?"
 
 _INJECTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
@@ -291,6 +295,29 @@ _INJECTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         # squash pass substring-matched the object "all" inside
         # "really" — and round 5's object discipline removed the
         # accident; this alternative is the deliberate coverage.
+        #
+        # Round 6 (Rex run-6 + Rosa round-5): the state branch
+        # was POSSESSIVE-BOUND — it demanded a (standing|your|
+        # his|her|their) prefix while the verb branch tolerates
+        # any determiner, so "the owner's instructions are
+        # revoked" walked where "your standing instructions are
+        # revoked" flagged. Third-person reference to the
+        # owner's instructions is the natural register of the
+        # attack family the branch exists for. The state branch
+        # is now possessive-invariant: the same subject set as
+        # the verb branch (the / owner's / shop('s) / manager's
+        # / standing / possessives, or none), over the full
+        # instruction-object set, with its gap tempered to one
+        # sentence (a state construction is single-clause by
+        # nature). "Directions" and "rulebook" join the
+        # instruction objects in both branches; split phrasals
+        # ("set your handbook aside") and "act as though" are
+        # covered beside their adjacent forms. The asymptote
+        # stands as stated in round 5: the verb class will
+        # never be complete; the bar this branch now meets is
+        # object-side structural completeness — every canonical
+        # object reachable under every determiner, in both the
+        # verb and state constructions.
         "ignore_instructions",
         re.compile(
             r"(\b(ignore|disregard|forget|overlook|disobey|unlearn|skip"
@@ -299,8 +326,14 @@ _INJECTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"|brush\s+aside|set\s+aside"
             r"|pay\s+no\s+(attention|mind))\b"
             + _GAP60
-            + r"\b(instructions?|directives|guidelines"
-            r"|rules(?!\s+sheet)|handbook)\b"
+            + r"\b(instructions?|directives|guidelines|directions"
+            r"|rulebook|rules(?!\s+sheet)|handbook)\b"
+            r"|\b(set|lay|put|brush|throw)\b"
+            + _GAP40
+            + r"\b(instructions?|directives|guidelines|directions"
+            r"|rulebook|rules(?!\s+sheet)|handbook)\b"
+            + _GAP20
+            + r"\b(aside|away|out)\b"
             r"|\b(ignore|disregard|forget|overlook|disobey|unlearn|skip"
             r"|cancel|suspend|supersede|supersedes|drop|abandon|pretend"
             r"|wipe|erase|delete|nullify|rescind|void|throw\s+out"
@@ -332,27 +365,34 @@ _INJECTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             + r"\b(instructions?|directives?|guidelines|orders|rules"
             r"|directions"
             r"|(anything|everything|whatever)\b" + _GAP30 + r"\b(told|said|gave)\b)"
-            r"|\b(act\s+as\s+if|act\s+like)\b"
+            r"|\b(act\s+as\s+(if|though)|act\s+like)\b"
             + _GAP60
-            + r"\b(instructions?|rules|guidelines|directives)\b"
-            r"|\b(standing|your|his|her|their)\s+"
-            r"(instructions?|orders|rules|guidelines|directives)\b"
+            + r"\b(instructions?|rules|guidelines|directives"
+            r"|directions|rulebook|handbook)\b"
+            r"|\b(instructions?|guidelines|directions|rulebook"
+            r"|handbook|rules(?!\s+sheet))\b"
             + _GAP30
-            + r"\b((are|is)\s+)?(cancelled|canceled|revoked|suspended"
-            r"|superseded|withdrawn|void"
-            r"|no\s+longer\s+(apply|valid|in\s+effect|matter|count))\b"
-            r"|\bthe\s+handbook(\s+rules)?\b"
-            + _GAP30
-            + r"\b((are|is)\s+)?(cancelled|canceled|revoked|suspended"
-            r"|superseded|withdrawn|void"
-            r"|no\s+longer\s+(apply|valid|in\s+effect|matter|count))\b"
+            + r"\bas\s+(if|though)\b"
+            + _GAP40
+            + r"\bnever\b"
+            r"|\b(the\s+|owner'?s\s+|shop'?s\s+|shop\s+"
+            r"|manager'?s\s+|standing\s+|your\s+|his\s+|her\s+"
+            r"|their\s+|our\s+|my\s+)*"
+            r"(instructions?|orders|rules(?!\s+sheet)|guidelines"
+            r"|directives|directions|handbook(\s+rules)?"
+            r"|rulebook)\b"
+            + _GAP30_SENT
+            + r"\b((are|is)\s+)?(hereby\s+)?(cancelled|canceled"
+            r"|revoked|suspended|superseded|withdrawn|void"
+            r"|no\s+longer\s+(apply|valid|in\s+effect|matter"
+            r"|count))\b"
             r"|\breleased\s+from\b"
             + _GAP30
             + r"\b(instructions?|orders|rules|guidelines|directives)\b"
             r"|\b(do\s+not|don'?t|no\s+longer)\s+answer\s+to\b"
             + _GAP40
             + r"\b(directions|instructions|orders|rules)\b"
-            r"|\banswer\s+to\s+(me|us)\b"
+            r"|\banswer\s+(only\s+)?to\s+(me|us)\b"
             r"|\b(take|get|receive|accept)\b"
             + _GAP30
             + r"\borders\b"
@@ -482,16 +522,54 @@ _READ_OUT = re.compile(
     + r"\b",
     re.I,
 )
-# A send verb whose object is a bare reference ("a copy of it"):
-# the shape of the second half of a two-sentence reference split.
+# The reference half of a two-sentence reference split, as a
+# RULE (round 6 — Rosa round-5 Major 2 + Rex run-6 Finding 2).
+# Round 5 enumerated the demonstrated constructions ("a copy
+# of it", "there") and the fresh variants walked: a bare
+# pronoun object ("upload them to ...", "text them to ..."),
+# an in-it reference adverb ("drop the client records in
+# it"), a bcc whose object is the destination itself. The
+# rule: a send-class verb whose object is a bare reference
+# (a pronoun, or "a copy (of it/them)"), with the strong
+# destination AFTER the reference; or a cc/bcc, whose object
+# IS the destination. The ordering is the guard — an
+# unrelated send names its own object before its destination
+# ("send the warranty card to X when it is ready": the
+# pronoun trails the destination) and never binds. Adjacency
+# alone stays dead, per round 5: the rule keys on the
+# reference form, never on mere nearness.
+_CC_BCC = re.compile(r"\b(cc|bcc)\b", re.I)
 _REF_SEND = re.compile(
     r"\b"
     + _EXFIL_VERB_STR
     + r"\b"
     + _GAP40
-    + r"\b(a\s+copy\s+of\s+(it|them)|copy\s+of\s+(it|them))\b",
+    + r"\b(a\s+copy(\s+of\s+(it|them|that))?|it|them|that|those)\b",
     re.I,
 )
+# The destination-first half: the destination is stated,
+# then the noun is sent "there" / "in it" — by a send-class
+# verb or a bare transfer ("the export goes there too").
+_REF_DEST_VERB = re.compile(
+    r"\b(send|forward|email|mail|upload|post|transmit|leak"
+    r"|exfiltrate|ship|text|message|give|share|copy|dump"
+    r"|hand\s+over|move|sync|back\s+up|drop|go|goes)\b",
+    re.I,
+)
+_REF_ADVERB = re.compile(r"\b(there|in\s+it|into\s+it|over\s+there)\b", re.I)
+
+
+def _ref_send(segment: str) -> bool:
+    """Whether a segment is the reference half of a split:
+    it carries a strong destination and either a cc/bcc
+    (whose object is the destination) or a send verb whose
+    bare-reference object precedes that destination."""
+    destination = _STRONG_DESTINATION.search(segment)
+    if not destination:
+        return False
+    if _CC_BCC.search(segment):
+        return True
+    return bool(_REF_SEND.search(segment[: destination.start()]))
 
 # Second pass over the text with ALL non-alphanumerics removed,
 # using substring (not word-boundary) patterns: a fully spaced-out
@@ -516,10 +594,23 @@ _SQUASH_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"|wipe|erase|delete|nullify|rescind|void|throwout"
             r"|brushaside|setaside"
             r"|paynoattention|paynomind|donotfollow|donotobey"
-            r"|neverfollow|stopfollowing|actasif|actlike|donotlistento)"
+            r"|neverfollow|stopfollowing|actasif|actasthough"
+            r"|actlike|donotlistento)"
             + _GAP60
-            + r"(instructions?|directives?|guidelines"
-            r"|rules(?!sheet)|handbook)"
+            + r"(instructions?|directives?|guidelines|directions"
+            r"|rulebook|rules(?!sheet)|handbook)"
+            r"|(set|lay|put|brush|throw)"
+            + _GAP40
+            + r"(instructions?|directives?|guidelines|directions"
+            r"|rulebook|rules(?!sheet)|handbook)"
+            + _GAP20
+            + r"(aside|away|out)"
+            r"|(instructions?|guidelines|directions|rulebook"
+            r"|handbook|rules(?!sheet))"
+            + _GAP30
+            + r"(asthough|asif)"
+            + _GAP40
+            + r"never"
             r"|(ignore|disregard|forget|overlook|disobey|unlearn|skip"
             r"|cancel|suspend|supersede|supersedes|drop|abandon|pretend"
             r"|wipe|erase|delete|nullify|rescind|void|throwout"
@@ -545,10 +636,12 @@ _SQUASH_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             + r"(standing|your|his|her|their|previous|prior)"
             + _GAP20
             + r"(orders)"
-            r"|(standing|your|his|her|their|the)"
-            r"(instructions|orders|rules|guidelines|directives|handbook)"
+            r"|(standing|your|his|her|their|the|theowners|owners"
+            r"|theshop|shop)"
+            r"(instructions|orders|rules|guidelines|directives"
+            r"|directions|handbook|rulebook)"
             + _GAP30
-            + r"(are|is)?(cancelled|canceled|revoked|suspended"
+            + r"(are|is)?(hereby)?(cancelled|canceled|revoked|suspended"
             r"|superseded|withdrawn|void"
             r"|nolonger(apply|valid|ineffect|matter|count))"
             r"|(releasedfrom)"
@@ -557,7 +650,7 @@ _SQUASH_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"|(donot|dont|nolonger)answerto"
             + _GAP40
             + r"(directions|instructions|orders|rules)"
-            r"|answerto(me|us)"
+            r"|(answeronlyto|answerto)(me|us)"
             r"|ordersfrom(me|us|him|her|them)",
             re.I,
         ),
@@ -761,9 +854,13 @@ _OVERRIDE_FLAG_NAMES = frozenset(
 #      part inside an address is not a naming, so
 #      "payroll@evil.example" and "hr@collector.example" do
 #      not qualify on shape alone;
-#   2. EVERY strong destination in the text (email, URL,
-#      phone) is that hr/payroll recipient — any other
-#      destination of any kind voids the exemption;
+#   2. EVERY strong destination the text presents as a
+#      target of the send (email, URL, phone) is that
+#      hr/payroll recipient — any other send-presented
+#      destination voids the exemption (round 6 scopes the
+#      binding to send-presented destinations; sender-contact
+#      presentations do not bind — see the round-6 note
+#      below);
 #   3. no other sensitive noun appears once the employee
 #      spans are masked out (unchanged from round 4) — a text
 #      that also names customer data keeps its flag.
@@ -776,11 +873,48 @@ _OVERRIDE_FLAG_NAMES = frozenset(
 # address is an impersonator's — indistinguishable from the
 # genuine weekly flow at this layer; the fence for that is
 # the ledger, not the tripwire.
-_EMPLOYEE_NOUN = re.compile(
-    r"\bemployee\s+(list|database|records?|roster|data|contacts?"
-    r"|emails?|mail|phone\s+numbers?|email\s+addresses"
+# Round 6 (Rosa round-5 Major 3 + Rex run-6 Finding 1's
+# mirror): the destination binding over-corrected. It counted
+# every address-shaped string in the text, so the canonical
+# weekly flow in its realistic form — a phone number in the
+# signature line — lost the exemption Major 1 built. The
+# binding now scopes to the destinations the text presents
+# as targets OF THE SEND (destinations inside a sentence
+# carrying a send verb, a cc/bcc, or the employee payload
+# itself); a destination presented as the SENDER's contact
+# (a reach-me line, a sign-off, a signature block) is not a
+# send target and does not bind. Rex's run-6 attacks still
+# flag: their second destinations sit inside the send
+# sentence, and his sender-phone case carries a
+# contact-channel payload (below). Round 6 also splits the
+# payload classes:
+#   - roster-class employee data (list / database / records
+#     / roster / data / contacts / emails / mail) under
+#     either of the shop's words for its people — "employee"
+#     or "staff". The spelled-out "staff roster" was the
+#     failing half of Rex's one fresh FP ("Email the staff
+#     roster to Human Resources at hr@..."): the HR side of
+#     the naming already recognized the spelled-out "Human
+#     Resources"; the payload side recognized no staff noun,
+#     so the flow was never seen as an employee flow at all.
+#   - contact-channel payloads (phone numbers / email
+#     addresses / contact details) are sensitive classes in
+#     their own right in every other rule of this scanner —
+#     they sit UNQUALIFIED in _SENSITIVE_NOUN_SENTENCE — so
+#     an employee flow carrying them is not an employee-only
+#     flow and never takes the exemption.
+_EMPLOYEE_FLOW_NOUN = re.compile(
+    r"\b(employee|staff)\s+(list|database|records?|roster|data"
+    r"|contacts?|emails?|mail)\b",
+    re.I,
+)
+_EMPLOYEE_CONTACT_PAYLOAD = re.compile(
+    r"\b(employee|staff)\s+(phone\s+numbers?|email\s+addresses"
     r"|contact\s+details)\b",
     re.I,
+)
+_CONTACT_PRESENTATION = re.compile(
+    r"\b(reach|call|text|contact)\s+me\s+(at|on)\b", re.I
 )
 _HR_RECIPIENT_PHRASE = re.compile(
     r"\b(to|at|for)\s+(hr|human\s+resources|payroll)(?![\w@])",
@@ -798,13 +932,47 @@ _OTHER_SENSITIVE_NOUN = re.compile(
 )
 
 
+def _binding_destinations(text: str) -> list[str]:
+    """The strong destinations the text presents as targets
+    of the send: destinations inside a sentence carrying a
+    send verb, a cc/bcc, or the employee payload itself. A
+    contact-presentation sentence ("reach me at ...") that
+    carries no payload presents its address as the sender's
+    contact, not a send target, and never contributes. If
+    no send sentence can be identified, every destination
+    in the text binds (the strict default)."""
+    segments = _sentences(text)
+    send_segments = []
+    for segment in segments:
+        if _CONTACT_PRESENTATION.search(segment) and not _EMPLOYEE_FLOW_NOUN.search(
+            segment
+        ):
+            continue
+        if (
+            _EXFIL_VERB_DOC.search(segment)
+            or _EMPLOYEE_FLOW_NOUN.search(segment)
+            or _CC_BCC.search(segment)
+        ):
+            send_segments.append(segment)
+    if not send_segments:
+        return _STRONG_DESTINATION.findall(text)
+    destinations: list[str] = []
+    for segment in send_segments:
+        destinations.extend(_STRONG_DESTINATION.findall(segment))
+    return destinations
+
+
 def _is_internal_employee_flow(text: str) -> bool:
-    if not _EMPLOYEE_NOUN.search(text) or not _HR_RECIPIENT_PHRASE.search(text):
+    if not _HR_RECIPIENT_PHRASE.search(text):
         return False
-    for destination in _STRONG_DESTINATION.findall(text):
+    if not _EMPLOYEE_FLOW_NOUN.search(text):
+        return False
+    if _EMPLOYEE_CONTACT_PAYLOAD.search(text):
+        return False
+    for destination in _binding_destinations(text):
         if not _HR_LOCAL_PART.match(destination):
             return False
-    masked = _EMPLOYEE_NOUN.sub(" ", text)
+    masked = _EMPLOYEE_FLOW_NOUN.sub(" ", text)
     return not _OTHER_SENSITIVE_NOUN.search(masked)
 
 
@@ -822,14 +990,19 @@ def _exfil_hits(text: str) -> bool:
     the round-5 scoping: the proximity and call-and-read patterns
     run per sentence (never across a boundary), the round-4
     sentence-level combination is unchanged, and the anaphora
-    rule binds REFERENCE splits across two adjacent sentences —
-    a qualified noun in one and a "send a copy of it" (verb +
-    reference object + strong destination) in the next, or a
-    strong destination in one and a "send the roster there"
-    (verb + qualified noun + reference adverb) in the next.
-    Adjacent sentences without a reference form never combine:
-    an unrelated invoice send next to a noun sentence stays
-    clean, which is the control the scoping trade stands on."""
+    rule binds REFERENCE splits across two adjacent sentences.
+    Round 6 states the anaphora rule generally instead of
+    enumerating its constructions: a qualified noun in one
+    sentence and a reference send in the next (a send-class
+    verb whose bare-reference object — a pronoun, or "a copy
+    (of it/them)" — precedes the strong destination, or a
+    cc/bcc whose object is the destination), or a strong
+    destination in one sentence and a qualified noun sent
+    "there" / "in it" in the next (by a send verb or a bare
+    transfer, "goes there too"). Adjacent sentences without a
+    reference form never combine: an unrelated invoice send
+    next to a noun sentence stays clean, which is the control
+    the scoping trade stands on."""
     segments = _sentences(text)
     for segment in segments:
         if _EXFIL_PROXIMITY.search(segment) or _READ_OUT.search(segment):
@@ -849,17 +1022,13 @@ def _exfil_hits(text: str) -> bool:
         ):
             return True
     for first, second in zip(segments, segments[1:]):
-        if (
-            _SENSITIVE_NOUN_SENTENCE.search(first)
-            and _STRONG_DESTINATION.search(second)
-            and _REF_SEND.search(second)
-        ):
+        if _SENSITIVE_NOUN_SENTENCE.search(first) and _ref_send(second):
             return True
         if (
             _STRONG_DESTINATION.search(first)
             and _SENSITIVE_NOUN_SENTENCE.search(second)
-            and _EXFIL_VERB_DOC.search(second)
-            and re.search(r"\bthere\b", second, re.I)
+            and _REF_DEST_VERB.search(second)
+            and _REF_ADVERB.search(second)
         ):
             return True
         # The destination-supplying split: the send and its
@@ -902,7 +1071,15 @@ def scan_injections(content: str) -> list[str]:
     rule for reference splits, binds the employee-flow exemption
     to its destination, wires the told-you object into the main
     override branch, and narrows the override objects to
-    instruction-class nouns. Verb patterns are
+    instruction-class nouns. Round 6 makes the override state
+    branch possessive-invariant with the verb branch's subject
+    set, adds directions and rulebook as instruction objects,
+    covers split phrasals and act-as-though, states the
+    anaphora binding as a rule over reference forms, scopes
+    the exemption's destination binding to send-presented
+    destinations, and recognizes the spelled-out staff /
+    Human Resources naming of the internal employee flow.
+    Verb patterns are
     noun-bound on purpose: ordinary shop phrasing ("send the
     estimate to Mrs. Lee", "disregard the previous invoice") carries
     no sensitive object and stays unflagged."""
