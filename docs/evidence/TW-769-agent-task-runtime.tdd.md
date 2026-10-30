@@ -200,6 +200,58 @@ than reaching the code paths they probed. Each behavior they
 targeted is covered by a regression test above under the new
 contracts; Rex's re-probe of the five HIGHs runs against those.
 
+## 2c. Fix round 2 (Rex re-probe run-2: HOLD narrowed to TW-818 + TW-824)
+
+Rex's run-2 re-probe kill-confirmed TW-819/820/821/822/823/825/
+826/827/828 (all closed). Two HIGHs survived; this round addresses
+exactly those. RED (commit bc06006, tests only): 20 failing on
+88e70e7 — the 14 missed attacks + 2 benign false positives +
+4 credential tests below. GREEN: commit 4e04a94.
+
+- TW-818 (scanner round 2): the regression battery is built from
+  Rex's run-2 probe file itself — all 27 section-A2 attack probes
+  and his wider 10-control benign set, verbatim, on top of the
+  round-1 battery (TestScannerBatteryRound2). Normalization now
+  HTML-unescapes before scanning, strips combining marks via
+  NFKD + a category-Mn filter, and collapses letter runs joined
+  by any separator (".", "-", "/", "_") in the squashed pass
+  (the squashed form now strips ALL non-alphanumerics). Decode
+  passes over the squashed form add leet-fold, ROT13, and
+  reversed-text variants — all deterministic str.translate /
+  slicing, no dependencies. Plain-English coverage: "pay no
+  attention" and "disobey" join the override verbs; the
+  exfiltration verb roster adds exfiltrate / ship / text /
+  message / mail; system impersonation gains the bracket/header
+  forms ([SYSTEM], <<SYS>>, ### system). The two benign false
+  positives are fixed at the pattern level, not by exception:
+  system impersonation now requires a header shape (bracketed,
+  quoted, or "system message/prompt:"), so the bare noun in
+  "The system: check the HVAC system on Friday" no longer flags;
+  and the exfiltration object is bound to qualified sensitive
+  noun phrases ("customer list", "contacts database",
+  "the list", "the data", bare database/roster/credentials/
+  contacts), so "Send the parts list to the supplier at ..."
+  stays clean while every widened verb stays noun-bound.
+  Independent check: Rex's own probe769_r2.py re-run against the
+  fixed code reports A1 missed 0/16, A2 missed 0/27 (was 14/27),
+  A3 false positives 0/10 (was 2/10).
+- TW-824 (credential registration, H7 + H6): registration is no
+  longer str-only. `_register_credentials` walks the resolved
+  value at resolution and registers EVERY leaf string (dict keys
+  and values, list/tuple/set items, nested bundles), so an
+  OAuth-shaped resolution {"access_token": SECRET, "kind":
+  "bearer"} scrubs exactly like a plain string — Rex's H7 echo
+  through results and errors now persists nothing. Each leaf
+  also registers its common encoded forms: base64 (standard and
+  URL-safe, padded and padding-stripped) and the upper/lower
+  case variants; Rex's probe_h6.py re-run shows the base64 and
+  uppercase forms no longer persist. REMAINDER, named not
+  silenced: split fragments ([s[:6], s[6:]]) and char-list
+  renderings (list(secret)) still persist — they are not
+  canonical forms registration can enumerate (any split point,
+  any fragmentation). Ticketed separately at the lower severity
+  Rex indicated: TW-831 [LOW].
+
 ## 3. Guarantees table
 
 | # | What is guaranteed | Test file or command | Type | Result | Evidence |
@@ -238,6 +290,9 @@ contracts; Rex's re-probe of the five HIGHs runs against those.
 | 32 | Mode switch without a verified owner actor/channel raises UnverifiedModeSwitch and moves nothing; verified switch records the actor (TW-827) | TestModeSwitchAuth | RED | PASS | fix round |
 | 33 | Unverified "owner" source label asks first at desk; verified owner source runs (TW-828) | TestSourceTrust | RED | PASS | fix round |
 | 34 | Dread Ledger artifact for the agent_audit surface exists and is linked; storage gap ticketed as TW-830 (Rosa M2) | §2b + ledger.md (validator 90/90) | manual | PASS | fix round |
+| 35 | Rex run-2 battery: all 27 A2 attack probes flagged (separator/combining/HTML/leet/ROT13/reversed families, attention synonyms, widened exfil verbs, [SYSTEM] header); his wider 10-control benign set clean, incl. the 2 round-2 FPs (TW-818) | TestScannerBatteryRound2 + Rex probe769_r2.py re-run (A1 0/16, A2 0/27 missed, A3 0/10 FP) | RED | PASS | fix round 2 |
+| 36 | Bundle-shaped credential resolution registers every leaf string: dict/nested bundle echoes through results and exception messages persist nothing (TW-824 H7) | TestCredentialRedactionRound2 | RED | PASS | fix round 2 |
+| 37 | Common encoded forms of a resolved credential (base64, upper/lower case) are scrubbed from persisted surfaces (TW-824 H6, partial; split/char-list remainder is TW-831) | TestCredentialRedactionRound2 + Rex probe_h6.py re-run (b64/upper clean) | RED | PASS | fix round 2 |
 
 ## 4. Coverage and known gaps
 
@@ -262,6 +317,31 @@ Fix-round suite (fresh, this round):
   test_toolgateway_service.py + models + router + runtime 130/130.
 - Rex's probe section A re-run against the fixed code: 0 of 16
   attack payloads missed (was 14 of 16).
+
+Fix-round-2 suite (fresh, this round):
+- RED (bc06006): 20 fix-round-2 tests failing on 88e70e7 behavior
+  (14 missed attacks, 2 benign false positives, 4 credential
+  regressions); 43 round-2/battery tests passing.
+- Clean-main control re-run (8278a91, fresh worktree): 1914
+  passed, 20 failed, 8 errors, 76 skipped (unchanged).
+- This branch after fix round 2: 2027 passed, 20 failed,
+  8 errors, 76 skipped. Failed/error node sets byte-identical to
+  the control (diff empty, 28 nodes each); the delta over control
+  is exactly 113 passing tests: the original 23, 45 round-1
+  runtime regressions, 4 round-1 gateway regressions, and 41
+  round-2 tests (37 scanner battery + 4 credential).
+- Affected suites alone: test_agent_runtime.py 109/109;
+  runtime + gateway service/models/router 171/171.
+- Rex's own probes re-run against the fixed code:
+  probe769_r2.py — A1 missed 0/16, A2 missed 0/27 (was 14),
+  A3 false positives 0/10 (was 2), H7 dict-credential echo clean;
+  probe_h6.py — base64 and uppercase forms no longer persist,
+  split halves and char-list still persist (TW-831, named above).
+- Style gate (fresh): `python3 -m ruff check` → All checks
+  passed; `python3 -m ruff format --check` → 3 files already
+  formatted (app/agent_runtime/models.py,
+  app/agent_runtime/service.py, tests/test_agent_runtime.py,
+  after a format pass in this round). No shebangs.
 
 Style gate (fresh, before this report):
 - `python3 -m ruff check app/agent_runtime/__init__.py app/agent_runtime/models.py app/agent_runtime/service.py tests/test_agent_runtime.py` → All checks passed!
@@ -302,6 +382,14 @@ Known gaps, named:
   the fix round addresses all eleven findings, and the HOLD
   releases only on Rex's re-probe of the five HIGHs
   (TW-818/820/821/822/824) after Rosa's spot-check.
+- Credential transform remainder (TW-824 H6): base64 and case
+  variants of a resolved credential are scrubbed as of fix
+  round 2, but split fragments and char-list renderings of a
+  resolved credential can still persist if a handler returns
+  them — ticketed as TW-831 [LOW] at Rex's indicated severity,
+  not a Spec 3 merge blocker. The persisted-surface guarantee
+  covers verbatim values, every leaf of a bundle-shaped value,
+  and the registered encoded forms named in §2c.
 
 ## 5. Plan-safety notes
 
