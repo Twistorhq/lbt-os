@@ -269,9 +269,10 @@ _OVERRIDE_VERB_CLASS: tuple[tuple[str, str], ...] = (
     ("set aside", "set aside"),
 )
 _STATE_ONLY_PARTICIPLES: tuple[str, ...] = ("revoked", "withdrawn")
-_STATE_PARTICIPLE_FRAGMENTS: tuple[str, ...] = tuple(
-    participle for _, participle in _OVERRIDE_VERB_CLASS
-) + _STATE_ONLY_PARTICIPLES
+_STATE_PARTICIPLE_FRAGMENTS: tuple[str, ...] = (
+    tuple(participle for _, participle in _OVERRIDE_VERB_CLASS)
+    + _STATE_ONLY_PARTICIPLES
+)
 # Main pass: phrasal participles match across whitespace.
 _STATE_PARTICIPLES_RE = "|".join(
     fragment.replace(" ", r"\s+") for fragment in _STATE_PARTICIPLE_FRAGMENTS
