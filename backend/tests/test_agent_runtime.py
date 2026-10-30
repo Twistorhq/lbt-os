@@ -35,7 +35,12 @@ Pinned behaviors (TW-769 acceptance + binding constraints):
 import pytest
 
 from app.agent_identity.models import AgentIdentity, Persona, VoiceSettings
-from app.agent_runtime.models import parse_mode_switch, scan_injections
+from app.agent_runtime.models import (
+    AgentTask,
+    TaskStepDef,
+    parse_mode_switch,
+    scan_injections,
+)
 from app.agent_runtime.service import (
     AgentTaskRuntime,
     OrgMismatch,
@@ -43,7 +48,6 @@ from app.agent_runtime.service import (
 )
 from app.agentperms import service as ledger
 from app.agentperms.models import RevokeStatement
-from app.agent_runtime.models import AgentTask, TaskStepDef
 
 ORG = "org-1"
 OTHER_ORG = "org-2"
@@ -340,10 +344,16 @@ class TestRevocationFencing:
             task["id"],
             [
                 TaskStepDef(
-                    name="email", handler=first, idempotent=False, action_class="email.send"
+                    name="email",
+                    handler=first,
+                    idempotent=False,
+                    action_class="email.send",
                 ),
                 TaskStepDef(
-                    name="sms", handler=second, idempotent=False, action_class="sms.send"
+                    name="sms",
+                    handler=second,
+                    idempotent=False,
+                    action_class="sms.send",
                 ),
             ],
         )
@@ -410,8 +420,12 @@ class TestTollBudget:
         out = rt.run_task(
             task["id"],
             [
-                TaskStepDef(name="s1", handler=mk("s1"), idempotent=True, toll_cents=20),
-                TaskStepDef(name="s2", handler=mk("s2"), idempotent=True, toll_cents=20),
+                TaskStepDef(
+                    name="s1", handler=mk("s1"), idempotent=True, toll_cents=20
+                ),
+                TaskStepDef(
+                    name="s2", handler=mk("s2"), idempotent=True, toll_cents=20
+                ),
             ],
         )
         assert ran == ["s1"]
@@ -422,11 +436,9 @@ class TestTollBudget:
     def test_killed_worker_resumes_no_rerun_no_double_toll(
         self, db, tmp_path, tolls, tools
     ):
-        rt = runtime(db, tmp_path, tolls, tools)
+        rt = runtime(db, tmp_path, tolls, tools, lease_seconds=0.1)
         task = rt.enqueue(
-            AgentTask(
-                org_id=ORG, source="owner", content="work", toll_budget_cents=100
-            )
+            AgentTask(org_id=ORG, source="owner", content="work", toll_budget_cents=100)
         )
         ran = []
 
@@ -444,6 +456,10 @@ class TestTollBudget:
         with pytest.raises(SimulatedCrash):
             rt.run_task(task["id"], steps_crash)
         assert tolls.total == 25
+
+        import time
+
+        time.sleep(0.15)  # the dead worker's lease expires (fx0 pattern)
 
         def s2(ctx):
             ran.append("s2")
@@ -482,9 +498,7 @@ class TestToolSteps:
         assert tools.calls and tools.calls[0][0] == "notify.send"
         assert "tool_executed" in audit_kinds(rt, task["id"])
 
-    def test_out_of_allowlist_tool_refused_and_logged(
-        self, db, tmp_path, tolls, tools
-    ):
+    def test_out_of_allowlist_tool_refused_and_logged(self, db, tmp_path, tolls, tools):
         rt = runtime(db, tmp_path, tolls, tools)
         task = rt.enqueue(AgentTask(org_id=ORG, source="owner", content="wipe"))
         out = rt.run_task(
@@ -716,9 +730,7 @@ class TestPersonaAndCredentials:
         assert inputs["tone"] == "warm, direct"
         assert inputs["sign_off"] == "Wren"
 
-    def test_credential_resolved_jit_and_never_logged(
-        self, db, tmp_path, tolls, tools
-    ):
+    def test_credential_resolved_jit_and_never_logged(self, db, tmp_path, tolls, tools):
         rt = runtime(
             db,
             tmp_path,
