@@ -252,6 +252,78 @@ exactly those. RED (commit bc06006, tests only): 20 failing on
   any fragmentation). Ticketed separately at the lower severity
   Rex indicated: TW-831 [LOW].
 
+## 2d. Fix round 3 (Rex re-probe run-3: HOLD stands on the same two HIGHs, narrowed)
+
+Rex's run-3 re-probe verified every round-2 claim true on his old
+batteries (A1 0/16, A2 0/27 missed, A3 0/10 FP, H7 clean), then a
+fresh unseen battery found 16/32 scanner misses dominated by plain
+English and single-layer encodings, and one composite-leaf
+credential gap. This round addresses exactly those. RED (commit
+57183e4, tests only): 16 failing on 4e1db73 — the 14 in-scope
+attacks below + the 2 bare-token credential tests. GREEN: commit
+94dd3d3 (+ a ruff-format commit). The two exotic-tail attacks
+(literal \u escape, Armenian homoglyph U+0585) are out of scope:
+the run-3 verdict names them "NOT the basis of this verdict".
+
+- TW-818 (scanner round 3): the regression battery is Rex's run-3
+  probe_fresh.py F1/F2 sets verbatim (TestScannerBatteryRound3).
+  (1) Override family widened past imperative verbs:
+  instruction-negation phrasings (do not follow / stop following /
+  never follow / do not obey + instructions/directives/orders),
+  "unlearn", and the act-as-if erasure ("act as if you never
+  received any instructions"). (2) Bare imperative exfiltration:
+  give / share / copy / dump / hand over join the exfil verb set;
+  phone numbers, email addresses, and contact details join the
+  sensitive noun classes (qualified and bare forms, main and
+  squashed passes). (3) Split payloads: the bounded proximity
+  windows stay, and a document-level signal combination runs on
+  top — sensitive noun anywhere AND a strong destination anywhere
+  (email address, URL, or phone number; a bare "to"/"at" does not
+  count) AND (an exfil verb anywhere OR an override phrase
+  anywhere) flags exfiltrate_send. The noun + strong-destination
+  pair is the false-positive guard, and the tradeoff is stated
+  honestly: a document that merely mentions a list and an email
+  in separate innocent sentences stays clean (two doc-level
+  benign controls prove it), but a benign document combining all
+  three signals across sentences, each innocent in isolation,
+  will flag — safe direction; the flag is owner visibility, not
+  an action. (4) Canonical single-layer encodings: unescape +
+  percent-decode run to a fixpoint (max 3) in normalization, so
+  double HTML entities and percent-encoded letters fold before
+  matching; hex-encoded candidate runs (>= 20 hex chars) decode
+  alongside base64 in _decoded_texts and scan as plaintext. Both
+  of Rex's run-3 safe-direction benign FPs are fixed at the
+  pattern level: "follow" no longer matches the phrasal verb
+  "follow up" (decode-the-VIN control), and the squashed exfil
+  destination set drops "out", which substring-matched inside
+  "about" (message-the-contacts-list control); "send the roster
+  out" is still caught by the main pass with real boundaries.
+  Independent check: Rex's own probes re-run against the fixed
+  code — probe_fresh.py F1 missed 2/32 (the named exotic tail
+  only; all 14 in-scope plain-English/encoding misses flagged),
+  F2 false positives 0/15 (was 2/15); probe769_r2.py A1 0/16,
+  A2 0/27 missed, A3 0/10 FP; probe_h6.py unchanged-clean on
+  base64/upper (split halves now also scrubbed via component
+  tokens; char-list remains, TW-831).
+- TW-824 (composite-leaf verbatim gap, narrowed): registration
+  now walks string CONTENT as well as structure. Each leaf
+  registers, in addition to the whole leaf, its component tokens:
+  split on whitespace and on common separators/punctuation,
+  every token of length >= 6, each with the same encoded-form
+  registration (base64, case variants). {"authorization":
+  "Bearer <SECRET>"} therefore registers the bare token, and a
+  handler echoing it — in a result or in an exception — persists
+  nothing (regressions mirror Rex's F3 header shape exactly;
+  whole-leaf echo control stays scrubbed). _scrub now replaces
+  longest-first so a component token cannot partially redact a
+  longer leaf and leave its remainder standing. NOT in this
+  round, by name: transformed echoes (hex, title-case, ROT13,
+  reversed, percent-encoded, zero-width-inserted, newline-split
+  base64) — Rex's separate TW-832 [MED] carries the canonical
+  hex/title-case family and the TW-831 family carries the rest;
+  Rex's probe F3 confirms those still persist, exactly as
+  scoped, and they are not claimed here.
+
 ## 3. Guarantees table
 
 | # | What is guaranteed | Test file or command | Type | Result | Evidence |
@@ -293,6 +365,9 @@ exactly those. RED (commit bc06006, tests only): 20 failing on
 | 35 | Rex run-2 battery: all 27 A2 attack probes flagged (separator/combining/HTML/leet/ROT13/reversed families, attention synonyms, widened exfil verbs, [SYSTEM] header); his wider 10-control benign set clean, incl. the 2 round-2 FPs (TW-818) | TestScannerBatteryRound2 + Rex probe769_r2.py re-run (A1 0/16, A2 0/27 missed, A3 0/10 FP) | RED | PASS | fix round 2 |
 | 36 | Bundle-shaped credential resolution registers every leaf string: dict/nested bundle echoes through results and exception messages persist nothing (TW-824 H7) | TestCredentialRedactionRound2 | RED | PASS | fix round 2 |
 | 37 | Common encoded forms of a resolved credential (base64, upper/lower case) are scrubbed from persisted surfaces (TW-824 H6, partial; split/char-list remainder is TW-831) | TestCredentialRedactionRound2 + Rex probe_h6.py re-run (b64/upper clean) | RED | PASS | fix round 2 |
+| 38 | Rex run-3 fresh battery: all 14 in-scope attacks flagged (negation/act-as-if/unlearn overrides, give/share/copy/dump/hand-over exfil, phone-numbers noun, ~110-char split payload via document-level combination, percent/double-entity/hex encodings); the 16 already-flagged stay flagged; benign clean across run-1 (6) + run-2 (10) + run-3 (13 of 15, both safe-direction FPs fixed at pattern level, now 15/15 on Rex's own probe) + 2 doc-level tension controls (TW-818) | TestScannerBatteryRound3 + Rex probe_fresh.py re-run (F1 missed 2/32, exotic tail only; F2 FP 0/15) + probe769_r2.py re-run (A1 0/16, A2 0/27, A3 0/10) | RED | PASS | fix round 3 |
+| 39 | Composite-leaf credential ({"authorization": "Bearer <SECRET>"}) registers its component tokens (len >= 6): a bare-token echo in a handler result or an exception message persists nothing; whole-leaf echo stays scrubbed (TW-824 narrowed; transformed echoes are TW-832/TW-831, not claimed) | TestCredentialRedactionRound3 + Rex probe_fresh.py F3 re-run (header_leaf_bare_token_echo scrubbed, header_leaf_whole_echo scrubbed) | RED | PASS | fix round 3 |
+| 40 | Full suite invariant vs clean-main control at 8278a91, fix round 3 | pytest (both trees) | CI | PASS | see §4 |
 
 ## 4. Coverage and known gaps
 
@@ -343,6 +418,35 @@ Fix-round-2 suite (fresh, this round):
   app/agent_runtime/service.py, tests/test_agent_runtime.py,
   after a format pass in this round). No shebangs.
 
+Fix-round-3 suite (fresh, this round):
+- RED (57183e4): 16 round-3 tests failing on 4e1db73 behavior
+  (14 in-scope scanner attacks + 2 bare-token credential tests);
+  32 round-3 tests passing (already-flagged battery, benign sets,
+  doc-level controls, whole-leaf control).
+- Clean-main control re-run (8278a91, fresh worktree): 1914
+  passed, 20 failed, 8 errors, 76 skipped (unchanged).
+- This branch after fix round 3: 2075 passed, 20 failed,
+  8 errors, 76 skipped. Failed/error node sets byte-identical to
+  the control (diff empty, 28 nodes each); the delta over control
+  is exactly 161 passing tests: the original 23, 45 round-1
+  runtime regressions, 4 round-1 gateway regressions, 41 round-2
+  tests, and 48 round-3 tests.
+- Affected suites alone: test_agent_runtime.py 157/157;
+  runtime + gateway service/models/router 219/219.
+- Rex's own probes re-run against the fixed code:
+  probe_fresh.py — F1 missed 2/32 (literal \u escape and
+  Armenian homoglyph only, the exotic tail the run-3 verdict
+  names as not its basis), F2 false positives 0/15 (was 2/15),
+  F3 header_leaf_bare_token_echo and header_leaf_whole_echo
+  scrubbed (transformed echoes persist, TW-832/TW-831 scope);
+  probe769_r2.py — A1 0/16, A2 0/27 missed, A3 0/10 FP, H7
+  clean; probe_h6.py — base64/upper clean, char-list persists
+  (TW-831, as scoped).
+- Style gate (fresh): `python3 -m ruff check` → All checks
+  passed; `python3 -m ruff format --check` → 4 files already
+  formatted (app/agent_runtime/__init__.py, models.py,
+  service.py, tests/test_agent_runtime.py). No shebangs.
+
 Style gate (fresh, before this report):
 - `python3 -m ruff check app/agent_runtime/__init__.py app/agent_runtime/models.py app/agent_runtime/service.py tests/test_agent_runtime.py` → All checks passed!
 - `python3 -m ruff format --check` (same files) → 4 files already formatted.
@@ -390,6 +494,33 @@ Known gaps, named:
   not a Spec 3 merge blocker. The persisted-surface guarantee
   covers verbatim values, every leaf of a bundle-shaped value,
   and the registered encoded forms named in §2c.
+- Credential composite-leaf + transform remainder (fix round 3):
+  as of round 3 the guarantee also covers the component tokens
+  (length >= 6) of a composite leaf — the bare token inside
+  "Bearer <SECRET>" and its registered encoded forms. It does
+  NOT cover transformed echoes of a resolved value: hex,
+  title-case, ROT13, reversed, percent-encoded, zero-width-
+  inserted, or newline-split base64 renderings a handler
+  constructs can still persist (Rex run-3 probe F3). That
+  remainder is carried by TW-832 [MED] (canonical hex/title-case
+  transforms) and TW-831 (fragmentation/deliberate transforms);
+  neither is built in this round and neither is claimed here.
+- Scanner exotic tail (TW-818, named in Rex's run-3 verdict as
+  not the basis of the HOLD): a literal "\u0069"-style escape
+  spelled with a backslash in the raw text, and homoglyphs
+  outside the fold map (e.g. Armenian U+0585), are still missed.
+  The scanner's guarantee is the plain-English families, the
+  separator/combining/leet/ROT13/reversed mechanics, and the
+  single-layer canonical encodings (HTML entities to a fixpoint,
+  percent, base64, hex) named in §2d — not arbitrary escape
+  notations or the full Unicode confusables space.
+- Document-level combination tradeoff (§2d): the rule flags a
+  benign document that combines an exfil verb, a sensitive noun,
+  and a strong destination across separate sentences. Both of
+  Rex's run-3 benign controls that combine fewer signals stay
+  clean, and his full F2 set now reads 0/15 on his own probe;
+  the residual FP shape is named here rather than tuned away by
+  exception.
 
 ## 5. Plan-safety notes
 
