@@ -571,6 +571,7 @@ def _ref_send(segment: str) -> bool:
         return True
     return bool(_REF_SEND.search(segment[: destination.start()]))
 
+
 # Second pass over the text with ALL non-alphanumerics removed,
 # using substring (not word-boundary) patterns: a fully spaced-out
 # or separator-joined payload ("i g n o r e ...", "i.g.n.o.r.e",
@@ -602,9 +603,7 @@ _SQUASH_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"|(set|lay|put|brush|throw)"
             + _GAP40
             + r"(instructions?|directives?|guidelines|directions"
-            r"|rulebook|rules(?!sheet)|handbook)"
-            + _GAP20
-            + r"(aside|away|out)"
+            r"|rulebook|rules(?!sheet)|handbook)" + _GAP20 + r"(aside|away|out)"
             r"|(instructions?|guidelines|directions|rulebook"
             r"|handbook|rules(?!sheet))"
             + _GAP30
