@@ -8,7 +8,12 @@ The pipeline for one MCP-style tool call:
    log is a call we do not run. No audit, no execution.
 3. A bound call asks the TW-768 ledger (agentperms.check_permission)
    at invoke time. No grant, deny, revoked, over cap: refused here,
-   whatever the gateway policy says.
+   whatever the gateway policy says. When the caller names the
+   acting agent (agent_identity_id, TW-821), the check reads THAT
+   agent's grant scope — a per-agent revocation fences its tool
+   steps exactly as it fences its handler steps, and a per-agent
+   grant authorizes them; with no agent named, the org-wide row
+   governs (the TW-768 singleton reading).
 4. Mode allow executes; mode ask parks the call as an approval row
    and returns pending_approval; mode deny refuses.
 5. decide() settles a parked call. On approval the ledger check
@@ -283,12 +288,22 @@ def _ledger_gate(
     action_class: str,
     *,
     amount_cents: int | None,
+    agent_identity_id: str | None = None,
 ) -> tuple[bool, str, str | None]:
     """Ask the TW-768 ledger. Returns (allowed, reason, grant_id).
-    A ledger error is a denial, never a pass and never a crash."""
+    A ledger error is a denial, never a pass and never a crash.
+
+    agent_identity_id names the acting agent (TW-821): the decision
+    reads that agent's own grant row when one exists, else the
+    org-wide row — the same scoping handler steps get from
+    agentperms.gate, so the tool path is never the soft path."""
     try:
         decision = ledger.check_permission(
-            db, org_id, action_class, amount_cents=amount_cents
+            db,
+            org_id,
+            action_class,
+            amount_cents=amount_cents,
+            agent_identity_id=agent_identity_id,
         )
     except Exception:
         return False, "ledger_error", None
@@ -368,10 +383,16 @@ def invoke(
     *,
     actor: str,
     amount_cents: int | None = None,
+    agent_identity_id: str | None = None,
     executor: Executor | None = None,
     rules: tuple[models.ToolRule, ...] = models.DEFAULT_RULES,
 ) -> GatewayOutcome:
-    """Gate one tool call. Refusals are outcomes, not exceptions."""
+    """Gate one tool call. Refusals are outcomes, not exceptions.
+
+    agent_identity_id is the acting agent when the caller is one
+    (TW-821): it scopes the ledger check to that agent's grants and
+    revocations. Callers acting as themselves (owner surfaces) omit
+    it and read the org-wide row."""
     args = args or {}
     run = executor or default_executor(db, org_id)
     call_id = str(uuid.uuid4())
@@ -437,7 +458,11 @@ def invoke(
     grant_id: str | None = None
     if policy.action_class is not None:
         allowed, reason, grant_id = _ledger_gate(
-            db, org_id, policy.action_class, amount_cents=amount_cents
+            db,
+            org_id,
+            policy.action_class,
+            amount_cents=amount_cents,
+            agent_identity_id=agent_identity_id,
         )
         if not allowed:
             return denied(reason, grant_id)
@@ -605,6 +630,7 @@ def decide(
     *,
     actor: str,
     approve: bool,
+    agent_identity_id: str | None = None,
     executor: Executor | None = None,
 ) -> GatewayOutcome:
     """Settle a parked call. Raises GatewayError for a missing or
@@ -726,6 +752,12 @@ def decide(
 
     # Fencing: the ledger is asked again, now, at execution time. A
     # revocation that landed while the call waited stops it here.
+    # The re-check reads the REQUESTING agent's scope (TW-821): an
+    # explicit agent_identity_id wins; otherwise the approval row's
+    # requested_by is the actor who parked the call — an agent id on
+    # the runtime path (its per-agent rows govern), a human actor on
+    # the owner path (no per-agent rows exist for it, so the
+    # org-wide row governs, exactly as before).
     grant_id: str | None = None
     if action_class is not None:
         allowed, reason, grant_id = _ledger_gate(
@@ -733,6 +765,7 @@ def decide(
             org_id,
             action_class,
             amount_cents=approval.get("amount_cents"),
+            agent_identity_id=agent_identity_id or approval.get("requested_by"),
         )
         if not allowed:
             _set_approval_status(db, approval, "fenced")

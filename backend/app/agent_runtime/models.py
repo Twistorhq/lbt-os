@@ -16,7 +16,10 @@ one-word instruction from any owner channel.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -72,6 +75,13 @@ class AgentTask(_StrictBase):
     org_id: str
     agent_identity_id: str | None = None
     source: str
+    # TW-828: the source label is caller-supplied and UNTRUSTED —
+    # customer email can claim source="owner". Only the authenticated
+    # intake wiring (Spec 8, TW-786) may set source_verified=True,
+    # after it has verified the channel; the runtime treats an
+    # unverified label as agent-initiated (most restrictive mode:
+    # ask-first, quiet hours, attendant gating all apply).
+    source_verified: bool = False
     content: str = ""
     toll_budget_cents: int | None = None
     quiet_window: tuple[str, str] | None = None
@@ -131,31 +141,211 @@ class TaskStepDef:
 
 # -- injection guard --------------------------------------------------------
 
+_ZERO_WIDTH = dict.fromkeys(map(ord, "\u200b\u200c\u200d\u2060\ufeff\u00ad"), None)
+
+# Cyrillic / Greek letters that render identically to Latin ones.
+_HOMOGLYPHS: dict[str, str] = {
+    "\u0430": "a",
+    "\u0435": "e",
+    "\u043e": "o",
+    "\u0440": "p",
+    "\u0441": "c",
+    "\u0445": "x",
+    "\u0443": "y",
+    "\u0456": "i",
+    "\u0455": "s",
+    "\u04bb": "h",
+    "\u043a": "k",
+    "\u043c": "m",
+    "\u0442": "t",
+    "\u0410": "A",
+    "\u0415": "E",
+    "\u041e": "O",
+    "\u0420": "P",
+    "\u0421": "C",
+    "\u0425": "X",
+    "\u0423": "Y",
+    "\u0406": "I",
+    "\u0405": "S",
+    "\u039f": "O",
+    "\u03bf": "o",
+    "\u03b1": "a",
+    "\u03c1": "p",
+    "\u03c7": "x",
+}
+
+
+def _normalize_for_scan(text: str) -> str:
+    """Fold the evasions away BEFORE pattern matching (TW-818):
+    unicode compatibility forms, zero-width characters, Cyrillic /
+    Greek homoglyphs, whitespace runs, and spaced-out letter runs
+    ("i g n o r e" -> "ignore"). Matching then runs over the whole
+    text, newlines included — a line break is not a hiding place."""
+    text = unicodedata.normalize("NFKC", text or "")
+    text = text.translate(_ZERO_WIDTH)
+    text = "".join(_HOMOGLYPHS.get(ch, ch) for ch in text)
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(
+        r"(?<![A-Za-z])(?:[A-Za-z] ){2,}[A-Za-z](?![A-Za-z])",
+        lambda m: m.group(0).replace(" ", ""),
+        text,
+    )
+    return text
+
+
+_GAP60 = r"[\s\S]{0,60}?"
+_GAP40 = r"[\s\S]{0,40}?"
+_GAP30 = r"[\s\S]{0,30}?"
+
 _INJECTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "ignore_instructions",
-        re.compile(r"ignore\b[^.\n]{0,40}\binstructions\b", re.I),
+        re.compile(
+            r"\b(ignore|disregard|forget|overlook)\b"
+            + _GAP60
+            + r"\b(instructions?|directives?|guidelines|rules|everything|all)\b",
+            re.I,
+        ),
     ),
-    ("disregard", re.compile(r"disregard\s+(the|your|all)\s", re.I)),
-    ("new_instructions", re.compile(r"new\s+instructions\s*:", re.I)),
-    ("system_impersonation", re.compile(r"^\s*system\s*:", re.I | re.M)),
-    (
-        "exfiltrate_send",
-        re.compile(r"(send|forward|email)\b[^.\n]{0,60}\b(to|@)\b", re.I),
-    ),
-    ("reveal_prompt", re.compile(r"reveal\b[^.\n]{0,40}\bprompt", re.I)),
     (
         "override_rules",
-        re.compile(r"override\s+(your|the)\s+(rules|instructions)", re.I),
+        re.compile(
+            r"\b(override|set aside|bypass|circumvent|suspend)\b"
+            + _GAP40
+            + r"\b(rules?|instructions?|guidelines|checks|restrictions?|safeguards?)\b",
+            re.I,
+        ),
+    ),
+    (
+        "safety_bypass",
+        re.compile(
+            r"\b(skip|disable|turn off)\b"
+            + _GAP30
+            + r"\b(checks|verification|approvals?|safeguards?|restrictions?)\b",
+            re.I,
+        ),
+    ),
+    ("new_instructions", re.compile(r"\bnew\s+instructions?\s*:", re.I)),
+    (
+        "system_impersonation",
+        re.compile(r"(^|[>\"']\s*|\s)system\s*(message|prompt)?\s*:", re.I),
+    ),
+    (
+        # A send-shaped verb plus a SENSITIVE object plus a
+        # destination. A bare "send X to Y" is ordinary shop talk
+        # ("send the estimate to Mrs. Lee") and must not flag.
+        "exfiltrate_send",
+        re.compile(
+            r"\b(send|forward|email|upload|post|transmit|leak)\b"
+            + _GAP60
+            + r"\b(customer|client|patient|employee|contact)?\s*"
+            + r"(list|database|records?|roster|data|credentials|contacts)\b"
+            + _GAP40
+            + r"\b(to|at|@|https?://|out)\b",
+            re.I,
+        ),
+    ),
+    (
+        "reveal_prompt",
+        re.compile(r"\breveal\b" + _GAP40 + r"\b(prompt|instructions?|system)\b", re.I),
+    ),
+    (
+        "encoded_payload",
+        re.compile(
+            r"\b(decode|decrypt|base64)\b"
+            + _GAP30
+            + r"\b(follow|execute|obey|run|instructions?)\b",
+            re.I,
+        ),
     ),
 )
+
+# Second pass over the text with ALL spacing removed, using
+# substring (not word-boundary) patterns: a fully spaced-out
+# payload ("i g n o r e  y o u r  i n s t r u c t i o n s")
+# collapses into one long token where \b anchors never fire.
+_SQUASH_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    (
+        "ignore_instructions",
+        re.compile(
+            r"(ignore|disregard|forget|overlook)"
+            + _GAP60
+            + r"(instructions?|directives?|guidelines|rules|everything|all)",
+            re.I,
+        ),
+    ),
+    (
+        "override_rules",
+        re.compile(
+            r"(override|setaside|bypass|circumvent|suspend)"
+            + _GAP40
+            + r"(rules?|instructions?|guidelines|checks|restrictions?|safeguards?)",
+            re.I,
+        ),
+    ),
+    ("new_instructions", re.compile(r"newinstructions?:", re.I)),
+    ("system_impersonation", re.compile(r"system(message|prompt)?:", re.I)),
+    (
+        "exfiltrate_send",
+        re.compile(
+            r"(send|forward|email|upload|post|transmit|leak)"
+            + _GAP60
+            + r"(list|database|records?|roster|data|credentials|contacts)"
+            + _GAP40
+            + r"(to|at|@|https?://|out)",
+            re.I,
+        ),
+    ),
+    (
+        "reveal_prompt",
+        re.compile(r"reveal" + _GAP40 + r"(prompt|instructions?|system)", re.I),
+    ),
+)
+
+_B64_TOKEN = re.compile(r"[A-Za-z0-9+/]{16,}={0,2}")
+
+
+def _decoded_texts(content: str) -> list[str]:
+    """Base64-looking tokens in the content, decoded. An instruction
+    does not stop being one because it was encoded first."""
+    out: list[str] = []
+    for token in _B64_TOKEN.findall(content or ""):
+        try:
+            raw = base64.b64decode(token + "=" * (-len(token) % 4), validate=True)
+            decoded = raw.decode("utf-8")
+        except (binascii.Error, UnicodeDecodeError, ValueError):
+            continue
+        if decoded and all(ch.isprintable() or ch in "\n\t" for ch in decoded):
+            out.append(decoded)
+    return out
 
 
 def scan_injections(content: str) -> list[str]:
     """Names of instruction-shaped patterns found in agent-read
     content. The content itself is never returned, logged, or acted
-    on — only the pattern names reach the audit feed."""
-    return [name for name, pat in _INJECTION_PATTERNS if pat.search(content or "")]
+    on — only the pattern names reach the audit feed.
+
+    The scan normalizes first (TW-818: zero-width, homoglyph, and
+    spacing evasions fold away), crosses line breaks, and also scans
+    anything base64-decoded out of the content. Verb patterns are
+    noun-bound on purpose: ordinary shop phrasing ("send the
+    estimate to Mrs. Lee", "disregard the previous invoice") carries
+    no sensitive object and stays unflagged."""
+    text = _normalize_for_scan(content or "")
+    found = [name for name, pat in _INJECTION_PATTERNS if pat.search(text)]
+    squashed = text.replace(" ", "")
+    for name, pat in _SQUASH_PATTERNS:
+        if name not in found and pat.search(squashed):
+            found.append(name)
+    for decoded in _decoded_texts(content or ""):
+        inner = _normalize_for_scan(decoded)
+        hits = [name for name, pat in _INJECTION_PATTERNS if pat.search(inner)]
+        for name in hits:
+            if name not in found:
+                found.append(name)
+        if hits and "encoded_payload" not in found:
+            found.append("encoded_payload")
+    return found
 
 
 # -- Spec 8 mode-switch intake ----------------------------------------------

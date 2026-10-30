@@ -61,6 +61,10 @@ Design decisions:
   guarded_step layer when the step also declares an action_class;
   a tool-only step inherits the gateway's org-row reading. Filed as
   a known seam, not silently widened here.
+  CORRECTION (fix round, 2026-10-30): the word "Filed" above was
+  wrong when written — no ticket existed until Rosa's review caught
+  it and TW-829 was created. The seam itself is now CLOSED by the
+  fix round below (TW-829 / TW-821).
 - Presence (Spec 8 contracts): presence at_desk/unknown +
   agent-initiated + consequential + not owner-approved → status
   `awaiting_owner` with an `ask_first` audit row carrying the
@@ -83,6 +87,118 @@ Design decisions:
 - Sandbox: runtime is bound to one org; enqueue of another org's
   task raises OrgMismatch; every read filters org_id; two runtimes
   over one shared journal file cannot see each other's tasks.
+
+## 2b. Fix round (Rosa REQUEST CHANGES + Rex HOLD, 2026-10-30)
+
+RED (commit af4f10e, tests only): 39 new tests failing on 5675b1d
+behavior, each mirroring a named probe (Rosa P1/P1b/P4/P7; Rex
+battery sections A/B/C/E/F/G/H/I/J/K). GREEN: this commit.
+
+- M1 / TW-829 / TW-821 (per-agent fencing on the tool path):
+  `toolgateway.service.invoke` and `decide` accept
+  `agent_identity_id` and thread it into `_ledger_gate` at invoke
+  AND at execution (decide falls back to the approval row's
+  `requested_by`, the actor who parked the call). The runtime
+  passes its own agent id on every invoke. A tool-only step whose
+  agent stands per-agent revoked is refused before the executor
+  runs (P1); the same step declaring the class fences via the
+  runtime guard (P1b); a grant scoped only to the acting agent now
+  authorizes its tool steps (Rex K2). Gateway-level regressions
+  live in test_toolgateway_service.py::TestPerAgentScoping,
+  including a mid-wait per-agent revocation fencing `decide`.
+- M3 / TW-823 (toll atomicity): `_charge_toll` calls the M1 sink
+  BEFORE writing the local agent_tolls row; a sink failure writes
+  a `toll_sink_failed` audit row, fails the step, and leaves no
+  local row, so the resume retries the sink under the same
+  idempotency key. P7 regression: sink fails once, resume, M1
+  receives exactly one 25-cent charge, local spent reads 25.
+  Named honestly: on that resume the step HANDLER re-runs, because
+  the step never completed — that is the durable engine's
+  at-least-once semantics for incomplete steps (identical to a
+  crash mid-step); exactly-once for real effects remains the
+  handler's `ctx.apply_effect` contract. What can no longer happen
+  is the toll being lost or doubled.
+- Minor / TW-825: duplicate task ids (same org, or another org
+  sharing the journal) raise the typed `DuplicateTaskId`, checked
+  before insert with the sqlite IntegrityError translated as a
+  backstop. No raw sqlite error leaves enqueue, and a foreign id
+  cannot be pre-claimed.
+- TW-818 (scanner): scan_injections normalizes before matching
+  (NFKC, zero-width strip, Cyrillic/Greek homoglyph fold,
+  whitespace collapse, spaced-letter collapse, plus a squashed
+  substring pass), scans across line breaks, decodes base64
+  payloads and scans the plaintext, and widens verb/framing
+  coverage (disregard/forget + object, SYSTEM MESSAGE:, quoted
+  system:, singular "new instruction:", upload/post verbs,
+  reveal-instructions, polite override phrasing). Exfiltration is
+  noun-bound (sensitive object required), so ordinary shop talk
+  ("send the estimate to Mrs. Lee", "disregard the previous
+  invoice") does not flag. Regression battery adopts Rex's 16
+  attack payloads verbatim plus 6 benign controls: 16/16 flagged,
+  0 false positives. Independent check: Rex's own probe section A
+  re-run against the fixed code reports "attack payloads missed:
+  0 of 16".
+- TW-819: handler results and tool outputs are scanned on return;
+  hits write an `injection_flagged` audit row with origin
+  (step_result / tool_output) and merge the pattern names into
+  the task record's flags for downstream consumers.
+- TW-820: every step re-asserts `assert_accepting_work` at its
+  boundary, before budget/credentials/effects. Probe C
+  regression: revoke-all inside step 1 fences a plain step 2
+  (status fenced, effect never runs, step 2's toll never posts).
+- TW-822: the TW-785 backstop collects `executed_amount_cents`
+  at any nesting depth, for handler AND tool steps (tool steps
+  fence under the gateway-resolved class). Values must be real
+  ints: string/float/bool renderings are violations, and an
+  amount with no money class governing it is a violation, never
+  a silent pass. (Rosa's ruling stands: the after-return timing
+  is acceptable for Spec 3; TW-771 still carries the named gate
+  that no money handler merges without in-handler checkpoint
+  proof.)
+- TW-824: resolved credential values register with the runtime at
+  resolution and are scrubbed from step results, handler error
+  messages (re-raised scrubbed), audit payloads, engine error
+  strings, and task records. Regressions cover the result-echo
+  and exception-message surfaces (Rex H1/H2).
+- TW-826: a constructor-injected identity whose org (or agent id,
+  when both name one) does not match the runtime is refused with
+  OrgMismatch at construction.
+- TW-827: apply_mode_switch requires a switch-shaped text PLUS a
+  known owner channel kind and an actor token of the verified
+  shape `owner:<id>`; anything less raises UnverifiedModeSwitch
+  and the mode does not move. The verified actor is recorded on
+  the mode_switch audit row. Spec 8 (TW-786) wiring authenticates
+  the real channel and supplies both.
+- TW-828: AgentTask carries `source_verified` (default False,
+  settable only by the authenticated intake wiring). run_task
+  treats only a verified owner source as owner-initiated; an
+  unverified "owner" label gets the restrictive path (ask-first
+  at desk, quiet hours, attendant gating). Trust boundary is
+  documented in the runtime docstring and §4 below.
+- M2 (logging-drift gate): Rex's Dread Ledger run on the
+  agent_runtime boundary is complete and linked here:
+  `~/workspace/security-audits/lbt-os-agent-runtime/logging/run-1/ledger.md`
+  (validator OK, 90/90 reconciled: covered 7, missing 21,
+  unavailable_signal 1, not_applicable 61; local gate FAIL on the
+  assessed 5675b1d code, deployment NOT RUN). Several missing rows
+  are closed by this fix round (SEC-089 credential-in-error
+  redaction via TW-824; caught-attempt rows for unverified mode
+  switches and result-scan flags). Rex's storage triage:
+  agent_audit's plain mutable SQLite is ACCEPTABLE WITH A
+  TICKETED GAP for Spec 3's scope; the integrity work (per-org
+  hash chain, append-only triggers, actor/correlation fields,
+  verify_audit, retention) is ticketed as TW-830 [MEDIUM] and is
+  explicitly NOT built in this round. TW-830 is a HARD BLOCKER
+  before TW-772 (Spec 6) renders the feed to owners and before
+  TW-776 uses the feed as customer proof.
+
+Probe-compatibility note: Rex's run-1 probe script predates the
+TW-827/TW-828 contracts, so its sections B (tool leg), D, E, I, J
+now stop at the new gates (awaiting_owner for unverified-owner
+tasks, UnverifiedModeSwitch, OrgMismatch at construction) rather
+than reaching the code paths they probed. Each behavior they
+targeted is covered by a regression test above under the new
+contracts; Rex's re-probe of the five HIGHs runs against those.
 
 ## 3. Guarantees table
 
@@ -109,6 +225,19 @@ Design decisions:
 | 19 | Credential resolved JIT for one step; value absent from audit feed and task record | TestPersonaAndCredentials | RED | PASS | 23 passed |
 | 20 | Quiet hours defer agent-initiated work (overnight window) | TestQuietHours | unit | PASS | 23 passed |
 | 21 | Full suite invariant vs clean-main control at 8278a91 | pytest (both trees) | CI | PASS | see §4 |
+| 22 | Tool-only step fenced by per-agent revocation, executor never runs (Rosa P1); with action_class declared it fences via the guard (P1b) | TestToolStepPerAgentFencing | RED | PASS | fix round |
+| 23 | Per-agent-only grant authorizes the agent's tool steps (Rex K2); gateway decide re-check fences a mid-wait per-agent revocation | TestToolStepPerAgentFencing + test_toolgateway_service.py::TestPerAgentScoping | RED | PASS | fix round |
+| 24 | Revoke-all inside step 1 fences a plain undeclared step 2; its toll never posts (TW-820) | TestStepBoundaryRevocation | RED | PASS | fix round |
+| 25 | Toll sink fails once: toll_sink_failed audited, resume retries the sink, M1 receives the toll exactly once (Rosa P7 / TW-823) | TestTollSinkFailure | RED | PASS | fix round |
+| 26 | Duplicate task id, same org or cross-org on a shared journal, raises typed DuplicateTaskId, never sqlite IntegrityError (TW-825) | TestDuplicateTaskId | RED | PASS | fix round |
+| 27 | Rex's 16 attack payloads all flagged after normalization; 6 benign shop controls unflagged (TW-818) | TestScannerBattery | RED | PASS | fix round |
+| 28 | Injection planted in a handler result or a tool output is flagged in audit with origin and marked on the task record (TW-819) | TestResultScanning | RED | PASS | fix round |
+| 29 | Executed amounts as string, float, or nested sub-dict are money-fence violations; tool-step amounts are checked; an int under cap completes (TW-822) | TestExecutedAmountShapes | RED | PASS | fix round |
+| 30 | Resolved credential echoed in a handler result or raised in an error message appears on no persisted surface (TW-824) | TestCredentialRedaction | RED | PASS | fix round |
+| 31 | Constructor-injected foreign-org identity refused with OrgMismatch (TW-826) | TestForeignIdentity | RED | PASS | fix round |
+| 32 | Mode switch without a verified owner actor/channel raises UnverifiedModeSwitch and moves nothing; verified switch records the actor (TW-827) | TestModeSwitchAuth | RED | PASS | fix round |
+| 33 | Unverified "owner" source label asks first at desk; verified owner source runs (TW-828) | TestSourceTrust | RED | PASS | fix round |
+| 34 | Dread Ledger artifact for the agent_audit surface exists and is linked; storage gap ticketed as TW-830 (Rosa M2) | §2b + ledger.md (validator 90/90) | manual | PASS | fix round |
 
 ## 4. Coverage and known gaps
 
@@ -120,10 +249,28 @@ Full suite, `python3 -m pytest tests -q --continue-on-collection-errors`:
   passing. The 8 collection errors are the known sandbox lxml/xmlsec
   mismatch, pre-existing on main.
 
+Fix-round suite (fresh, this round):
+- RED (af4f10e): 39 fix-round tests failing on 5675b1d behavior.
+- Clean-main control re-run (8278a91): 1914 passed, 20 failed,
+  8 errors, 76 skipped (unchanged).
+- This branch after the fix round: 1986 passed, 20 failed,
+  8 errors, 76 skipped. Failed/error node sets byte-identical to
+  the control (diff empty, 28 nodes each); the delta over control
+  is exactly 72 passing tests: the original 23, 45 new runtime
+  regressions, and 4 new gateway regressions.
+- Affected suites alone: test_agent_runtime.py 68/68;
+  test_toolgateway_service.py + models + router + runtime 130/130.
+- Rex's probe section A re-run against the fixed code: 0 of 16
+  attack payloads missed (was 14 of 16).
+
 Style gate (fresh, before this report):
 - `python3 -m ruff check app/agent_runtime/__init__.py app/agent_runtime/models.py app/agent_runtime/service.py tests/test_agent_runtime.py` → All checks passed!
 - `python3 -m ruff format --check` (same files) → 4 files already formatted.
 - No file in this change carries a shebang.
+- Fix round: `python3 -m ruff check` and `python3 -m ruff format
+  --check` over all six authored/edited .py files (agent_runtime
+  models/service/__init__, toolgateway service, both test files)
+  → All checks passed; 6 files already formatted.
 
 Known gaps, named:
 - No HTTP router in this spec: the runtime is a service layer, same
@@ -136,12 +283,25 @@ Known gaps, named:
 - Flows triggers and the phone lane arrive as task SOURCES; wiring
   real inbound Flows/phone events into `enqueue` is Spec 4 / Spec 7
   work, not built here.
-- Gateway per-agent grant seam (§2) and the TW-785 in-handler
-  checkpoint duty (§2) are Spec 5's to close; both are stated, not
-  hidden.
-- Rex's injection battery is pre-merge per the ticket; this build's
-  guard covers the ticket's acceptance pattern (Cohen) plus seven
-  pattern classes, and Rex extends from there.
+- Gateway per-agent grant seam (§2): CLOSED in the fix round
+  (TW-829/TW-821) — the gateway now threads agent_identity_id at
+  invoke and execution. The TW-785 in-handler checkpoint duty
+  (§2) remains Spec 5's named gate.
+- agent_audit integrity (hash chain, append-only enforcement,
+  actor/correlation fields, retention): TW-830, Rex-triaged as
+  acceptable-with-gap for Spec 3 and a hard blocker before
+  TW-772 renders the feed or TW-776 uses it as proof. See §2b M2.
+- Source trust boundary (TW-828): the runtime cannot authenticate
+  a channel; it can only refuse to trust an unverified label.
+  Whoever wires intake (Spec 8) owns producing source_verified —
+  if that wiring lies, the runtime's restrictive default limits
+  the blast radius to ask-first/quiet-hours behavior, but
+  provenance itself is the wiring's contract, stated here so it
+  is never mistaken for a runtime guarantee.
+- Rex's injection battery ran pre-merge (TW-818..TW-828, HOLD);
+  the fix round addresses all eleven findings, and the HOLD
+  releases only on Rex's re-probe of the five HIGHs
+  (TW-818/820/821/822/824) after Rosa's spot-check.
 
 ## 5. Plan-safety notes
 

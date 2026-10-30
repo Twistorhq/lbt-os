@@ -15,17 +15,20 @@ from app.agent_runtime.models import (
 )
 from app.agent_runtime.service import (
     AgentTaskRuntime,
+    DuplicateTaskId,
     MoneyFenceViolation,
     OrgMismatch,
     TaskContext,
     TaskNotFound,
     TollBudgetExceeded,
     ToolRefused,
+    UnverifiedModeSwitch,
 )
 
 __all__ = [
     "AgentTask",
     "AgentTaskRuntime",
+    "DuplicateTaskId",
     "MoneyFenceViolation",
     "OrgMismatch",
     "TaskContext",
@@ -33,6 +36,7 @@ __all__ = [
     "TaskStepDef",
     "TollBudgetExceeded",
     "ToolRefused",
+    "UnverifiedModeSwitch",
     "parse_mode_switch",
     "scan_injections",
 ]

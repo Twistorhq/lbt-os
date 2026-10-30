@@ -743,3 +743,95 @@ class TestImmediateUseDefaultExecutor:
         assert out.status == "executed"
         names = [w["name"] for w in out.result["workflows"]]
         assert names == ["gw-demo"]
+
+
+# -- per-agent scoping (TW-821) ---------------------------------------------
+
+
+def revoke_agent(db, action_class, agent=AGENT):
+    return ledger_service.revoke(
+        db,
+        ORG,
+        {"strength": "class", "target": action_class},
+        actor=OWNER,
+        agent_identity_id=agent,
+    )
+
+
+NOTIFY_ARGS = {"channel": "email", "to": "a@b.c", "body": "hi"}
+
+
+class TestPerAgentScoping:
+    """The ledger check reads the ACTING AGENT's scope at invoke
+    and at execution: per-agent revocations fence tool calls and
+    per-agent grants authorize them (TW-821)."""
+
+    def test_invoke_denied_by_per_agent_revocation(self, db):
+        grant(db, "email.send")  # org-wide
+        revoke_agent(db, "email.send")  # revoked for AGENT only
+        ex = Recorder()
+        out = service.invoke(
+            db,
+            ORG,
+            "notify.send",
+            dict(NOTIFY_ARGS),
+            actor=AGENT,
+            agent_identity_id=AGENT,
+            executor=ex,
+        )
+        assert out.status == "denied"
+        assert ex.calls == []
+
+    def test_invoke_without_agent_reads_org_wide_row(self, db):
+        grant(db, "email.send")
+        revoke_agent(db, "email.send")
+        ex = Recorder()
+        out = service.invoke(
+            db, ORG, "notify.send", dict(NOTIFY_ARGS), actor=OWNER, executor=ex
+        )
+        assert out.status == "executed"
+        assert len(ex.calls) == 1
+
+    def test_per_agent_grant_authorizes_invoke(self, db):
+        grant(db, "email.send", agent_identity_id=AGENT)
+        ex = Recorder()
+        out = service.invoke(
+            db,
+            ORG,
+            "notify.send",
+            dict(NOTIFY_ARGS),
+            actor=AGENT,
+            agent_identity_id=AGENT,
+            executor=ex,
+        )
+        assert out.status == "executed"
+        assert len(ex.calls) == 1
+
+    def test_decide_recheck_fences_per_agent_revocation(self, db):
+        grant(db, "email.send", agent_identity_id=AGENT)
+        ask_rules = (
+            ToolRule(
+                tool="notify.send",
+                mode="ask",
+                class_by_arg="channel",
+                class_map={"email": "email.send"},
+            ),
+        )
+        ex = Recorder()
+        parked = service.invoke(
+            db,
+            ORG,
+            "notify.send",
+            dict(NOTIFY_ARGS),
+            actor=AGENT,
+            agent_identity_id=AGENT,
+            executor=ex,
+            rules=ask_rules,
+        )
+        assert parked.status == "pending_approval"
+        revoke_agent(db, "email.send")  # lands while the call waits
+        done = service.decide(
+            db, ORG, parked.approval_id, actor=OWNER, approve=True, executor=ex
+        )
+        assert done.status == "denied"
+        assert ex.calls == []

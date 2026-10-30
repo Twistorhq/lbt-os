@@ -35,13 +35,13 @@ Pinned behaviors (TW-769 acceptance + binding constraints):
 import pytest
 
 from app.agent_identity.models import AgentIdentity, Persona, VoiceSettings
+from app.agent_runtime import service as runtime_service
 from app.agent_runtime.models import (
     AgentTask,
     TaskStepDef,
     parse_mode_switch,
     scan_injections,
 )
-from app.agent_runtime import service as runtime_service
 from app.agent_runtime.service import (
     AgentTaskRuntime,
     OrgMismatch,
@@ -329,7 +329,11 @@ class TestRevocationFencing:
         grant(db, "email.send")
         grant(db, "sms.send")
         rt = runtime(db, tmp_path, tolls, tools)
-        task = rt.enqueue(AgentTask(org_id=ORG, source="owner", content="two sends"))
+        task = rt.enqueue(
+            AgentTask(
+                org_id=ORG, source="owner", source_verified=True, content="two sends"
+            )
+        )
         ran = []
 
         def first(ctx):
@@ -368,7 +372,11 @@ class TestRevocationFencing:
     ):
         grant(db, "email.send")
         rt = runtime(db, tmp_path, tolls, tools)
-        task = rt.enqueue(AgentTask(org_id=ORG, source="owner", content="long call"))
+        task = rt.enqueue(
+            AgentTask(
+                org_id=ORG, source="owner", source_verified=True, content="long call"
+            )
+        )
         effects = []
 
         def long_handler(ctx):
@@ -483,7 +491,9 @@ class TestToolSteps:
     def test_tool_step_routes_through_gateway(self, db, tmp_path, tolls, tools):
         grant(db, "email.send")
         rt = runtime(db, tmp_path, tolls, tools)
-        task = rt.enqueue(AgentTask(org_id=ORG, source="owner", content="mail"))
+        task = rt.enqueue(
+            AgentTask(org_id=ORG, source="owner", source_verified=True, content="mail")
+        )
         out = rt.run_task(
             task["id"],
             [
@@ -501,7 +511,9 @@ class TestToolSteps:
 
     def test_out_of_allowlist_tool_refused_and_logged(self, db, tmp_path, tolls, tools):
         rt = runtime(db, tmp_path, tolls, tools)
-        task = rt.enqueue(AgentTask(org_id=ORG, source="owner", content="wipe"))
+        task = rt.enqueue(
+            AgentTask(org_id=ORG, source="owner", source_verified=True, content="wipe")
+        )
         out = rt.run_task(
             task["id"],
             [
@@ -519,7 +531,9 @@ class TestToolSteps:
 
     def test_tool_step_without_grant_refused(self, db, tmp_path, tolls, tools):
         rt = runtime(db, tmp_path, tolls, tools)
-        task = rt.enqueue(AgentTask(org_id=ORG, source="owner", content="mail"))
+        task = rt.enqueue(
+            AgentTask(org_id=ORG, source="owner", source_verified=True, content="mail")
+        )
         out = rt.run_task(
             task["id"],
             [
@@ -584,7 +598,11 @@ class TestMoneyFence:
     ):
         grant(db, "payment.charge", cap_cents=5000)
         rt = runtime(db, tmp_path, tolls, tools)
-        task = rt.enqueue(AgentTask(org_id=ORG, source="owner", content="charge"))
+        task = rt.enqueue(
+            AgentTask(
+                org_id=ORG, source="owner", source_verified=True, content="charge"
+            )
+        )
         effects = []
 
         def charge(ctx):
@@ -613,7 +631,11 @@ class TestMoneyFence:
     ):
         grant(db, "payment.charge", cap_cents=5000)
         rt = runtime(db, tmp_path, tolls, tools)
-        task = rt.enqueue(AgentTask(org_id=ORG, source="owner", content="charge"))
+        task = rt.enqueue(
+            AgentTask(
+                org_id=ORG, source="owner", source_verified=True, content="charge"
+            )
+        )
 
         def sloppy(ctx):
             return {"charged": True, "executed_amount_cents": 7200}
@@ -674,7 +696,7 @@ class TestPresence:
         grant(db, "email.send")
         rt = runtime(db, tmp_path, tolls, tools)
         rt.set_presence("away")
-        assert rt.apply_mode_switch("on", channel="sms") == "on"
+        assert rt.apply_mode_switch("on", channel="sms", actor="owner:owner-1") == "on"
         ran = []
 
         def send(ctx):
@@ -688,7 +710,9 @@ class TestPresence:
         ]
         t1 = rt.enqueue(AgentTask(org_id=ORG, source="email", content="x"))
         assert rt.run_task(t1["id"], steps)["status"] == "completed"
-        assert rt.apply_mode_switch("off", channel="email") == "off"
+        assert (
+            rt.apply_mode_switch("off", channel="email", actor="owner:owner-1") == "off"
+        )
         t2 = rt.enqueue(AgentTask(org_id=ORG, source="email", content="y"))
         assert rt.run_task(t2["id"], steps)["status"] == "deferred"
         assert ran == [1]
@@ -699,7 +723,9 @@ class TestPresence:
         grant(db, "email.send")
         rt = runtime(db, tmp_path, tolls, tools)
         rt.set_presence("at_desk")
-        task = rt.enqueue(AgentTask(org_id=ORG, source="owner", content="do it"))
+        task = rt.enqueue(
+            AgentTask(org_id=ORG, source="owner", source_verified=True, content="do it")
+        )
 
         def send(ctx):
             return {"ok": True}
@@ -971,7 +997,9 @@ class TestTollSinkFailure:
 class TestDuplicateTaskId:
     """Rosa P4 / TW-825: duplicate ids raise a typed runtime error."""
 
-    def test_same_org_duplicate_id_is_typed_not_sqlite(self, db, tmp_path, tolls, tools):
+    def test_same_org_duplicate_id_is_typed_not_sqlite(
+        self, db, tmp_path, tolls, tools
+    ):
         import sqlite3
 
         rt = runtime(db, tmp_path, tolls, tools)
@@ -1056,7 +1084,9 @@ class TestResultScanning:
             task["id"], [TaskStepDef(name="s1", handler=evil, idempotent=True)]
         )
         assert out["status"] == "completed"
-        rows = [r for r in rt.list_audit(task["id"]) if r["kind"] == "injection_flagged"]
+        rows = [
+            r for r in rt.list_audit(task["id"]) if r["kind"] == "injection_flagged"
+        ]
         assert rows and rows[-1]["payload"].get("origin") == "step_result"
         record = rt.get_task(task["id"])
         assert record["flagged"] is True
@@ -1083,7 +1113,9 @@ class TestResultScanning:
             ],
         )
         assert out["status"] == "completed"
-        rows = [r for r in rt.list_audit(task["id"]) if r["kind"] == "injection_flagged"]
+        rows = [
+            r for r in rt.list_audit(task["id"]) if r["kind"] == "injection_flagged"
+        ]
         assert rows and rows[-1]["payload"].get("origin") == "tool_output"
         assert rt.get_task(task["id"])["flagged"] is True
 
@@ -1256,9 +1288,7 @@ class TestModeSwitchAuth:
 
     def test_verified_owner_switch_records_actor(self, db, tmp_path, tolls, tools):
         rt = runtime(db, tmp_path, tolls, tools)
-        assert (
-            rt.apply_mode_switch("on", channel="sms", actor="owner:owner-1") == "on"
-        )
+        assert rt.apply_mode_switch("on", channel="sms", actor="owner:owner-1") == "on"
         rows = [r for r in rt.list_audit() if r["kind"] == "mode_switch"]
         assert rows and rows[-1]["payload"].get("actor") == "owner:owner-1"
 
