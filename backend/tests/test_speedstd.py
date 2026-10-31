@@ -53,14 +53,26 @@ def test_partition_file_is_parquet_zstd_named():
 
 
 def test_engine_applies_hard_memory_cap():
+    # DuckDB reports memory_limit back in MiB (MB x 10^6 / 2^20): a 64 MB
+    # request reads exactly "61.0 MiB". Pin the exact reported strings so
+    # a silent change to the configured cap, explicit or default, fails.
     con = engine.connect(memory_limit_mb=64)
     try:
         (value,) = con.execute("SELECT current_setting('memory_limit')").fetchone()
     finally:
         con.close()
-    # DuckDB reports the cap back in bytes-ish units; the configured cap
-    # must be the one in force, not the machine default.
-    assert value.lower().startswith("61") or "64" in value or value.endswith("MiB")
+    assert value == "61.0 MiB"
+    # The default connection must carry the standard's stated default cap
+    # (256 MB, reported as "244.1 MiB"), not DuckDB's machine default.
+    assert engine.DEFAULT_MEMORY_LIMIT_MB == 256
+    con = engine.connect()
+    try:
+        (default_value,) = con.execute(
+            "SELECT current_setting('memory_limit')"
+        ).fetchone()
+    finally:
+        con.close()
+    assert default_value == "244.1 MiB"
 
 
 def test_engine_queries_partitioned_parquet_with_pruning(tmp_path):
