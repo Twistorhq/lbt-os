@@ -175,6 +175,7 @@ def cmd_build(args: argparse.Namespace) -> int:
                 "partitions_rebuilt": report.partitions_rebuilt,
                 "partitions_skipped": report.partitions_skipped,
                 "partitions_failed": report.partitions_failed,
+                "gold_years_synced": report.gold_years_synced,
                 "errors": report.errors[:5],
                 "rows": report.rows,
                 "silver_bytes": sum(

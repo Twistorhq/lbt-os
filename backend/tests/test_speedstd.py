@@ -204,6 +204,33 @@ def test_build_isolates_a_failing_partition_and_resumes(tmp_path, monkeypatch):
     assert report2.partitions_skipped == 5
 
 
+def test_gold_sync_heals_a_missing_gold_year(tmp_path):
+    """Gold is a cache over silver and must self-heal: if a build died
+    after the manifest landed but before a gold year file was merged,
+    the next build restores gold from silver WITHOUT rebuilding silver.
+    """
+    bronze = _write_bronze(tmp_path)
+    silver, gold, state = (
+        tmp_path / "silver",
+        tmp_path / "gold",
+        tmp_path / "state.json",
+    )
+    transform.build(bronze, silver, gold, state)
+    victim = gold / "climateshift-1" / "device=Ames, IA" / "year=2026" / "data.parquet"
+    assert victim.exists()
+    victim.unlink()
+    report = transform.build(bronze, silver, gold, state)
+    assert report.partitions_rebuilt == 0
+    assert report.gold_years_synced == 1
+    assert victim.exists()
+    con = engine.connect(memory_limit_mb=64)
+    try:
+        rows = engine.aggregate_gold_history(con, gold, "climateshift-1")
+    finally:
+        con.close()
+    assert {(r[0], r[2]) for r in rows} == {("Ames, IA", 12), ("Greeley, CO", 12)}
+
+
 def test_rebuild_with_no_changes_is_a_noop(tmp_path):
     bronze = _write_bronze(tmp_path)
     args = (bronze, tmp_path / "silver", tmp_path / "gold", tmp_path / "state.json")

@@ -45,6 +45,7 @@ class BuildReport:
     partitions_rebuilt: int = 0
     partitions_skipped: int = 0
     partitions_failed: int = 0
+    gold_years_synced: int = 0
     rows: int = 0
     errors: list[str] = field(default_factory=list)
 
@@ -107,6 +108,55 @@ def _merge_gold_year(
     _atomic_write_parquet(new_df.sort("date"), target)
 
 
+def _gold_rows(df: pl.DataFrame) -> list:
+    """Device-day aggregate rows for one silver partition."""
+    gold = df.group_by(["device", "date"]).agg(
+        pl.len().alias("n_readings"),
+        pl.col("yield_t_ha").mean().alias("avg_yield_t_ha"),
+        pl.col("temp_anomaly_c").mean().alias("avg_temp_anomaly_c"),
+        pl.col("precip_mm").mean().alias("avg_precip_mm"),
+        pl.col("gdd").sum().alias("sum_gdd"),
+    )
+    return list(gold.iter_rows())
+
+
+def _sync_gold(silver_root: Path, gold_root: Path, manifest: dict) -> int:
+    """Heal gold from silver wherever coverage drifted.
+
+    Gold is a cache over silver: if a build died after its manifest
+    landed but before a gold merge (or a gold file was lost), the
+    manifest says what SHOULD exist. Any (device, year) whose gold
+    dates do not exactly match the manifest is rebuilt from its silver
+    partitions. Returns the number of (device, year) files rebuilt.
+    """
+    from datetime import date as _date
+
+    expected: dict[tuple[str, str, int], set[str]] = {}
+    for key in manifest["partitions"]:
+        dataset, device, day_iso = key.split("|")
+        expected.setdefault((dataset, device, int(day_iso[:4])), set()).add(day_iso)
+
+    synced = 0
+    for (dataset, device, year), days in sorted(expected.items()):
+        target = _gold_year_file(gold_root, dataset, device, year)
+        if target.exists():
+            have = set(pl.read_parquet(target, columns=["date"])["date"].to_list())
+            if have == days:
+                continue
+        rows: list = []
+        for day_iso in sorted(days):
+            silver_file = layout.partition_file(
+                silver_root, dataset, device, _date.fromisoformat(day_iso)
+            )
+            rows.extend(_gold_rows(pl.read_parquet(silver_file)))
+        _atomic_write_parquet(
+            pl.DataFrame(rows, schema=list(GOLD_COLUMNS), orient="row").sort("date"),
+            target,
+        )
+        synced += 1
+    return synced
+
+
 def build(
     bronze_root: Path, silver_root: Path, gold_root: Path, state_path: Path
 ) -> BuildReport:
@@ -146,14 +196,7 @@ def build(
             report.errors.append(f"{key}: {type(exc).__name__}: {exc}")
             continue
 
-        gold = df.group_by(["device", "date"]).agg(
-            pl.len().alias("n_readings"),
-            pl.col("yield_t_ha").mean().alias("avg_yield_t_ha"),
-            pl.col("temp_anomaly_c").mean().alias("avg_temp_anomaly_c"),
-            pl.col("precip_mm").mean().alias("avg_precip_mm"),
-            pl.col("gdd").sum().alias("sum_gdd"),
-        )
-        for row in gold.iter_rows():
+        for row in _gold_rows(df):
             gold_pending.setdefault((dataset, device, day.year), []).append((key, row))
 
         known[key] = {"sha256": digest, "rows": df.height}
@@ -179,6 +222,13 @@ def build(
                 report.partitions_failed += 1
                 report.errors.append(f"gold {key}: {type(exc).__name__}: {exc}")
             _save_manifest(state_path, manifest)
+
+    # Gold self-heal: whatever the merges above did or did not reach,
+    # gold coverage is reconciled against the manifest from silver.
+    try:
+        report.gold_years_synced = _sync_gold(silver_root, gold_root, manifest)
+    except Exception as exc:  # noqa: BLE001 - surface, do not crush
+        report.errors.append(f"gold sync: {type(exc).__name__}: {exc}")
 
     _save_manifest(state_path, manifest)
     return report
