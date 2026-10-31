@@ -77,6 +77,23 @@ def test_engine_queries_partitioned_parquet_with_pruning(tmp_path):
     assert all(r[2] == 12 for r in rows)  # 3 days x 4 readings
 
 
+def test_engine_spill_is_workspace_bounded_never_tmp():
+    """Coordination fix (Marcus, TW-837 smoke): DuckDB spill must live in
+    a bounded directory under the workspace, never unbounded /tmp, which
+    is a small shared tmpfs other lanes depend on."""
+    con = engine.connect()
+    try:
+        (temp_dir,) = con.execute("SELECT current_setting('temp_directory')").fetchone()
+        (max_spill,) = con.execute(
+            "SELECT current_setting('max_temp_directory_size')"
+        ).fetchone()
+    finally:
+        con.close()
+    assert temp_dir.startswith(str(engine.DEFAULT_SPILL_DIR))
+    assert not temp_dir.startswith("/tmp")
+    assert max_spill not in ("", "-1", "0 bytes")
+
+
 # ---------------------------------------------------------------- corpus
 
 

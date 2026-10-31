@@ -11,7 +11,6 @@ columns, pruned by hive partitions.
 
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -21,23 +20,37 @@ from . import layout
 
 DEFAULT_MEMORY_LIMIT_MB = 256
 
+# Spill lives under the workspace, bounded, NEVER in /tmp. /tmp on the
+# shared sandbox is a small tmpfs other lanes depend on; an unbounded
+# spill there filled it during a TW-837 smoke and killed a clip job
+# with Errno 28 while the workspace disk had 97G free. The cap is a
+# stated number, enforced by DuckDB itself (max_temp_directory_size):
+# past it, the query errors instead of eating a shared filesystem.
+DEFAULT_SPILL_DIR = Path.home() / "workspace" / ".speedstd-spill"
+DEFAULT_MAX_SPILL = "1GB"
+
 
 def connect(
     memory_limit_mb: int = DEFAULT_MEMORY_LIMIT_MB,
     threads: int = 2,
     temp_dir: str | None = None,
+    max_spill: str = DEFAULT_MAX_SPILL,
 ) -> duckdb.DuckDBPyConnection:
     """Open an in-memory DuckDB connection under the standard's caps.
 
     memory_limit_mb is a hard cap: past it, DuckDB spills to temp_dir
     (out-of-core) rather than growing RSS. threads stays low on purpose:
-    batch jobs run single-tenant, the laptop stays responsive.
+    batch jobs run single-tenant, the laptop stays responsive. Spill is
+    bounded twice: a workspace path (never /tmp) and max_spill as a
+    hard size cap on the spill directory.
     """
-    spill = temp_dir or tempfile.mkdtemp(prefix="speedstd-spill-")
+    spill = Path(temp_dir) if temp_dir else DEFAULT_SPILL_DIR
+    spill.mkdir(parents=True, exist_ok=True)
     con = duckdb.connect(":memory:")
     con.execute(f"SET memory_limit = '{memory_limit_mb}MB'")
     con.execute(f"SET threads = {int(threads)}")
     con.execute(f"SET temp_directory = '{spill}'")
+    con.execute(f"SET max_temp_directory_size = '{max_spill}'")
     con.execute("SET preserve_insertion_order = false")
     return con
 
