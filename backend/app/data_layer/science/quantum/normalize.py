@@ -10,17 +10,20 @@ Output: one dict per observation in the brief's silver schema (vendor,
 device, device_generation, qubit_or_edge, metric, value, unit,
 measured_at, source_record_ref). measured_at is the vendor's own
 per-entry calibration timestamp where the payload carries one, else the
-payload's last_update_date.
+payload's last_update_date. If neither exists, measured_at is null and
+the entry is counted as missing vendor measurement time; retrieval time
+is preserved separately by the caller and is never substituted for a
+vendor measurement time.
 
 Per-item fault isolation (TW-208): a malformed entry (missing value,
-unknown metric name) is skipped and counted, never raised. Unknown metric
-names are refused rather than invented into the schema.
+non-numeric value, unknown metric name) is skipped and counted, never
+raised. Unknown metric names are refused rather than invented into the
+schema.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 from typing import Any
 
 from .models import METRICS as _MODEL_METRICS
@@ -42,10 +45,10 @@ _QUBIT_METRICS = {
 }
 
 
-def _measured_at(entry: dict[str, Any], fallback: str | None) -> str:
+def _measured_at(entry: dict[str, Any], fallback: str | None) -> str | None:
     raw = entry.get("date") or fallback
     if raw is None:
-        return datetime.now(timezone.utc).isoformat()
+        return None
     return str(raw).replace("Z", "+00:00")
 
 
@@ -69,22 +72,32 @@ def normalize_properties(
     fallback_date = props.get("last_update_date")
     rows: list[dict[str, Any]] = []
     skipped = 0
+    missing_measured_at = 0
 
     def base(qubit_or_edge: str, metric: str, entry: dict[str, Any]) -> dict | None:
-        nonlocal skipped
+        nonlocal skipped, missing_measured_at
         value = entry.get("value")
         if value is None or metric not in KNOWN_METRICS:
             skipped += 1
             return None
+        try:
+            numeric_value = float(value)
+        except (TypeError, ValueError, OverflowError):
+            skipped += 1
+            return None
+        measured_at = _measured_at(entry, fallback_date)
+        if measured_at is None:
+            missing_measured_at += 1
         return {
             "vendor": vendor,
             "device": device,
             "device_generation": generation,
             "qubit_or_edge": qubit_or_edge,
             "metric": metric,
-            "value": float(value),
+            "value": numeric_value,
             "unit": entry.get("unit") or None,
-            "measured_at": _measured_at(entry, fallback_date),
+            "measured_at": measured_at,
+            "measurement_time_missing": measured_at is None,
             "source_record_ref": artifact_ref,
         }
 
@@ -116,6 +129,13 @@ def normalize_properties(
             if row is not None:
                 rows.append(row)
 
+    if missing_measured_at:
+        log.info(
+            "normalize counted %d entries without vendor measurement time "
+            "for %s; measured_at left null",
+            missing_measured_at,
+            device,
+        )
     if skipped:
         log.info(
             "normalize skipped %d malformed/unknown entries for %s",

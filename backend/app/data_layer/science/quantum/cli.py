@@ -103,7 +103,11 @@ def cmd_poll(args: argparse.Namespace) -> int:
             print(f"poll: fail-closed: {exc}", file=sys.stderr)
             return 2
     devices = args.devices.split(",") if args.devices else None
-    result = QuantumPoller(transport, store, account_basis=args.basis).run(devices)
+    # Fixture data is synthetic by definition. Never let a caller-supplied
+    # basis stamp it as production: fixture runs are always Open-basis
+    # code tests, regardless of --basis or the environment default.
+    account_basis = "open" if args.fixture_file else args.basis
+    result = QuantumPoller(transport, store, account_basis=account_basis).run(devices)
     manifest_path = os.path.join(args.root, "quantum", "_runs.jsonl")
     with open(manifest_path, "a", encoding="utf-8") as f:
         f.write(json.dumps(result.manifest(), sort_keys=True) + "\n")
@@ -173,6 +177,7 @@ def cmd_normalize(args: argparse.Namespace) -> int:
                 vendor=meta.get("vendor", "ibm"),
             )
             for obs in observations:
+                measured_at = obs["measured_at"]
                 session.add(
                     models.SciQuantumObservation(
                         id=uuid.uuid4(),
@@ -184,8 +189,16 @@ def cmd_normalize(args: argparse.Namespace) -> int:
                         metric=obs["metric"],
                         value=obs["value"],
                         unit=obs["unit"],
-                        measured_at=datetime.fromisoformat(obs["measured_at"]),
-                        source_metadata={"bronze_hash": row["content_hash"]},
+                        measured_at=(
+                            datetime.fromisoformat(measured_at) if measured_at else None
+                        ),
+                        source_metadata={
+                            "bronze_hash": row["content_hash"],
+                            "bronze_collected_at": row["collected_at"],
+                            "measurement_time_missing": obs.get(
+                                "measurement_time_missing", measured_at is None
+                            ),
+                        },
                     )
                 )
             session.commit()

@@ -51,7 +51,10 @@ class SciQuantumObservation(Base):
     One row per (device, qubit_or_edge, metric, measured_at): the IBM
     properties payload exploded into the brief's single observation schema
     (vendor, device, generation, qubit/edge, metric, value, unit,
-    measured_at) with the bronze artifact as provenance.
+    measured_at) with the bronze artifact as provenance. measured_at is
+    nullable because a vendor payload may carry no measurement timestamp;
+    retrieval time is recorded separately in source_metadata and is never
+    substituted for the vendor's measurement time.
     """
 
     __tablename__ = "sci_quantum_observations"
@@ -70,7 +73,7 @@ class SciQuantumObservation(Base):
     metric = Column(Text, nullable=False)
     value = Column(Float, nullable=False)
     unit = Column(Text, nullable=True)
-    measured_at = Column(DateTime(timezone=True), nullable=False)
+    measured_at = Column(DateTime(timezone=True), nullable=True)
     source_metadata = Column(JSON, nullable=False, default=dict)
     created_at = Column(DateTime(timezone=True), nullable=False, default=func.now())
 

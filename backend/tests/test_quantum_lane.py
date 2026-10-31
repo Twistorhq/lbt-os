@@ -13,6 +13,8 @@ fixture transports, fake HTTP sessions.
 
 import gzip
 import json
+import logging
+import os
 import uuid
 from datetime import datetime, timezone
 
@@ -187,6 +189,38 @@ def test_normalize_row_count_and_fault_isolation():
     assert len(rows) == 27
 
 
+def test_normalize_non_numeric_value_is_skipped_and_counted(caplog):
+    payload = fixture_payload()
+    payload.properties["qubits"][0].append(_nduv("T1", "n/a", "us"))
+    with caplog.at_level(
+        logging.INFO, logger="app.data_layer.science.quantum.normalize"
+    ):
+        rows = normalize_properties(payload, artifact_ref="art-1")
+    assert len(rows) == 27
+    assert "normalize skipped 1" in caplog.text
+
+
+def test_normalize_without_vendor_dates_leaves_measured_at_null(caplog):
+    payload = fixture_payload()
+    payload.properties.pop("last_update_date")
+    for qubit_entries in payload.properties["qubits"]:
+        for entry in qubit_entries:
+            entry.pop("date")
+    for gate in payload.properties["gates"]:
+        for entry in gate["parameters"]:
+            entry.pop("date")
+
+    with caplog.at_level(
+        logging.INFO, logger="app.data_layer.science.quantum.normalize"
+    ):
+        rows = normalize_properties(payload, artifact_ref="art-1")
+
+    assert len(rows) == 27
+    assert all(row["measured_at"] is None for row in rows)
+    assert all(row["measurement_time_missing"] is True for row in rows)
+    assert "counted 27 entries without vendor measurement time" in caplog.text
+
+
 # ---------------------------------------------------------------------------
 # Bronze store: hashing, dedupe, daily snapshot
 # ---------------------------------------------------------------------------
@@ -221,6 +255,8 @@ def test_bronze_store_writes_gzipped_partitioned(tmp_path):
     # happened to serialize it.
     assert stored_bytes == b'{"a":1}'
     assert res.content_hash == hashlib.sha256(b'{"a":1}').hexdigest()
+    index_rows = list(store.iter_index())
+    assert index_rows[0]["source_metadata"]["purpose"] == "production"
     res2 = store.capture(
         vendor="ibm",
         device="ibm_fixture",
@@ -247,6 +283,47 @@ def test_bronze_store_change_trigger_and_daily_snapshot(tmp_path):
     assert _capture(store, b'{"v": 1}', d2).stored is True
     # Changed payload: stored immediately (change-triggered recapture).
     assert _capture(store, b'{"v": 2}', d2).stored is True
+
+
+def test_bronze_store_returning_state_dedupes_against_all_same_day(tmp_path):
+    store = FileBronzeStore(str(tmp_path))
+    morning = datetime(2026, 10, 30, 6, 0, tzinfo=timezone.utc)
+    midday = datetime(2026, 10, 30, 12, 0, tzinfo=timezone.utc)
+    evening = datetime(2026, 10, 30, 18, 0, tzinfo=timezone.utc)
+
+    state_a = _capture(store, b'{"state": "a"}', morning)
+    assert state_a.stored is True
+    before_stat = os.stat(state_a.path)
+    with gzip.open(state_a.path, "rb") as f:
+        before_bytes = f.read()
+
+    assert _capture(store, b'{"state": "b"}', midday).stored is True
+    returned_a = _capture(store, b'{"state": "a"}', evening)
+
+    assert returned_a.stored is False
+    assert returned_a.artifact_key == state_a.artifact_key
+    after_stat = os.stat(state_a.path)
+    assert after_stat.st_ino == before_stat.st_ino
+    assert after_stat.st_mtime_ns == before_stat.st_mtime_ns
+    with gzip.open(state_a.path, "rb") as f:
+        assert f.read() == before_bytes
+    rows = list(store.iter_index())
+    assert len(rows) == 2
+    assert len({row["artifact_key"] for row in rows}) == 2
+
+
+def test_bronze_store_canonicalizes_integral_floats(tmp_path):
+    store = FileBronzeStore(str(tmp_path))
+    morning = datetime(2026, 10, 30, 6, 0, tzinfo=timezone.utc)
+    evening = datetime(2026, 10, 30, 18, 0, tzinfo=timezone.utc)
+
+    integer_form = _capture(store, b'{"a": 1}', morning)
+    float_form = _capture(store, b'{"a": 1.0}', evening)
+
+    assert float_form.content_hash == integer_form.content_hash
+    assert float_form.stored is False
+    with gzip.open(integer_form.path, "rb") as f:
+        assert json.loads(f.read()) == {"a": 1}
 
 
 # ---------------------------------------------------------------------------
@@ -335,6 +412,30 @@ def test_silver_observation_insert_and_constraints(session):
     session.add(bad)
     with pytest.raises(IntegrityError):
         session.commit()
+
+
+def test_silver_observation_allows_missing_measured_at(session):
+    obs = models.SciQuantumObservation(
+        id=uuid.uuid4(),
+        artifact_id=uuid.uuid4(),
+        vendor="ibm",
+        device="ibm_fixture",
+        device_generation="Eagle",
+        qubit_or_edge="q0",
+        metric="t1",
+        value=250.0,
+        unit="us",
+        measured_at=None,
+        source_metadata={
+            "bronze_collected_at": "2026-10-30T12:00:00+00:00",
+            "measurement_time_missing": True,
+        },
+    )
+    session.add(obs)
+    session.commit()
+    row = session.query(models.SciQuantumObservation).one()
+    assert row.measured_at is None
+    assert row.source_metadata["measurement_time_missing"] is True
 
 
 def test_spec_snapshot_provenance_flag(session):
@@ -472,7 +573,7 @@ def test_ibm_transport_auth_flow_and_token_hygiene():
 # ---------------------------------------------------------------------------
 # CLI end to end on a fixture (offline code-test path)
 # ---------------------------------------------------------------------------
-def test_cli_poll_normalize_stats(tmp_path):
+def test_cli_poll_normalize_stats(tmp_path, capsys):
     from app.data_layer.science.quantum import cli
 
     fixture_file = tmp_path / "fixture.json"
@@ -501,6 +602,16 @@ def test_cli_poll_normalize_stats(tmp_path):
         ]
     )
     assert rc == 0
+    manifest = json.loads(capsys.readouterr().out)
+    assert manifest["account_basis"] == "open"
+    assert manifest["purpose"] == "code-test"
+    bronze_rows = list(FileBronzeStore(root).iter_index())
+    assert bronze_rows
+    assert all(
+        row["source_metadata"]["account_basis"] == "open"
+        and row["source_metadata"]["purpose"] == "code-test"
+        for row in bronze_rows
+    )
     rc = cli.main(["normalize", "--root", root, "--silver-db", silver])
     assert rc == 0
     engine = create_engine(f"sqlite:///{silver}")
@@ -511,6 +622,58 @@ def test_cli_poll_normalize_stats(tmp_path):
     assert rc == 0
     with Session(engine) as s:
         assert s.query(models.SciQuantumObservation).count() == 27
+
+
+def test_cli_normalize_preserves_missing_measured_at(tmp_path):
+    from app.data_layer.science.quantum import cli
+
+    properties = fixture_properties()
+    properties.pop("last_update_date")
+    for qubit_entries in properties["qubits"]:
+        for entry in qubit_entries:
+            entry.pop("date")
+    for gate in properties["gates"]:
+        for entry in gate["parameters"]:
+            entry.pop("date")
+
+    fixture_file = tmp_path / "dateless-fixture.json"
+    fixture_file.write_text(
+        json.dumps(
+            {
+                "ibm_fixture": {
+                    "configuration": fixture_configuration(),
+                    "properties": properties,
+                    "status": {"operational": True},
+                }
+            }
+        )
+    )
+    root = str(tmp_path / "bronze")
+    silver = str(tmp_path / "silver.db")
+    assert (
+        cli.main(
+            [
+                "poll",
+                "--root",
+                root,
+                "--fixture-file",
+                str(fixture_file),
+            ]
+        )
+        == 0
+    )
+    assert cli.main(["normalize", "--root", root, "--silver-db", silver]) == 0
+
+    engine = create_engine(f"sqlite:///{silver}")
+    with Session(engine) as s:
+        rows = s.query(models.SciQuantumObservation).all()
+    assert len(rows) == 27
+    assert all(row.measured_at is None for row in rows)
+    assert all(
+        row.source_metadata["measurement_time_missing"] is True
+        and row.source_metadata["bronze_collected_at"]
+        for row in rows
+    )
 
 
 def test_cli_poll_without_token_or_fixture_fails_closed(tmp_path, monkeypatch):

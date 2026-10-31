@@ -45,13 +45,32 @@ class CaptureResult:
     kind: str
 
 
+def _canonicalize_numbers(value: Any) -> Any:
+    """Normalize JSON numeric spellings that denote the same number.
+
+    JSON has one numeric type, but Python preserves the lexical split
+    between int and float after parsing (``1`` vs ``1.0``). Integral
+    floats become ints recursively so those equivalent device states hash
+    and store identically. Non-integral floats are untouched.
+    """
+    if isinstance(value, dict):
+        return {key: _canonicalize_numbers(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_canonicalize_numbers(item) for item in value]
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value
+
+
 def _canonical(payload: bytes) -> bytes:
     """Canonical bytes for hashing/storage: parsed JSON re-serialized with
     sorted keys when the payload is JSON, raw bytes otherwise. Two fetches
     of the same device state must hash identically."""
     try:
         return json.dumps(
-            json.loads(payload), sort_keys=True, separators=(",", ":")
+            _canonicalize_numbers(json.loads(payload)),
+            sort_keys=True,
+            separators=(",", ":"),
         ).encode()
     except (ValueError, UnicodeDecodeError):
         return payload
@@ -80,17 +99,32 @@ class FileBronzeStore:
         with open(self.index_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(row, sort_keys=True) + "\n")
 
-    def _latest(self, vendor: str, device: str, kind: str) -> dict | None:
-        latest = None
+    def _same_day_capture(
+        self,
+        *,
+        vendor: str,
+        device: str,
+        kind: str,
+        day: str,
+        content_hash: str,
+    ) -> dict | None:
+        """Find ANY same-day capture with this content hash.
+
+        Dedupe cannot compare only the latest row: in an A -> B -> A
+        sequence, A is no longer latest when it returns, but its file and
+        index row already exist and must not be rewritten or duplicated.
+        """
         for row in self.iter_index():
             meta = row.get("source_metadata", {})
             if (
                 meta.get("vendor") == vendor
                 and meta.get("device") == device
                 and meta.get("kind") == kind
+                and row.get("content_hash") == content_hash
+                and row.get("collected_at", "")[:10] == day
             ):
-                latest = row
-        return latest
+                return row
+        return None
 
     # -- capture ---------------------------------------------------------------
     def capture(
@@ -105,25 +139,33 @@ class FileBronzeStore:
         endpoint: str,
         account_basis: str,
     ) -> CaptureResult:
+        if account_basis not in ("payg", "open"):
+            raise ValueError(
+                f"account_basis must be 'payg' or 'open', got {account_basis!r}"
+            )
+        purpose = "production" if account_basis == "payg" else "code-test"
         canonical = _canonical(payload)
         content_hash = hashlib.sha256(canonical).hexdigest()
         artifact_key = f"q-{content_hash[:24]}"
         day = retrieved_at.astimezone(timezone.utc).strftime("%Y-%m-%d")
 
-        latest = self._latest(vendor, device, kind)
-        if latest is not None:
-            same_bytes = latest["content_hash"] == content_hash
-            same_day = latest["collected_at"][:10] == day
-            if same_bytes and same_day:
-                return CaptureResult(
-                    artifact_key=latest["artifact_key"],
-                    content_hash=content_hash,
-                    path=None,
-                    stored=False,
-                    vendor=vendor,
-                    device=device,
-                    kind=kind,
-                )
+        existing = self._same_day_capture(
+            vendor=vendor,
+            device=device,
+            kind=kind,
+            day=day,
+            content_hash=content_hash,
+        )
+        if existing is not None:
+            return CaptureResult(
+                artifact_key=existing["artifact_key"],
+                content_hash=content_hash,
+                path=None,
+                stored=False,
+                vendor=vendor,
+                device=device,
+                kind=kind,
+            )
 
         rel = os.path.join(
             LANE,
@@ -152,6 +194,7 @@ class FileBronzeStore:
                     "source": source,
                     "endpoint": endpoint,
                     "account_basis": account_basis,
+                    "purpose": purpose,
                 },
             }
         )

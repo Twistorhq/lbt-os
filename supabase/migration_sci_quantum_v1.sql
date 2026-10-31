@@ -25,7 +25,10 @@
 
 -- ---------------------------------------------------------------------------
 -- Silver: normalized calibration observations, one row per
--- (device, qubit_or_edge, metric, measured_at) observation.
+-- (device, qubit_or_edge, metric, measured_at) observation. measured_at
+-- is nullable when the vendor payload carries no measurement timestamp;
+-- the bronze retrieval time is kept separately in source_metadata and is
+-- never substituted for vendor measurement time.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS sci_quantum_observations (
   id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -38,7 +41,7 @@ CREATE TABLE IF NOT EXISTS sci_quantum_observations (
   metric            text NOT NULL CHECK (char_length(metric) > 0),
   value             double precision NOT NULL,
   unit              text,
-  measured_at       timestamptz NOT NULL,
+  measured_at       timestamptz,
   source_metadata   jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at        timestamptz NOT NULL DEFAULT now()
 );
