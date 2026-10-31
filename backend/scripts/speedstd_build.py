@@ -38,11 +38,13 @@ def main() -> int:
             {
                 "partitions_rebuilt": report.partitions_rebuilt,
                 "partitions_skipped": report.partitions_skipped,
+                "partitions_failed": report.partitions_failed,
+                "errors": report.errors[:5],
                 "rows": report.rows,
             }
         )
     )
-    return 0
+    return 1 if report.partitions_failed else 0
 
 
 if __name__ == "__main__":

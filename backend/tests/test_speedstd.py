@@ -169,6 +169,41 @@ def test_gold_history_matches_silver_history(tmp_path):
         assert s[4] == pytest.approx(g[4], abs=1e-9)
 
 
+def test_build_isolates_a_failing_partition_and_resumes(tmp_path, monkeypatch):
+    """TW-208 self-healing: one bad partition never crushes the batch.
+
+    A write failure on one partition is recorded, the rest of the build
+    completes, the manifest holds the successes, and the next build
+    retries exactly the failed partition.
+    """
+    bronze = _write_bronze(tmp_path)
+    silver, gold, state = (
+        tmp_path / "silver",
+        tmp_path / "gold",
+        tmp_path / "state.json",
+    )
+    real_write = transform._atomic_write_parquet
+    calls = {"n": 0}
+
+    def flaky(df, target):
+        calls["n"] += 1
+        if calls["n"] == 3:
+            raise OSError("simulated transient IO error")
+        return real_write(df, target)
+
+    monkeypatch.setattr(transform, "_atomic_write_parquet", flaky)
+    report = transform.build(bronze, silver, gold, state)
+    assert report.partitions_failed == 1
+    assert report.partitions_rebuilt == 5
+    assert len(json.loads(state.read_text())["partitions"]) == 5
+
+    monkeypatch.setattr(transform, "_atomic_write_parquet", real_write)
+    report2 = transform.build(bronze, silver, gold, state)
+    assert report2.partitions_failed == 0
+    assert report2.partitions_rebuilt == 1
+    assert report2.partitions_skipped == 5
+
+
 def test_rebuild_with_no_changes_is_a_noop(tmp_path):
     bronze = _write_bronze(tmp_path)
     args = (bronze, tmp_path / "silver", tmp_path / "gold", tmp_path / "state.json")

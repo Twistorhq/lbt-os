@@ -21,7 +21,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import polars as pl
@@ -43,7 +44,9 @@ GOLD_COLUMNS = (
 class BuildReport:
     partitions_rebuilt: int = 0
     partitions_skipped: int = 0
+    partitions_failed: int = 0
     rows: int = 0
+    errors: list[str] = field(default_factory=list)
 
 
 def _sha256(path: Path) -> str:
@@ -63,8 +66,25 @@ def _load_manifest(state_path: Path) -> dict:
 def _atomic_write_parquet(df: pl.DataFrame, target: Path) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_suffix(".parquet.tmp")
-    df.write_parquet(tmp, compression="zstd")
+    # One retry: filesystem hiccups under bulk partition writes are
+    # transient in practice (a 21,900-partition build lost a write at
+    # partition ~12,800 on the overlay fs; the retry is the cheap fix).
+    for attempt in (1, 2):
+        try:
+            df.write_parquet(tmp, compression="zstd")
+            break
+        except OSError:
+            if attempt == 2:
+                raise
+            time.sleep(0.2)
     os.replace(tmp, target)
+
+
+def _save_manifest(state_path: Path, manifest: dict) -> None:
+    Path(state_path).parent.mkdir(parents=True, exist_ok=True)
+    tmp = Path(state_path).with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(manifest, indent=1, sort_keys=True))
+    os.replace(tmp, state_path)
 
 
 def _gold_year_file(gold_root: Path, dataset: str, device: str, year: int) -> Path:
@@ -113,10 +133,18 @@ def build(
             report.rows += known[key]["rows"]
             continue
 
-        # Lazy scan, streaming collect: the transform never holds the
-        # corpus in memory, only the partition in flight.
-        df = pl.scan_ndjson(bronze_file).collect()
-        _atomic_write_parquet(df, silver_file)
+        # TW-208 self-healing: per-item fault isolation. A failed
+        # partition is recorded and skipped, never fatal; it stays out
+        # of the manifest, so the next build retries exactly it.
+        try:
+            # Lazy scan, streaming collect: the transform never holds
+            # the corpus in memory, only the partition in flight.
+            df = pl.scan_ndjson(bronze_file).collect()
+            _atomic_write_parquet(df, silver_file)
+        except Exception as exc:  # noqa: BLE001 - isolation is the point
+            report.partitions_failed += 1
+            report.errors.append(f"{key}: {type(exc).__name__}: {exc}")
+            continue
 
         gold = df.group_by(["device", "date"]).agg(
             pl.len().alias("n_readings"),
@@ -126,15 +154,29 @@ def build(
             pl.col("gdd").sum().alias("sum_gdd"),
         )
         for row in gold.iter_rows():
-            gold_pending.setdefault((dataset, device, day.year), []).append(row)
+            gold_pending.setdefault((dataset, device, day.year), []).append((key, row))
 
         known[key] = {"sha256": digest, "rows": df.height}
         report.partitions_rebuilt += 1
         report.rows += df.height
+        # Persist per partition: a crashed build resumes where it died
+        # instead of restarting the corpus.
+        _save_manifest(state_path, manifest)
 
-    for (dataset, device, year), rows in sorted(gold_pending.items()):
-        _merge_gold_year(gold_root, dataset, device, year, rows)
+    for (dataset, device, year), keyed_rows in sorted(gold_pending.items()):
+        try:
+            _merge_gold_year(
+                gold_root, dataset, device, year, [row for _, row in keyed_rows]
+            )
+        except Exception as exc:  # noqa: BLE001 - unmanifest those keys
+            # Gold did not land for these partitions: pull them back out
+            # of the manifest so the next build rebuilds them whole.
+            for key, _ in keyed_rows:
+                known.pop(key, None)
+                report.partitions_rebuilt -= 1
+                report.partitions_failed += 1
+                report.errors.append(f"gold {key}: {type(exc).__name__}: {exc}")
+            _save_manifest(state_path, manifest)
 
-    Path(state_path).parent.mkdir(parents=True, exist_ok=True)
-    Path(state_path).write_text(json.dumps(manifest, indent=1, sort_keys=True))
+    _save_manifest(state_path, manifest)
     return report
