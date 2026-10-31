@@ -159,9 +159,11 @@ def build(
         known[key] = {"sha256": digest, "rows": df.height}
         report.partitions_rebuilt += 1
         report.rows += df.height
-        # Persist per partition: a crashed build resumes where it died
-        # instead of restarting the corpus.
-        _save_manifest(state_path, manifest)
+        # Persist in batches: a crashed build resumes within 100
+        # partitions of where it died instead of restarting the corpus,
+        # without paying a full manifest rewrite per partition.
+        if report.partitions_rebuilt % 100 == 0:
+            _save_manifest(state_path, manifest)
 
     for (dataset, device, year), keyed_rows in sorted(gold_pending.items()):
         try:
