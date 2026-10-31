@@ -1,0 +1,6 @@
+# Prepared by Twistor Holdings LLC
+# TW-840 data platform speed standard: columnar worker dependencies (FOSS, $0).
+# Kept separate from backend/requirements.txt so the API server stays lean;
+# the data worker / CLI host installs both.
+duckdb>=1.1.0             # embedded OLAP: vectorized, out-of-core, memory-capped
+polars>=1.0.0             # lazy/streaming transforms for incremental builds
