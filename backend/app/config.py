@@ -109,6 +109,27 @@ class Settings(BaseSettings):
     fonoster_from_number: str | None = None  # shop number on the SIP trunk
     fonoster_autopilot_app_ref: str | None = None  # set at go-live deploy
 
+    # TW-884 outbound sales agent (epic TW-883) — slice 1 is TEST MODE
+    # ONLY. Global kill switch defaults OFF; test mode defaults ON so no
+    # code path can dial a real prospect until Justynn flips it at
+    # go-live (gated on Angela's TW-885 memo + his number purchase +
+    # TW-704 deploy). Caller-ID fields encode TW-885 HR-03/HR-04: the
+    # dialer refuses to dial unless the number is the owned lane number,
+    # CNAM is "Twistor", and STIR/SHAKEN attestation is A. The three
+    # launch-gate booleans encode HR-12/HR-21: they stay False until the
+    # written DNC policy is on file and the privacy/opt-out surface is
+    # live; live (non-test) dialing refuses while any is False.
+    outbound_calls_enabled: bool = False
+    outbound_test_mode: bool = True
+    outbound_test_numbers: str = ""  # comma-separated E.164 allowlist
+    outbound_caller_id: str | None = None  # owned number for the lane
+    outbound_cnam: str = "Twistor"
+    outbound_stir_shaken_attestation: str | None = None  # must be "A"
+    outbound_dnc_policy_on_file: bool = False  # HR-12
+    outbound_privacy_section_live: bool = False  # HR-21
+    outbound_web_optout_live: bool = False  # HR-21
+    google_calendar_id: str | None = None  # unset = booking fails closed
+
     # TW-734 video consult — global kill switch, fail-closed OFF.
     # Per-shop enable + pricing live in video_consult_settings. The
     # room base URL is Twistor's own Jitsi (TW-729 package, target
