@@ -206,3 +206,38 @@ the responder bridge.
   identical, error counts identical — **zero regressions**; the
   +103 passes are exactly slice 1's 48 + Rex's 44 + this round's 11.
 - `ruff check` + `ruff format --check` clean on every touched file.
+
+## TW-891 — compensation failure is recorded, never silent (2026-11-01)
+
+Rosa's re-review APPROVED the fix round with one nit (R1):
+`_void_booking` never verified or recorded its own result. Rex's
+retest round 2 turned the nit into a MEDIUM finding with three
+reproductions (suite committed `62db6ff`): delete raises → swallowed,
+phantom survives with zero trace; delete returns False →
+`booking_voided=True` written anyway (the audit trail lies); adapter
+with no `delete_event` → getattr skip, same silent phantom.
+
+**Change** (`app/services/outbound_calls.py`): `_void_booking` now
+treats only `delete_event(...) is True` as voided. Any other outcome
+records `booking_void_failed=True` + `orphaned_event_id=<id>` in the
+audit answers — and `booking_voided` is written only on a confirmed
+void. `daily_rollup` surfaces the day's orphans as
+`orphaned_events: {count, event_ids}`, so a stranded demo is a
+cleanup work-order, not an accident. Best-effort semantics kept: a
+void failure never masks the abort.
+
+**RED → GREEN:** Rex's 3 acceptance tests failed against `62db6ff`
+(3 failed / 22 passed in `test_outbound_rex_retest2.py`); one added
+proof, `test_failed_void_records_orphan_and_rollup_surfaces_it`
+(RED checkpoint `0d93ec7`), covers the rollup surfacing Rex's tests
+don't reach. After the fix: Rex round-2 **25/25**, outbound family
+**129/129** (`test_outbound_calls` 56 + `test_calendar_providers` 4
++ Rex round-1 44 + Rex round-2 25), TW-284 suite 24/24.
+
+**Paired full suite vs clean main `b330a89`:** control 21 failed /
+2557 passed / 9 errors; branch 21 failed / **2686 passed** / 9
+errors. Failed+error node sets identical (30 nodes, empty diff) —
+**zero regressions**; the +129 over control is exactly the outbound
+family, and the +26 over the fix-round branch (2660) is exactly
+Rex's round-2 suite (25) + the one TW-891 proof.
+`ruff check` + `ruff format --check` clean on both touched files.

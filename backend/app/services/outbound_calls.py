@@ -991,19 +991,32 @@ class _Conversation:
         an abort becomes visible must not survive it — a revoked (or
         globally stopped) agent books nothing, and the audit trail
         never claims a demo the calendar still holds. Best-effort:
-        a void failure never masks the abort itself."""
+        a void failure never masks the abort itself.
+
+        TW-891: the void's RESULT is part of the record. Only a
+        delete_event(...) is True confirmation counts as voided.
+        Every other outcome — False, an exception, an adapter with
+        no delete_event — is a FAILED void: booking_void_failed +
+        orphaned_event_id land in the audit answers, so the stranded
+        event is discoverable (daily_rollup surfaces it as a cleanup
+        work-order) instead of a silent phantom, and booking_voided
+        is never written for a void that did not happen."""
         event_id, self.demo_event_id = self.demo_event_id, None
         calendar, self._booked_calendar = self._booked_calendar, None
-        if event_id is None or calendar is None:
+        if event_id is None:
             return
-        delete = getattr(calendar, "delete_event", None)
-        if delete is None:
-            return
-        try:
-            delete(event_id)
-        except Exception:
-            return
-        self.answers["booking_voided"] = True
+        delete = getattr(calendar, "delete_event", None) if calendar else None
+        voided = False
+        if delete is not None:
+            try:
+                voided = delete(event_id) is True
+            except Exception:
+                voided = False
+        if voided:
+            self.answers["booking_voided"] = True
+        else:
+            self.answers["booking_void_failed"] = True
+            self.answers["orphaned_event_id"] = event_id
 
     def close_booking(self, *, review_only: bool):
         try:
@@ -1713,8 +1726,11 @@ def run_dialer(
 
 def daily_rollup(db, org_id: str, day: date) -> dict:
     """Pipeline rollup for one day (agent-local): conversations,
-    audits run, demos set, DNCs, and escalations — a demo set or an
-    owner callback request — each WITH its transcript attached."""
+    audits run, demos set, DNCs, escalations — a demo set or an
+    owner callback request — each WITH its transcript attached, and
+    orphaned calendar events (TW-891): bookings whose compensating
+    void failed, surfaced by event id so cleanup is a work-order,
+    not an accident discovered by eyeballing the calendar."""
     agent = get_agent_settings(db, org_id) or {}
     tz = ZoneInfo(agent.get("timezone") or "America/Denver")
 
@@ -1754,6 +1770,11 @@ def daily_rollup(db, org_id: str, day: date) -> dict:
         if "leak_per_week" in (a.get("audit_answers") or {})
         or a.get("disposition") in ("audit_booked", "demo_set")
     )
+    orphaned_event_ids = []
+    for attempt in attempts:
+        answers = attempt.get("audit_answers") or {}
+        if answers.get("booking_void_failed") and answers.get("orphaned_event_id"):
+            orphaned_event_ids.append(answers["orphaned_event_id"])
     return {
         "day": day.isoformat(),
         "conversations": len(attempts),
@@ -1762,6 +1783,10 @@ def daily_rollup(db, org_id: str, day: date) -> dict:
         "demos": by_disposition.get("demo_set", 0),
         "dncs": dncs,
         "escalations": escalations,
+        "orphaned_events": {
+            "count": len(orphaned_event_ids),
+            "event_ids": orphaned_event_ids,
+        },
     }
 
 
