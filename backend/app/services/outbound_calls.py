@@ -48,7 +48,7 @@ from .outbound_lookups import LineTypeNotConfigured
 __all__ = [
     "CADENCE_DAYS",
     "LEGAL_GATE",
-    "PLACEHOLDER_PERSONA_NAME",
+    "DEFAULT_PERSONA_NAME",
     "STATE_RULES",
     "CalendarConflict",
     "CalendarNotConfigured",
@@ -204,14 +204,16 @@ _CITY_STATE = {
 #: TW-882 CALENDAR-90 cadence: touches land on Day 0 / 3 / 7 / 12.
 CADENCE_DAYS = (0, 3, 7, 12)
 
-#: Placeholder until Imani's TW-886 persona lands; the slot is the
-#: agent settings row's persona_name, this is only the default.
-PLACEHOLDER_PERSONA_NAME = "Nova"
+#: Persona default (TW-886, name approved by Justynn 2026-11-01).
+#: The slot itself is config-driven: the live value is the agent
+#: settings row's persona_name; this is only the default a fresh
+#: settings row starts from.
+DEFAULT_PERSONA_NAME = "Tori Calloway"
 
 _DEFAULT_AGENT_SETTINGS = {
     "enabled": False,
     "revoked_at": None,
-    "persona_name": PLACEHOLDER_PERSONA_NAME,
+    "persona_name": DEFAULT_PERSONA_NAME,
     "timezone": "America/Denver",
     "window_start": "08:00",
     "window_end": "17:00",
@@ -581,6 +583,18 @@ def _agent_alive(db, org_id: str) -> bool:
     return bool(agent and agent.get("enabled") and not agent.get("revoked_at"))
 
 
+def _call_alive(db, org_id: str) -> bool:
+    """Per-utterance liveness, re-read fresh on EVERY check: the
+    global kill switch AND the per-agent revocation row (TW-766).
+    Either one flipping stops an in-flight call before its next
+    utterance or side effect — the global brake included (TW-889:
+    slice 1 read the global flag once at dial entry and an in-flight
+    call never saw the flip)."""
+    if not _cfg().outbound_calls_enabled:
+        return False
+    return _agent_alive(db, org_id)
+
+
 # ---------------------------------------------------------------------------
 # Suppression ledger + consent ledger (HR-07..HR-11)
 # ---------------------------------------------------------------------------
@@ -778,6 +792,12 @@ def _window_open(agent: dict, prospect: dict, now: datetime) -> bool:
         _hhmm(agent.get("window_start") or "08:00"),
         _hhmm(rules["window_start"]),
     )
+    # HR-14: a Sunday start in the state table (TX: noon, Mon-Sat
+    # 9-9 / Sun 12-9) replaces the weekday start on Sundays. Latent
+    # while TX is counsel-gated off, but loaded config must be
+    # enforced config — a rule nobody reads is how gates rot (M2).
+    if local.weekday() == 6 and rules.get("sunday_start"):
+        start = max(start, _hhmm(rules["sunday_start"]))
     end = min(
         _hhmm(agent.get("window_end") or "17:00"),
         _hhmm(rules["window_end"]),
@@ -797,11 +817,20 @@ def _window_open(agent: dict, prospect: dict, now: datetime) -> bool:
 
 
 def _find_demo_slot(
-    agent: dict, calendar, prospect: dict, answers: dict, now: datetime
+    agent: dict,
+    calendar,
+    prospect: dict,
+    answers: dict,
+    now: datetime,
+    require_alive=None,
 ):
     """First free demo slot inside the configured windows, stepping by
     duration + buffer so two demos can never sit back-to-back without
-    the buffer, and never overlap (double-book prevention)."""
+    the buffer, and never overlap (double-book prevention).
+
+    `require_alive` (TW-888) is re-checked immediately before the
+    create: a kill-switch flip that lands during the slot search must
+    stop the booking side effect, not just the next utterance."""
     tz = ZoneInfo(agent.get("timezone") or "America/Denver")
     duration = timedelta(minutes=int(agent.get("demo_duration_min") or 20))
     step = duration + timedelta(minutes=int(agent.get("demo_buffer_min") or 0))
@@ -837,6 +866,8 @@ def _find_demo_slot(
         while cursor + duration <= limit:
             slot_end = cursor + duration
             if not calendar.list_events(cursor, slot_end):
+                if require_alive is not None and not require_alive():
+                    raise _Aborted()
                 try:
                     return calendar.create_event(
                         title=title,
@@ -893,12 +924,13 @@ class _Conversation:
         self.gatekeeper_seen = False
         self.recording_on = False
         self.demo_event_id = None
+        self._booked_calendar = None
         self._fetches = 0
 
     # -- speech / hearing -------------------------------------------------
 
     def speak(self, text: str):
-        if not _agent_alive(self.db, self.org_id):
+        if not _call_alive(self.db, self.org_id):
             raise _Aborted()
         self.transcript.append({"role": "agent", "text": text})
         if self.voice_agent is not None:
@@ -923,6 +955,12 @@ class _Conversation:
     # -- booking ----------------------------------------------------------
 
     def book(self, *, review_only: bool) -> bool:
+        # TW-888: liveness is re-checked BEFORE any booking side
+        # effect. Slice 1 booked first and let speak() discover the
+        # revocation afterwards, leaving a phantom calendar event
+        # behind an "aborted" disposition.
+        if not _call_alive(self.db, self.org_id):
+            raise _Aborted()
         calendar = self.calendar
         if calendar is None:
             try:
@@ -933,25 +971,54 @@ class _Conversation:
             self.answers["booking_failed"] = True
             return False
         event = _find_demo_slot(
-            self.agent, calendar, self.prospect, self.answers, self.now
+            self.agent,
+            calendar,
+            self.prospect,
+            self.answers,
+            self.now,
+            require_alive=lambda: _call_alive(self.db, self.org_id),
         )
         if event is None:
             self.answers["booking_failed"] = True
             return False
         self.demo_event_id = event.get("id")
+        self._booked_calendar = calendar
         self.answers["review_only"] = review_only
         return True
 
+    def _void_booking(self):
+        """TW-888 compensation: an event created in the sliver before
+        an abort becomes visible must not survive it — a revoked (or
+        globally stopped) agent books nothing, and the audit trail
+        never claims a demo the calendar still holds. Best-effort:
+        a void failure never masks the abort itself."""
+        event_id, self.demo_event_id = self.demo_event_id, None
+        calendar, self._booked_calendar = self._booked_calendar, None
+        if event_id is None or calendar is None:
+            return
+        delete = getattr(calendar, "delete_event", None)
+        if delete is None:
+            return
+        try:
+            delete(event_id)
+        except Exception:
+            return
+        self.answers["booking_voided"] = True
+
     def close_booking(self, *, review_only: bool):
-        if self.book(review_only=review_only):
-            self.speak(BOOKED_LINE)
-            return "demo_set" if not review_only else "audit_booked"
-        # Self-healing: never crash a live call on a booking seam.
-        self.speak(
-            "I have you down for a callback from our side to lock the "
-            "time. Thanks for your time."
-        )
-        return "callback"
+        try:
+            if self.book(review_only=review_only):
+                self.speak(BOOKED_LINE)
+                return "demo_set" if not review_only else "audit_booked"
+            # Self-healing: never crash a live call on a booking seam.
+            self.speak(
+                "I have you down for a callback from our side to lock the "
+                "time. Thanks for your time."
+            )
+            return "callback"
+        except _Aborted:
+            self._void_booking()
+            raise
 
     # -- global branches --------------------------------------------------
 
@@ -971,17 +1038,23 @@ class _Conversation:
 
     def _handle_recording_objection(self):
         # HR-17: stop capture immediately, flag the number forever.
+        # The toggle is guarded (Rosa M4): a toggle fault must not
+        # crash the call or skip the permanent flag — the same
+        # degrade-don't-detonate pattern as the abort path.
         if self.recording_on:
-            pa.set_recording(
-                self.db,
-                org_id=self.org_id,
-                session_id=self.session_id,
-                on=False,
-                actor="prospect_objection",
-                telephony=self.telephony,
-                voice_agent=self.voice_agent,
-                now=self.now,
-            )
+            try:
+                pa.set_recording(
+                    self.db,
+                    org_id=self.org_id,
+                    session_id=self.session_id,
+                    on=False,
+                    actor="prospect_objection",
+                    telephony=self.telephony,
+                    voice_agent=self.voice_agent,
+                    now=self.now,
+                )
+            except Exception:
+                pass
             self.recording_on = False
         _update(self.db, "outbound_prospects", self.prospect["id"], no_record=True)
         self.prospect["no_record"] = True
@@ -1095,7 +1168,7 @@ class _Conversation:
         if reply == "VOICEMAIL":
             self.speak(
                 VOICEMAIL_LINE.format(
-                    name=self.agent.get("persona_name") or PLACEHOLDER_PERSONA_NAME,
+                    name=self.agent.get("persona_name") or DEFAULT_PERSONA_NAME,
                     caller_id=self.caller_id,
                 )
             )
@@ -1343,9 +1416,17 @@ def place_outbound_call(
         lookup = {"line_type": "unknown", "carrier": None, "verified": False}
     line_type = lookup.get("line_type") or "unknown"
     carrier = lookup.get("carrier")
+    line_verified = lookup.get("verified") is True
     _update(db, "outbound_prospects", prospect["id"], line_type=line_type)
     prospect["line_type"] = line_type
-    if line_type in ("wireless", "residential"):
+    # HR-06 is VERIFIED landlines (TW-890): a business_landline label
+    # the carrier did not verify is a guess, so it takes the same
+    # consent gate as wireless/residential (HR-07) instead of the
+    # cold-dial path. Verified landlines are the ONLY cold dials.
+    unverified_landline = (
+        line_type in LEGAL_GATE["cold_dial_allowed_line_types"] and not line_verified
+    )
+    if line_type in ("wireless", "residential") or unverified_landline:
         if not has_active_consent(db, org_id, prospect["phone"]):
             _write_attempt(
                 db,
@@ -1375,13 +1456,28 @@ def place_outbound_call(
         _update(db, "outbound_prospects", prospect["id"], lane="human")
         return {"status": "blocked_line_type", "line_type": line_type}
 
+    # Recording prerequisites resolve BEFORE the dial (Rosa M3): a
+    # voice-provider config failure must never leave a dialed call
+    # with no disposition row. Resolution is side-effect free; the
+    # toggle itself still fires after session creation, because
+    # announce-before-capture (HR-17) rides the live call.
+    resolved_voice = voice_agent
+    want_recording = (
+        recording_enabled and not prospect.get("no_record") and state in STATE_RULES
+    )
+    if want_recording and resolved_voice is None:
+        try:
+            resolved_voice = vp.get_voice_agent()
+        except vp.ProviderNotConfigured as exc:
+            raise OutboundError(503, str(exc)) from exc
+
     # Dial. The disclosure opening is the dial's first utterance.
     if telephony is None:
         try:
             telephony = vp.get_telephony_provider()
         except vp.ProviderNotConfigured as exc:
             raise OutboundError(503, str(exc)) from exc
-    persona = agent.get("persona_name") or PLACEHOLDER_PERSONA_NAME
+    persona = agent.get("persona_name") or DEFAULT_PERSONA_NAME
     opening = OPENING.format(name=persona)
     try:
         call_sid = telephony.place_call(to=prospect["phone"], say_text=opening)
@@ -1414,18 +1510,12 @@ def place_outbound_call(
 
     # Recording (HR-17/HR-18): off by default; the TW-284 toggle
     # announces before capture, in every state; a flagged number
-    # (prior objection) is never recorded again.
+    # (prior objection) is never recorded again. Provider resolution
+    # already happened pre-dial (M3); a mid-setup toggle fault
+    # degrades to an unrecorded call instead of detonating it, so
+    # every dialed call still ends with a disposition.
     recording_on = False
-    resolved_voice = voice_agent
-    want_recording = (
-        recording_enabled and not prospect.get("no_record") and state in STATE_RULES
-    )
     if want_recording:
-        if resolved_voice is None:
-            try:
-                resolved_voice = vp.get_voice_agent()
-            except vp.ProviderNotConfigured as exc:
-                raise OutboundError(503, str(exc)) from exc
         try:
             pa.set_recording(
                 db,
@@ -1437,9 +1527,9 @@ def place_outbound_call(
                 voice_agent=resolved_voice,
                 now=now,
             )
-        except vp.ProviderNotConfigured as exc:
-            raise OutboundError(503, str(exc)) from exc
-        recording_on = True
+            recording_on = True
+        except Exception:
+            recording_on = False
 
     conversation = _Conversation(
         db,
@@ -1507,6 +1597,12 @@ def place_outbound_call(
         status="completed",
         ended_at=now.isoformat(),
     )
+    if disposition == "callback" and conversation.owner_reached:
+        # Spec item 5 / Rosa M1: an owner's callback request is an
+        # escalation, not a bare disposition — daily_rollup keys off
+        # this flag to attach the transcript. (Slice 1 read the flag
+        # in the rollup but nothing ever set it: dead code.)
+        conversation.answers["owner_callback"] = True
     attempt = _write_attempt(
         db,
         org_id,
@@ -1595,6 +1691,17 @@ def run_dialer(
             results.append(
                 {"status": "error", "detail": exc.detail, "prospect_id": prospect["id"]}
             )
+        except Exception as exc:
+            # Self-healing architecture rule (Rosa M4): per-item
+            # fault isolation. One prospect's provider explosion is
+            # a dead-letter record in the results, never a dead batch.
+            results.append(
+                {
+                    "status": "error",
+                    "detail": f"{type(exc).__name__}: {exc}",
+                    "prospect_id": prospect["id"],
+                }
+            )
     dialed = sum(1 for r in results if r.get("status") in ("completed", "aborted"))
     return {"dialed": dialed, "attempted": len(results), "results": results}
 
@@ -1673,13 +1780,15 @@ def purge_expired(db, org_id: str, *, now: datetime) -> dict:
         if created is not None and created < cutoff:
             _update(db, "outbound_call_attempts", attempt["id"], transcript=None)
             purged += 1
-    if purged:
-        db.table("outbound_purge_log").insert(
-            {
-                "org_id": org_id,
-                "asset_class": "transcripts",
-                "purged_count": purged,
-                "run_at": now.isoformat(),
-            }
-        ).execute()
+    # HR-20 proof (Rosa N1): EVERY run writes its purge-log row,
+    # including no-op runs — a missing row must mean "the job never
+    # ran", never "nothing happened to expire".
+    db.table("outbound_purge_log").insert(
+        {
+            "org_id": org_id,
+            "asset_class": "transcripts",
+            "purged_count": purged,
+            "run_at": now.isoformat(),
+        }
+    ).execute()
     return {"transcripts": purged, "audio": 0}

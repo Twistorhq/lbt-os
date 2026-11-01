@@ -43,6 +43,15 @@ class CalendarProvider(abc.ABC):
     ) -> dict:
         """Create an event; raise CalendarConflict on overlap."""
 
+    @abc.abstractmethod
+    def delete_event(self, event_id: str) -> bool:
+        """Delete a created event; True when one was removed.
+
+        Exists for TW-888 booking compensation: an event created in
+        the sliver before a mid-call revocation/kill-switch abort
+        becomes visible must be voidable, so no phantom booking ever
+        survives an aborted call."""
+
 
 class GoogleCalendarProvider(CalendarProvider):
     """Fail-closed seam for Justynn's Google Calendar.
@@ -74,6 +83,9 @@ class GoogleCalendarProvider(CalendarProvider):
         description: str,
         location: str | None = None,
     ) -> dict:
+        self._not_wired()
+
+    def delete_event(self, event_id: str) -> bool:
         self._not_wired()
 
 

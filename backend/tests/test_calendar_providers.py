@@ -36,6 +36,11 @@ class InMemoryCalendar(cp.CalendarProvider):
         self.events.append(event)
         return event
 
+    def delete_event(self, event_id):
+        before = len(self.events)
+        self.events = [e for e in self.events if e["id"] != event_id]
+        return len(self.events) < before
+
 
 def test_factory_fails_closed_without_calendar_id(monkeypatch):
     monkeypatch.setattr(settings, "google_calendar_id", None)
@@ -53,6 +58,20 @@ def test_google_provider_is_a_fail_closed_seam(monkeypatch):
         provider.create_event(
             title="x", start=T0, end=T0 + timedelta(minutes=20), description="y"
         )
+    with pytest.raises(cp.CalendarNotConfigured):
+        provider.delete_event("evt-1")
+
+
+def test_delete_event_removes_and_reports():
+    """TW-888: the port's delete backs booking compensation — an
+    event created just before an abort must be voidable."""
+    cal = InMemoryCalendar()
+    event = cal.create_event(
+        title="demo", start=T0, end=T0 + timedelta(minutes=20), description="d"
+    )
+    assert cal.delete_event(event["id"]) is True
+    assert cal.events == []
+    assert cal.delete_event(event["id"]) is False
 
 
 def test_inmemory_conflict_detection():

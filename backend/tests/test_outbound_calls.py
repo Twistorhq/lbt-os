@@ -326,7 +326,7 @@ def seed_agent(db, **over):
         "org_id": ORG,
         "enabled": True,
         "revoked_at": None,
-        "persona_name": oc.PLACEHOLDER_PERSONA_NAME,
+        "persona_name": oc.DEFAULT_PERSONA_NAME,
         "timezone": "America/Denver",
         "window_start": "08:00",
         "window_end": "17:00",
@@ -717,7 +717,7 @@ def test_disclosure_is_first_utterance_with_all_elements():
     opening = result["transcript"][0]
     assert opening["role"] == "agent"
     text = opening["text"]
-    assert oc.PLACEHOLDER_PERSONA_NAME in text
+    assert oc.DEFAULT_PERSONA_NAME in text
     assert "automated assistant" in text
     assert "Twistor" in text
     assert "sales call" in text
@@ -1346,7 +1346,7 @@ def test_run_dialer_isolates_per_prospect_failures():
     db = make_db()
     seed_agent(db)
     p1 = seed_prospect(db)
-    p2 = seed_prospect(
+    seed_prospect(
         db,
         company="Second Shop",
         phone=LANDLINE_2,
@@ -1417,3 +1417,49 @@ def test_purge_logs_every_run_even_when_nothing_expires():
     assert len(log) == 1
     assert log[0]["purged_count"] == 0
     assert log[0]["asset_class"] == "transcripts"
+
+
+def test_unverified_landline_with_pewc_consent_dials():
+    """TW-890 semantics lock: the consent gate is a gate, not a wall.
+    An unverified landline WITH a Twistor + AI-voice PEWC record is
+    callable under HR-07, exactly like a consented wireless number."""
+    db = make_db()
+    seed_agent(db)
+    p = seed_prospect(db)
+    db.table("outbound_consents").insert(
+        {
+            "org_id": ORG,
+            "phone_hash": oc.hash_phone(LANDLINE),
+            "seller_name": "Twistor",
+            "scope_ai_voice": True,
+            "source": "web_form",
+            "evidence_ref": "form-2026-10-30",
+            "granted_at": "2026-10-30T15:00:00-06:00",
+            "revoked_at": None,
+        }
+    ).execute()
+    types = FakeLineTypes(
+        {
+            LANDLINE: {
+                "line_type": "business_landline",
+                "carrier": "TestTel",
+                "verified": False,
+            }
+        }
+    )
+    result = dial(db, p, ScriptedResponder(["NO_ANSWER"]), line_types=types)
+    assert result["status"] == "completed"
+    assert result["disposition"] == "no_answer"
+
+
+def test_gatekeeper_callback_request_does_not_escalate():
+    """Rosa M1 guard: 'callback' alone is not an escalation — the
+    owner must be the one asking (rollup spec: owner callbacks and
+    demos escalate; gatekeeper brush-offs do not)."""
+    db = make_db()
+    seed_agent(db)
+    p = seed_prospect(db)
+    result = dial(db, p, ScriptedResponder(["He is not here, try again tomorrow"]))
+    assert result["disposition"] == "callback"
+    rollup = oc.daily_rollup(db, ORG, date(2026, 11, 2))
+    assert rollup["escalations"] == []

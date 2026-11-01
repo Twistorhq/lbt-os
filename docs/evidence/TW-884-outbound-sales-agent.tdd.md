@@ -4,6 +4,8 @@ Prepared by Twistor Holdings LLC
 
 **Branch:** `zeke/tw-884-outbound-calls` from lbt-os main `b330a89`.
 **Checkpoints:** RED `be04527` (tests only) → GREEN (this build).
+Fix round (Rosa REQUEST CHANGES + Rex findings TW-888/889/890):
+RED `80cdb90` → GREEN (see "Fix round" section at the end).
 **Posture:** TEST MODE ONLY. Global kill switch defaults OFF, test mode
 defaults ON (allowlisted numbers only), every provider fails closed,
 zero live prospect dials, zero spend.
@@ -65,13 +67,14 @@ zero live prospect dials, zero spend.
 |---|---|---|
 | Global kill switch OFF → no dial, 409 | `outbound_calls_enabled` gate | `test_global_kill_switch_blocks_dial` |
 | Per-agent disable/revoke → no dial | agent settings gate | `test_agent_disabled_blocks_dial`, `test_agent_revoked_blocks_dial` |
-| Revocation MID-CALL aborts before the next utterance; no booking | `_Conversation.speak` re-reads settings every utterance (TW-766) | `test_revocation_mid_call_aborts_without_booking` |
+| Revocation MID-CALL aborts before the next utterance | `_call_alive` (global kill switch + per-agent row, re-read fresh) checked by `_Conversation.speak` before every utterance (TW-766) | `test_revocation_mid_call_aborts_without_booking`, Rex `test_revoke_mid_conversation_stops_utterances`, Rex `test_global_kill_switch_stops_in_flight_call` (TW-889) |
+| Revocation at the CLOSE books nothing — and a booking created in the sliver before the abort shows is voided (TW-888) | `book()` re-checks `_call_alive` before any side effect; `_find_demo_slot` re-checks immediately before `create_event`; `close_booking` compensates via the calendar port's `delete_event` and marks `booking_voided` in the audit answers | Rex `test_revoke_at_close_creates_no_booking`, `test_revoke_during_booking_creation_voids_the_event` |
 | Test mode: only allowlisted numbers dial | allowlist gate | `test_test_mode_allowlist_refuses_other_numbers` |
 | Caller ID: owned number + CNAM "Twistor" + STIR/SHAKEN A, else 503 (HR-03/04) | config gate in dialer | `test_caller_id_must_be_owned_config_with_cnam_and_attestation` |
 | Live mode blocked until DNC policy on file + privacy section + web opt-out live (HR-12/21) | launch gates | `test_launch_gates_block_live_mode` |
 | Disclosure is utterance one: persona name, "automated assistant", Twistor, sales purpose (HR-01) | opening rides `place_call(say_text=...)`; session row records `ai_disclosure_given` | `test_disclosure_is_first_utterance_with_all_elements` |
 | "Are you a robot?" gets a truthful answer, no human claim (HR-02) | engine global branch | `test_robot_question_gets_truthful_answer` |
-| Cold dials: verified business landlines ONLY (HR-06) | line-type gate before every dial (HR-05), result logged per attempt | `test_unknown_line_type_fails_closed`, `test_wireless_without_consent_routes_to_consent_lane` |
+| Cold dials: verified business landlines ONLY (HR-06) | line-type gate before every dial (HR-05) reads the lookup's `verified` flag: the landline path requires `verified is True`; an unverified landline label takes the HR-07 consent gate (consent-capture lane without PEWC, dials with it). Result logged per attempt | `test_unknown_line_type_fails_closed`, `test_wireless_without_consent_routes_to_consent_lane`, Rex `test_unverified_landline_classification_refuses_dial`, `test_unverified_landline_routes_to_consent_capture`, `test_unverified_landline_with_pewc_consent_dials` (last five: fix round, TW-890) |
 | Wireless/residential dial only with PEWC record naming Twistor + AI-voice scope (HR-07) | consent ledger check | `test_wireless_with_written_consent_dials` |
 | Unconfigured carrier lookup → 503, never a guessed dial (HR-05) | fail-closed port factory | `test_missing_line_type_provider_fails_closed` |
 | Suppression checked AT DIAL TIME, not batch load (HR-09) | ledger re-read in the gate chain | `test_suppression_after_import_blocks_dial_at_dial_time` |
@@ -116,9 +119,11 @@ zero live prospect dials, zero spend.
   HR-20 retention periods are the memo's proposed schedule (pending
   Justynn's approval); the purge job covers DB transcripts —
   provider-side audio purge is go-live wiring.
-- **Persona is a placeholder** ("Nova") behind the agent-settings
-  `persona_name` slot; Imani's TW-886 name/voice drops in without a
-  code change.
+- **Persona:** the slot is the agent-settings `persona_name`
+  (config-driven, unchanged). The shipped default is now **Tori
+  Calloway** (TW-886, approved by Justynn 2026-11-01); slice 1
+  shipped a "Nova" placeholder default, and the fix round renamed
+  the constant to `DEFAULT_PERSONA_NAME`, changing only the value.
 - **Migration is written, not applied.** Production apply is a
   separate word (the decs T7 pattern), and the router TestClient
   suites cannot run in this sandbox (pre-existing xmlsec limit, same
@@ -132,3 +137,72 @@ zero live prospect dials, zero spend.
 - The TW-882 batch's 190 phones are untouched by this build: import
   sorts nothing until a human runs it, and every number still has to
   survive scrub + line-type + consent gates at dial time.
+
+## Fix round — Rosa REQUEST CHANGES + Rex findings (2026-11-01)
+
+Rosa's review of the slice-1 build returned REQUEST CHANGES with 3
+blockers (matching Rex's 3 retest findings) and 5 majors; Rex's
+adversarial suite (44 tests, committed `4ef027e`) went 41 kills /
+3 findings. This round closes all of it. RED for the round is Rex's
+3 committed reproductions plus 8 new proofs in
+`tests/test_outbound_calls.py` (checkpoint `80cdb90`, all failing
+against the slice-1 build); GREEN is this section's build.
+
+**Corrections to the slice-1 record (Rosa B1/B3):** two rows of the
+guarantees table above overclaimed at slice 1. The revocation row
+cited a test that revokes at Q1 for a claim that included "no
+booking" at the close — the close path was NOT proven (and was in
+fact broken, TW-888). The HR-06 row claimed VERIFIED landlines; the
+slice-1 gate read the line-type label but never the lookup's
+`verified` flag (TW-890). Both rows are corrected above with the
+fix-round tests that now actually prove them.
+
+| Fix | Change | Proof |
+|---|---|---|
+| TW-888 (B1) phantom booking | `book()` re-checks liveness before any side effect; `_find_demo_slot` re-checks immediately before `create_event`; on abort after a create, `close_booking` voids the event via the new calendar-port `delete_event` and records `booking_voided` in the audit answers | Rex close test + `test_revoke_during_booking_creation_voids_the_event` (revocation lands inside `create_event` itself) |
+| TW-889 (B2) global brake | one liveness definition, `_call_alive` = global flag AND per-agent row, re-read fresh; used by `speak()` and the booking path | Rex `test_global_kill_switch_stops_in_flight_call` |
+| TW-890 (B3) verified flag | landline path requires `verified is True`; unverified labels route through the HR-07 consent gate | Rex unverified test + route/consent semantics pair (see interpretation note) |
+| M1 owner-callback escalation | `place_outbound_call` sets `answers["owner_callback"]` on owner-reached callback outcomes (the rollup read it; nothing set it — dead code) | `test_owner_callback_request_escalates_in_rollup` + gatekeeper negative control |
+| M2 TX Sunday window | `_window_open` enforces `sunday_start` (TX noon) on Sundays | `test_texas_sunday_window_opens_at_noon` (direct gate test; TX stays counsel-gated off for dials) |
+| M3 recording config pre-dial | voice-provider resolution hoisted before `place_call` (503 with zero dial/session/attempt side effects); a mid-setup toggle fault degrades to an unrecorded call that still ends with a disposition | `test_recording_config_failure_lands_before_the_dial` |
+| M4 batch fault isolation | `run_dialer` catches provider exceptions per prospect as dead-letter result records; `_handle_recording_objection`'s toggle is guarded | `test_run_dialer_isolates_per_prospect_failures`, `test_recording_objection_survives_toggle_failure` |
+| M5 persona default | `DEFAULT_PERSONA_NAME = "Tori Calloway"` (slot config-driven, value only) | existing persona assertions now bind the real name |
+| N1 purge proof | `purge_expired` writes its purge-log row on EVERY run, including no-ops | `test_purge_logs_every_run_even_when_nothing_expires` |
+
+**Calendar port change:** `CalendarProvider.delete_event(event_id)
+-> bool` added (ABC + fail-closed Google seam + test fakes). It
+exists solely for TW-888 compensation.
+
+**Interpretation note (TW-890):** Rosa's B3 text says unverified
+"falls to the blocked path"; the fix brief said "consent-required
+bucket". TW-890's own fix text names "blocked_line_type /
+consent-capture handling". Chosen: consent-capture (the HR-07 gate)
+— an unverified landline without PEWC lands in the
+`consent_capture` lane with a `blocked_consent_required` attempt,
+never dialed; with a valid PEWC record it dials lawfully, exactly
+like a consented wireless number. Flagged for Rosa's re-review.
+
+**Nits disposition:** N1 done (above). N2 (empty holiday sets incl.
+CO) — field present per HR-14; date content is Angela's pre-go-live
+task, noted on TW-884. N3 (opt-out endpoint is org-authenticated;
+HR-21's public surface needs an unauthenticated rate-limited
+variant) — flagged on TW-884 for Angela/Sofia at go-live wiring;
+not redesigned here. N4 (review-unit size) — noted; this round's
+RED/GREEN checkpoint split is the mitigation.
+
+**Known gap added this round:** if `set_recording(on=True)` ever
+partially succeeds at the production bridge (announcement spoken,
+capture started) and then raises, the M3 degrade proceeds with
+`recording_on=False` while capture may be live. The pre-dial
+resolution removes the realistic cause (unconfigured provider);
+partial-toggle semantics are a go-live bridge item, same class as
+the responder bridge.
+
+**Verification (fresh, this round):**
+- Outbound family: `test_outbound_calls.py` 55 + `test_calendar_providers.py` 4 + Rex `test_outbound_rex_retest.py` 44 = **103/103 pass**; TW-284 suite 24/24.
+- Paired full suite vs clean main `b330a89` (same command as
+  slice 1): control 21 failed / 2557 passed / 9 errors; branch
+  21 failed / **2660 passed** / 9 errors. Failed node sets
+  identical, error counts identical — **zero regressions**; the
+  +103 passes are exactly slice 1's 48 + Rex's 44 + this round's 11.
+- `ruff check` + `ruff format --check` clean on every touched file.
