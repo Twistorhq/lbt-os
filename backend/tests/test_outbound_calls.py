@@ -11,7 +11,7 @@ recording objection, retention purge).
 from __future__ import annotations
 
 import re
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -201,7 +201,6 @@ class FakeVoiceAgent:
         self.order_log.append(f"speak:{text}")
 
 
-
 class FakeLineTypes:
     """Carrier-lookup fake. Default verdict: unknown (fail closed)."""
 
@@ -229,9 +228,7 @@ class FakeCalendar:
         self.events = []
 
     def list_events(self, start, end):
-        return [
-            e for e in self.events if e["start"] < end and start < e["end"]
-        ]
+        return [e for e in self.events if e["start"] < end and start < e["end"]]
 
     def create_event(self, *, title, start, end, description, location=None):
         for e in self.events:
@@ -290,8 +287,14 @@ def cfg(monkeypatch):
 
 def landline_types(*numbers):
     return FakeLineTypes(
-        {n: {"line_type": "business_landline", "carrier": "TestTel", "verified": True}
-         for n in numbers}
+        {
+            n: {
+                "line_type": "business_landline",
+                "carrier": "TestTel",
+                "verified": True,
+            }
+            for n in numbers
+        }
     )
 
 
@@ -348,7 +351,7 @@ def seed_prospect(db, **over):
         "created_at": BASE_NOW.isoformat(),
     }
     row.update(over)
-    return db.table("outbound_prospects").insert(row).execute().data
+    return db.table("outbound_prospects").insert(row).execute().data[0]
 
 
 def dial(db, prospect, responder, now=BASE_NOW, **kw):
@@ -529,16 +532,16 @@ def test_wireless_without_consent_routes_to_consent_lane():
     db = make_db()
     seed_agent(db)
     p = seed_prospect(
-        db, phone=WIRELESS, phone_hash=oc.hash_phone(WIRELESS),
+        db,
+        phone=WIRELESS,
+        phone_hash=oc.hash_phone(WIRELESS),
         phone_masked=oc.mask_phone(WIRELESS),
     )
     tel = FakeTelephony()
     types = FakeLineTypes(
-        {WIRELESS: {"line_type": "wireless", "carrier": "MobileCo",
-                    "verified": True}}
+        {WIRELESS: {"line_type": "wireless", "carrier": "MobileCo", "verified": True}}
     )
-    result = dial(db, p, ScriptedResponder(HAPPY), telephony=tel,
-                  line_types=types)
+    result = dial(db, p, ScriptedResponder(HAPPY), telephony=tel, line_types=types)
     assert result["status"] == "consent_required"
     assert tel.calls == []
     row = db.tables["outbound_prospects"][0]
@@ -552,7 +555,9 @@ def test_wireless_with_written_consent_dials():
     db = make_db()
     seed_agent(db)
     p = seed_prospect(
-        db, phone=WIRELESS, phone_hash=oc.hash_phone(WIRELESS),
+        db,
+        phone=WIRELESS,
+        phone_hash=oc.hash_phone(WIRELESS),
         phone_masked=oc.mask_phone(WIRELESS),
     )
     db.table("outbound_consents").insert(
@@ -568,8 +573,7 @@ def test_wireless_with_written_consent_dials():
         }
     ).execute()
     types = FakeLineTypes(
-        {WIRELESS: {"line_type": "wireless", "carrier": "MobileCo",
-                    "verified": True}}
+        {WIRELESS: {"line_type": "wireless", "carrier": "MobileCo", "verified": True}}
     )
     result = dial(db, p, ScriptedResponder(["NO_ANSWER"]), line_types=types)
     assert result["status"] == "completed"
@@ -579,12 +583,11 @@ def test_wireless_with_written_consent_dials():
 def test_unknown_line_type_fails_closed():
     db = make_db()
     seed_agent(db)
-    p = seed_prospect(
-        db, phone=UNKNOWN_NUM, phone_hash=oc.hash_phone(UNKNOWN_NUM)
-    )
+    p = seed_prospect(db, phone=UNKNOWN_NUM, phone_hash=oc.hash_phone(UNKNOWN_NUM))
     tel = FakeTelephony()
-    result = dial(db, p, ScriptedResponder(HAPPY), telephony=tel,
-                  line_types=FakeLineTypes())
+    result = dial(
+        db, p, ScriptedResponder(HAPPY), telephony=tel, line_types=FakeLineTypes()
+    )
     assert result["status"] == "blocked_line_type"
     assert tel.calls == []
 
@@ -601,8 +604,13 @@ def test_missing_line_type_provider_fails_closed(monkeypatch):
     p = seed_prospect(db)
     with pytest.raises(oc.OutboundError) as exc:
         oc.place_outbound_call(
-            db, ORG, p["id"], ScriptedResponder(HAPPY), now=BASE_NOW,
-            telephony=FakeTelephony(), calendar=FakeCalendar(),
+            db,
+            ORG,
+            p["id"],
+            ScriptedResponder(HAPPY),
+            now=BASE_NOW,
+            telephony=FakeTelephony(),
+            calendar=FakeCalendar(),
         )
     assert exc.value.status_code == 503
 
@@ -638,8 +646,12 @@ def test_scrub_marks_registry_hits_and_logs_metadata():
     seed_agent(db)
     seed_prospect(db, scrub_status="unscrubbed")
     seed_prospect(
-        db, company="Hit Co", phone=LANDLINE_2, rank=2,
-        phone_hash=oc.hash_phone(LANDLINE_2), scrub_status="unscrubbed",
+        db,
+        company="Hit Co",
+        phone=LANDLINE_2,
+        rank=2,
+        phone_hash=oc.hash_phone(LANDLINE_2),
+        scrub_status="unscrubbed",
     )
     registry = FakeRegistry(hits={LANDLINE_2})
     summary = oc.scrub_prospects(
@@ -728,11 +740,19 @@ def test_demo_slot_respects_buffer_and_never_double_books():
     p1 = seed_prospect(db)
     dial(db, p1, ScriptedResponder(HAPPY), calendar=cal)
     p2 = seed_prospect(
-        db, company="Air Repair", phone=LANDLINE_2, rank=2,
+        db,
+        company="Air Repair",
+        phone=LANDLINE_2,
+        rank=2,
         phone_hash=oc.hash_phone(LANDLINE_2),
     )
-    dial(db, p2, ScriptedResponder(HAPPY), calendar=cal,
-         line_types=landline_types(LANDLINE_2))
+    dial(
+        db,
+        p2,
+        ScriptedResponder(HAPPY),
+        calendar=cal,
+        line_types=landline_types(LANDLINE_2),
+    )
     assert len(cal.events) == 2
     first, second = sorted(cal.events, key=lambda e: e["start"])
     gap = second["start"] - first["end"]
@@ -744,8 +764,13 @@ def test_missing_calendar_degrades_to_callback_not_failure():
     seed_agent(db)
     p = seed_prospect(db)
     result = oc.place_outbound_call(
-        db, ORG, p["id"], ScriptedResponder(HAPPY), now=BASE_NOW,
-        telephony=FakeTelephony(), line_types=landline_types(LANDLINE),
+        db,
+        ORG,
+        p["id"],
+        ScriptedResponder(HAPPY),
+        now=BASE_NOW,
+        telephony=FakeTelephony(),
+        line_types=landline_types(LANDLINE),
         calendar=None,
     )
     assert result["disposition"] == "callback"
@@ -768,8 +793,9 @@ def test_robot_question_gets_truthful_answer():
     ]
     result = dial(db, p, ScriptedResponder(replies))
     agent_lines = [t["text"] for t in result["transcript"] if t["role"] == "agent"]
-    truth = [t for t in agent_lines if "automated assistant" in t
-             and "not a person" in t]
+    truth = [
+        t for t in agent_lines if "automated assistant" in t and "not a person" in t
+    ]
     assert truth, "HR-02: direct question, direct truthful answer"
     assert result["disposition"] == "demo_set"
 
@@ -893,8 +919,14 @@ def test_recording_announcement_precedes_capture_on_outbound():
     order: list[str] = []
     tel = FakeTelephony(order_log=order)
     voice = FakeVoiceAgent(order_log=order)
-    result = dial(db, p, ScriptedResponder(["NO_ANSWER"]), telephony=tel,
-                  voice_agent=voice, recording_enabled=True)
+    result = dial(
+        db,
+        p,
+        ScriptedResponder(["NO_ANSWER"]),
+        telephony=tel,
+        voice_agent=voice,
+        recording_enabled=True,
+    )
     assert result["disposition"] == "no_answer"
     # TW-284 rule: the spoken announcement lands BEFORE capture starts.
     assert voice.spoken[0] == "This call is now being recorded."
@@ -974,9 +1006,13 @@ def test_cadence_day3_not_day1():
 def test_fourth_touch_rests_prospect():
     db = make_db()
     seed_agent(db)
-    p = seed_prospect(db, touch_count=3, status="in_cadence",
-                      cadence_start="2026-10-21",
-                      next_touch_at="2026-11-02T08:00:00-06:00")
+    p = seed_prospect(
+        db,
+        touch_count=3,
+        status="in_cadence",
+        cadence_start="2026-10-21",
+        next_touch_at="2026-11-02T08:00:00-06:00",
+    )
     dial(db, p, ScriptedResponder(["NO_ANSWER"]))
     prospect = db.tables["outbound_prospects"][0]
     assert prospect["touch_count"] == 4
@@ -989,11 +1025,19 @@ def test_run_dialer_honors_daily_cap():
     prospects = []
     for i, phone in enumerate([LANDLINE, LANDLINE_2, LANDLINE_3]):
         prospects.append(
-            seed_prospect(db, company=f"Shop {i}", phone=phone, rank=i + 1,
-                          phone_hash=oc.hash_phone(phone))
+            seed_prospect(
+                db,
+                company=f"Shop {i}",
+                phone=phone,
+                rank=i + 1,
+                phone_hash=oc.hash_phone(phone),
+            )
         )
     summary = oc.run_dialer(
-        db, ORG, lambda _p: ScriptedResponder(["NO_ANSWER"]), now=BASE_NOW,
+        db,
+        ORG,
+        lambda _p: ScriptedResponder(["NO_ANSWER"]),
+        now=BASE_NOW,
         telephony=FakeTelephony(),
         line_types=landline_types(LANDLINE, LANDLINE_2, LANDLINE_3),
         calendar=FakeCalendar(),
@@ -1012,11 +1056,21 @@ def test_daily_rollup_counts_and_escalations_carry_transcripts():
     seed_agent(db)
     p = seed_prospect(db)
     dial(db, p, ScriptedResponder(HAPPY))
-    p2 = seed_prospect(db, company="DNC Co", phone=LANDLINE_2, rank=2,
-                       phone_hash=oc.hash_phone(LANDLINE_2))
-    dial(db, p2, ScriptedResponder(["This is Kevin, speaking.",
-                                    "Do not call this number again."]),
-         line_types=landline_types(LANDLINE_2))
+    p2 = seed_prospect(
+        db,
+        company="DNC Co",
+        phone=LANDLINE_2,
+        rank=2,
+        phone_hash=oc.hash_phone(LANDLINE_2),
+    )
+    dial(
+        db,
+        p2,
+        ScriptedResponder(
+            ["This is Kevin, speaking.", "Do not call this number again."]
+        ),
+        line_types=landline_types(LANDLINE_2),
+    )
     rollup = oc.daily_rollup(db, ORG, date(2026, 11, 2))
     assert rollup["conversations"] == 2
     assert rollup["demos"] == 1
@@ -1033,14 +1087,24 @@ def test_retention_purge_expired_transcripts_only():
     seed_agent(db)
     old = datetime(2025, 9, 1, 10, 0, tzinfo=DENVER)
     db.table("outbound_call_attempts").insert(
-        {"org_id": ORG, "prospect_id": "p-old", "dialed": True,
-         "disposition": "no_answer", "transcript": [{"role": "agent",
-         "text": "old"}], "created_at": old.isoformat()}
+        {
+            "org_id": ORG,
+            "prospect_id": "p-old",
+            "dialed": True,
+            "disposition": "no_answer",
+            "transcript": [{"role": "agent", "text": "old"}],
+            "created_at": old.isoformat(),
+        }
     ).execute()
     db.table("outbound_call_attempts").insert(
-        {"org_id": ORG, "prospect_id": "p-new", "dialed": True,
-         "disposition": "no_answer", "transcript": [{"role": "agent",
-         "text": "new"}], "created_at": BASE_NOW.isoformat()}
+        {
+            "org_id": ORG,
+            "prospect_id": "p-new",
+            "dialed": True,
+            "disposition": "no_answer",
+            "transcript": [{"role": "agent", "text": "new"}],
+            "created_at": BASE_NOW.isoformat(),
+        }
     ).execute()
     oc.record_suppression(db, ORG, LANDLINE, source="dnc_request")
     counts = oc.purge_expired(db, ORG, now=BASE_NOW)
@@ -1086,9 +1150,13 @@ def test_legal_gate_config_matches_memo():
     assert rules["TX"]["dialing_enabled"] is False
     assert rules["FL"]["dialing_enabled"] is False
     assert (rules["CO"]["window_start"], rules["CO"]["window_end"]) == (
-        "08:00", "17:00")
+        "08:00",
+        "17:00",
+    )
     assert (rules["FL"]["window_start"], rules["FL"]["window_end"]) == (
-        "08:00", "20:00")
+        "08:00",
+        "20:00",
+    )
     assert "holidays" in rules["CO"]
 
 

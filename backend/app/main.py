@@ -48,6 +48,7 @@ from .routers import (
     messages,
     metrics,
     organizations,
+    outbound,
     revenue_intelligence,
     sales,
     strategy,
@@ -148,6 +149,7 @@ app.include_router(verify_router.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
 app.include_router(bi.router, prefix="/api/v1")
 app.include_router(calls.router, prefix="/api/v1")
+app.include_router(outbound.router, prefix="/api/v1")
 app.include_router(consults.router, prefix="/api/v1")
 app.include_router(organizations.router, prefix="/api/v1")
 app.include_router(leads.router, prefix="/api/v1")
