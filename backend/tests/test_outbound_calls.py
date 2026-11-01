@@ -265,6 +265,15 @@ class RevokingCalendar(FakeCalendar):
         return event
 
 
+class FalseDeleteCalendar(RevokingCalendar):
+    """TW-891 fake: the create race fires AND the compensating delete
+    lies — it reports nothing removed (False, per the port contract:
+    True only when one was removed) and the event stays."""
+
+    def delete_event(self, event_id):
+        return False
+
+
 class ScriptedResponder:
     """Pops canned prospect replies; callables run side effects."""
 
@@ -1238,6 +1247,31 @@ def test_revoke_during_booking_creation_voids_the_event():
     assert attempt["disposition"] == "aborted"
     assert attempt["demo_event_id"] is None
     assert (attempt["audit_answers"] or {}).get("booking_voided") is True
+
+
+def test_failed_void_records_orphan_and_rollup_surfaces_it():
+    """TW-891: when the TW-888 compensation cannot remove the event,
+    the attempt row must carry booking_void_failed + the orphaned
+    event id (never a false booking_voided claim), and daily_rollup
+    must surface the orphan as a cleanup work-order (count + ids)."""
+    db = make_db()
+    seed_agent(db)
+    p = seed_prospect(db)
+    cal = FalseDeleteCalendar(db)
+    result = dial(db, p, ScriptedResponder(HAPPY), calendar=cal)
+    assert result["status"] == "aborted"
+    assert len(cal.events) == 1, "test premise: the failed void leaves the event"
+    surviving = cal.events[0]["id"]
+    attempt = db.tables["outbound_call_attempts"][-1]
+    assert attempt["disposition"] == "aborted"
+    assert attempt["demo_event_id"] is None
+    answers = attempt["audit_answers"] or {}
+    assert answers.get("booking_voided") is not True
+    assert answers.get("booking_void_failed") is True
+    assert answers.get("orphaned_event_id") == surviving
+    rollup = oc.daily_rollup(db, ORG, date(2026, 11, 2))
+    assert rollup["orphaned_events"]["count"] == 1
+    assert rollup["orphaned_events"]["event_ids"] == [surviving]
 
 
 def test_unverified_landline_routes_to_consent_capture():
