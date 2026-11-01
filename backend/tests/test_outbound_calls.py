@@ -245,6 +245,25 @@ class FakeCalendar:
         self.events.append(event)
         return event
 
+    def delete_event(self, event_id):
+        before = len(self.events)
+        self.events = [e for e in self.events if e["id"] != event_id]
+        return len(self.events) < before
+
+
+class RevokingCalendar(FakeCalendar):
+    """TW-888 race fake: the event lands, THEN revocation lands —
+    the booking exists before the abort becomes visible."""
+
+    def __init__(self, db):
+        super().__init__()
+        self.db = db
+
+    def create_event(self, **kwargs):
+        event = super().create_event(**kwargs)
+        oc.revoke_agent(self.db, ORG, now=BASE_NOW)
+        return event
+
 
 class ScriptedResponder:
     """Pops canned prospect replies; callables run side effects."""
@@ -1194,3 +1213,207 @@ def test_router_import_smoke():
     assert "/outbound/scrub" in paths
     assert "/outbound/opt-out" in paths
     assert "/outbound/rollup" in paths
+
+
+# ---------------------------------------------------------------------------
+# Fix round (Rosa REQUEST CHANGES + Rex findings TW-888/889/890):
+# RED proofs written against the slice-1 build, before the patch.
+# ---------------------------------------------------------------------------
+
+CHICAGO = ZoneInfo("America/Chicago")
+
+
+def test_revoke_during_booking_creation_voids_the_event():
+    """TW-888 compensation path: revocation lands AFTER create_event
+    returns but before the confirmation is spoken. The phantom event
+    must be voided, not left on the calendar."""
+    db = make_db()
+    seed_agent(db)
+    p = seed_prospect(db)
+    cal = RevokingCalendar(db)
+    result = dial(db, p, ScriptedResponder(HAPPY), calendar=cal)
+    assert result["status"] == "aborted"
+    assert cal.events == [], "phantom booking survived revocation"
+    attempt = db.tables["outbound_call_attempts"][-1]
+    assert attempt["disposition"] == "aborted"
+    assert attempt["demo_event_id"] is None
+    assert (attempt["audit_answers"] or {}).get("booking_voided") is True
+
+
+def test_unverified_landline_routes_to_consent_capture():
+    """TW-890: a business_landline LABEL with verified=False is a
+    guess, not a verified landline (HR-06). No dial; the number takes
+    the consent gate like wireless/residential."""
+    db = make_db()
+    seed_agent(db)
+    p = seed_prospect(db)
+    tel = FakeTelephony()
+    types = FakeLineTypes(
+        {
+            LANDLINE: {
+                "line_type": "business_landline",
+                "carrier": "TestTel",
+                "verified": False,
+            }
+        }
+    )
+    result = dial(db, p, ScriptedResponder(HAPPY), telephony=tel, line_types=types)
+    assert tel.calls == []
+    assert result["status"] == "consent_required"
+    row = db.tables["outbound_prospects"][0]
+    assert row["lane"] == "consent_capture"
+    attempt = db.tables["outbound_call_attempts"][-1]
+    assert attempt["dialed"] is False
+    assert attempt["disposition"] == "blocked_consent_required"
+
+
+def test_owner_callback_request_escalates_in_rollup():
+    """Rosa M1: an owner asking for a callback is an escalation with
+    transcript (ticket spec item 5), not a bare disposition."""
+    db = make_db()
+    seed_agent(db)
+    p = seed_prospect(db)
+    result = dial(
+        db,
+        p,
+        ScriptedResponder(
+            ["This is Kevin, speaking.", "I'm too busy right now, call me back"]
+        ),
+    )
+    assert result["disposition"] == "callback"
+    rollup = oc.daily_rollup(db, ORG, date(2026, 11, 2))
+    assert len(rollup["escalations"]) == 1
+    esc = rollup["escalations"][0]
+    assert esc["prospect_id"] == p["id"]
+    assert esc["disposition"] == "callback"
+    assert esc["transcript"], "escalation must carry the transcript"
+
+
+def test_texas_sunday_window_opens_at_noon():
+    """Rosa M2 / HR-14: STATE_RULES TX sunday_start=12:00 must be
+    enforced by _window_open, not just loaded."""
+    agent = {
+        "call_days": [0, 1, 2, 3, 4, 5, 6],
+        "window_start": "08:00",
+        "window_end": "17:00",
+        "lunch_start": None,
+        "lunch_end": None,
+    }
+    tx = {"state": "TX", "timezone": "America/Chicago"}
+    sunday_11 = datetime(2026, 11, 1, 11, 0, tzinfo=CHICAGO)  # a Sunday
+    assert oc._window_open(agent, tx, sunday_11) is False
+    assert oc._window_open(agent, tx, sunday_11.replace(hour=12)) is True
+    saturday_10 = datetime(2026, 10, 31, 10, 0, tzinfo=CHICAGO)
+    assert oc._window_open(agent, tx, saturday_10) is True
+    # CO has no Sunday rule: same Sunday moment is governed by the
+    # plain window intersection.
+    co = {"state": "CO", "timezone": "America/Denver"}
+    sunday_10_denver = datetime(2026, 11, 1, 10, 0, tzinfo=DENVER)
+    assert oc._window_open(agent, co, sunday_10_denver) is True
+
+
+def test_recording_config_failure_lands_before_the_dial(monkeypatch):
+    """Rosa M3: recording requested + voice provider unconfigured
+    must fail BEFORE place_call — never a dialed call with no
+    disposition row."""
+    db = make_db()
+    seed_agent(db)
+    p = seed_prospect(db)
+
+    def no_voice():
+        raise oc.vp.ProviderNotConfigured("voice provider not configured")
+
+    monkeypatch.setattr(oc.vp, "get_voice_agent", no_voice)
+    tel = FakeTelephony()
+    with pytest.raises(oc.OutboundError) as exc:
+        dial(
+            db,
+            p,
+            ScriptedResponder(HAPPY),
+            telephony=tel,
+            voice_agent=None,
+            recording_enabled=True,
+        )
+    assert exc.value.status_code == 503
+    assert tel.calls == [], "call was placed before the config failure"
+    assert db.tables.get("ai_call_sessions", []) == []
+    assert db.tables.get("outbound_call_attempts", []) == []
+
+
+def test_run_dialer_isolates_per_prospect_failures():
+    """Rosa M4 / self-healing rule: one prospect's provider explosion
+    is a dead-letter record; the rest of the batch still dials."""
+    db = make_db()
+    seed_agent(db)
+    p1 = seed_prospect(db)
+    p2 = seed_prospect(
+        db,
+        company="Second Shop",
+        phone=LANDLINE_2,
+        rank=2,
+        phone_hash=oc.hash_phone(LANDLINE_2),
+        phone_masked=oc.mask_phone(LANDLINE_2),
+    )
+
+    def exploding(_history):
+        raise RuntimeError("responder bridge exploded")
+
+    def factory(prospect):
+        if prospect["id"] == p1["id"]:
+            return exploding
+        return ScriptedResponder(HAPPY)
+
+    out = oc.run_dialer(
+        db,
+        ORG,
+        factory,
+        now=BASE_NOW,
+        telephony=FakeTelephony(),
+        voice_agent=FakeVoiceAgent(),
+        line_types=landline_types(LANDLINE, LANDLINE_2),
+        calendar=FakeCalendar(),
+    )
+    assert out["attempted"] == 2
+    assert out["results"][0]["status"] == "error"
+    assert out["results"][0]["prospect_id"] == p1["id"]
+    assert "RuntimeError" in out["results"][0]["detail"]
+    assert out["results"][1]["status"] == "completed"
+    assert out["dialed"] == 1
+
+
+def test_recording_objection_survives_toggle_failure(monkeypatch):
+    """Rosa M4: a set_recording fault on the objection path must not
+    crash the call or skip the permanent no_record flag (HR-17)."""
+    db = make_db()
+    seed_agent(db)
+    p = seed_prospect(db)
+    real_toggle = oc.pa.set_recording
+
+    def flaky_toggle(db_, **kwargs):
+        if kwargs.get("on") is False:
+            raise RuntimeError("toggle write failed")
+        return real_toggle(db_, **kwargs)
+
+    monkeypatch.setattr(oc.pa, "set_recording", flaky_toggle)
+    result = dial(
+        db,
+        p,
+        ScriptedResponder(["This is Kevin, speaking.", "Do not record this call."]),
+        recording_enabled=True,
+    )
+    assert result["status"] == "completed"
+    stored = [r for r in db.tables["outbound_prospects"] if r["id"] == p["id"]][0]
+    assert stored["no_record"] is True
+
+
+def test_purge_logs_every_run_even_when_nothing_expires():
+    """Rosa N1 / HR-20: the purge log is the proof the job ran —
+    a no-op run still writes its row."""
+    db = make_db()
+    seed_agent(db)
+    counts = oc.purge_expired(db, ORG, now=BASE_NOW)
+    assert counts["transcripts"] == 0
+    log = db.tables.get("outbound_purge_log", [])
+    assert len(log) == 1
+    assert log[0]["purged_count"] == 0
+    assert log[0]["asset_class"] == "transcripts"
