@@ -44,7 +44,7 @@ const navGroups = [
   },
 ]
 
-export default function Sidebar() {
+export default function Sidebar({ mobileOpen = false, onClose }) {
   const { organization } = useOrganization()
   // TW-295: signed-out visitors browse on sample data — offer sign-in,
   // not a user button.
@@ -71,7 +71,12 @@ export default function Sidebar() {
   }
 
   return (
-    <aside className="sticky top-0 flex h-screen w-64 shrink-0 flex-col border-r border-slate-900/5 bg-slate-950 text-white">
+    <aside
+      id="app-sidebar"
+      className={`fixed inset-y-0 left-0 z-40 flex h-full w-64 shrink-0 flex-col border-r border-slate-900/5 bg-slate-950 text-white transition-transform duration-200 max-md:shadow-2xl md:sticky md:top-0 md:flex md:h-screen md:translate-x-0 md:transition-none ${
+        mobileOpen ? 'translate-x-0' : 'invisible -translate-x-full md:visible'
+      }`}
+    >
       {/* Logo */}
       <div className="border-b border-white/10 px-5 py-5">
         <div className="flex items-center gap-2.5">
@@ -82,6 +87,15 @@ export default function Sidebar() {
             </div>
             <div className="text-[11px] text-white/45">Operating system</div>
           </div>
+          {/* TW-899: drawer close (phones only) */}
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close navigation"
+            className="ml-auto flex h-11 w-11 items-center justify-center rounded-xl bg-white/10 text-base text-white transition-colors hover:bg-white/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gold-300 md:hidden"
+          >
+            <span aria-hidden="true">✕</span>
+          </button>
         </div>
         <div className="mt-4 text-[13px] font-medium text-white/60">{organization?.name || 'Your Business'}</div>
         <div className={`mt-3 inline-flex rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${modeStyles[mode] || modeStyles.blank}`}>
