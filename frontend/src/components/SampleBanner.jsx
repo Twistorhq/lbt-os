@@ -19,14 +19,14 @@ export default function SampleBanner() {
       <span aria-hidden="true" className="text-lg text-amber-500">
         ◈
       </span>
-      <p className="text-sm text-amber-900">
+      <p className="min-w-0 flex-1 text-sm text-amber-900">
         <span className="font-semibold">Sample data</span> — you&apos;re browsing a
         demo workspace. Nothing here is real and nothing is saved.
       </p>
       <Link
         to="/sign-in"
         onClick={() => trackSignupIntent('sample_banner_sign_in', location.pathname)}
-        className="ml-auto inline-flex items-center rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-slate-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900"
+        className="ml-auto inline-flex items-center rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-slate-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 max-sm:w-full max-sm:justify-center"
       >
         Sign in to connect your business
       </Link>
