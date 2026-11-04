@@ -1,0 +1,21 @@
+BEFORE file state - original agents board (TW-485)
+total 40
+drwxrwx--- 1 root root   124 Oct 18 14:06 .
+drwxrwx--- 1 root root   204 Nov  4 21:52 ..
+drwxrwx--- 1 root root    64 Oct 13 16:49 .pytest_cache
+-rw-rw---- 1 root root   986 Oct 13 16:50 README.md
+drwxrwx--- 1 root root    84 Oct 17 14:12 __pycache__
+-rw-r----- 1 root root 12288 Oct 13 18:42 board.db
+-rw-rw---- 1 root root 12677 Oct 17 14:05 board.py
+-rwxrwx--- 1 root root  5406 Oct 17 14:12 serve.py
+drwxrwx--- 1 root root    74 Oct 17 14:06 tests
+
+cc1df3b6ff561e2b72eed3fdfa897992  /home/hatch/workspace/twistor-lab/agent-ops/agentbus/board/board.py
+7e349c4266b60e169242251e051873ec  /home/hatch/workspace/twistor-lab/agent-ops/agentbus/board/serve.py
+
+23:ROSTER = (
+43:FAMILY = {
+68:    name, title = FAMILY.get(handle, (handle, ""))
+216:        for a in [""] + list(ROSTER)
+237:        for handle in ROSTER
+Hardcoded FAMILY dict in board.py lines 42-66, ROSTER tuple lines 27-43. No registry file, no archetype, no tool scope, no lifecycle, no API.

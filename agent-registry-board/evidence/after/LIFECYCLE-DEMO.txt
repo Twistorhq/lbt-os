@@ -1,0 +1,135 @@
+LIVE LIFECYCLE DEMO on a copy of registry.json (shipped file untouched)
+1) CREATE via POST /api/agents
+{
+  "access": {
+    "channels": [
+      "board"
+    ],
+    "read": [
+      "board"
+    ],
+    "write": [
+      "board"
+    ]
+  },
+  "archetype": "inbox",
+  "files": [
+    "custom-skills/example/SKILL.md"
+  ],
+  "handle": "demoagent",
+  "id": "agent:demoagent",
+  "name": "Demo Agent",
+  "registered_at": "2026-11-04",
+  "role": "Inbox Prototype",
+  "skills": [
+    "twistor-inbox"
+  ],
+  "status": "active",
+  "tools": [
+    "inbox"
+  ],
+  "updated_at": "2026-11-04"
+}
+2) DISCOVER archetype=inbox
+{
+  "agents": [
+    {
+      "access": {
+        "channels": [
+          "board"
+        ],
+        "read": [
+          "board"
+        ],
+        "write": [
+          "board"
+        ]
+      },
+      "archetype": "inbox",
+      "files": [
+        "custom-skills/example/SKILL.md"
+      ],
+      "handle": "demoagent",
+      "id": "agent:demoagent",
+      "name": "Demo Agent",
+      "registered_at": "2026-11-04",
+      "role": "Inbox Prototype",
+      "skills": [
+        "twistor-inbox"
+      ],
+      "status": "active",
+      "tools": [
+        "inbox"
+      ],
+      "updated_at": "2026-11-04"
+    }
+  ],
+  "count": 1
+}
+3) RETIRE via POST /api/agents/demoagent/retire
+{
+  "access": {
+    "channels": [
+      "board"
+    ],
+    "read": [
+      "board"
+    ],
+    "write": [
+      "board"
+    ]
+  },
+  "archetype": "inbox",
+  "files": [
+    "custom-skills/example/SKILL.md"
+  ],
+  "handle": "demoagent",
+  "id": "agent:demoagent",
+  "name": "Demo Agent",
+  "registered_at": "2026-11-04",
+  "role": "Inbox Prototype",
+  "skills": [
+    "twistor-inbox"
+  ],
+  "status": "retired",
+  "tools": [
+    "inbox"
+  ],
+  "updated_at": "2026-11-04"
+}
+4) DISCOVER status=retired (record kept, soft retire)
+{
+  "agents": [
+    {
+      "access": {
+        "channels": [
+          "board"
+        ],
+        "read": [
+          "board"
+        ],
+        "write": [
+          "board"
+        ]
+      },
+      "archetype": "inbox",
+      "files": [
+        "custom-skills/example/SKILL.md"
+      ],
+      "handle": "demoagent",
+      "id": "agent:demoagent",
+      "name": "Demo Agent",
+      "registered_at": "2026-11-04",
+      "role": "Inbox Prototype",
+      "skills": [
+        "twistor-inbox"
+      ],
+      "status": "retired",
+      "tools": [
+        "inbox"
+      ],
+      "updated_at": "2026-11-04"
+    }
+  ],
+  "count": 1
+}
