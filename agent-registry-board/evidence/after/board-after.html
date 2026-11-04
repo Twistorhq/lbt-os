@@ -31,7 +31,8 @@
     background: var(--concrete); border-bottom: 2px solid var(--line); }
   .registry td { padding: 10px 12px; border-bottom: 1px solid var(--line);
     vertical-align: top; font-size: .92rem; }
-  .cell-name a { color: var(--ink); font-weight: 700; }
+  .cell-name a { color: var(--ink); font-weight: 700; display: inline-flex;
+    align-items: center; min-height: 44px; }
   .handle { display: block; color: var(--muted); font-size: .8rem; }
   .tag { display: inline-block; border: 1px solid var(--line); border-radius: 4px;
     background: var(--bone); padding: 1px 7px; margin: 0 4px 4px 0; font-size: .8rem; }
@@ -58,7 +59,7 @@
 <div class="filters">
   <form method="get" action="/">
     <label>Archetype
-      <select name="archetype" onchange="this.form.submit()"><option value=""></option><option value="generalist">generalist</option><option value="sales">sales</option><option value="marketing">marketing</option><option value="frontend-developer">frontend-developer</option><option value="backend-developer">backend-developer</option></select>
+      <select name="archetype" onchange="this.form.submit()"><option value=""></option><option value="generalist">generalist</option><option value="sales">sales</option><option value="marketing">marketing</option><option value="ads">ads</option><option value="seo">seo</option><option value="frontend-developer">frontend-developer</option><option value="backend-developer">backend-developer</option><option value="c-suite">c-suite</option><option value="payroll">payroll</option><option value="inbox">inbox</option><option value="hr">hr</option></select>
     </label>
     <label>Status
       <select name="status" onchange="this.form.submit()"><option value=""></option><option value="active">active</option><option value="paused">paused</option><option value="retired">retired</option></select>

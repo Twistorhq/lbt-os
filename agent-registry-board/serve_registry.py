@@ -5,13 +5,16 @@
     python3 serve_registry.py [--port 8766] [--registry registry.json]
 
 Routes, following the LibreChat Agent Management API pattern:
-- GET  /                       board, driven by the registry
-- GET  /agents/<handle>        one agent, files and access scopes
-- GET  /api/agents             discover (query: archetype, status, tool)
-- GET  /api/agents/<handle>    get one agent as JSON
-- POST /api/agents             create (JSON body), persists to the file
-- POST /api/agents/<handle>/retire   retire (soft), persists to the file
+- GET   /                            board, driven by the registry
+- GET   /agents/<handle>             one agent, files and access scopes
+- GET   /api/agents                  discover (query: archetype, status, tool)
+- GET   /api/agents/<handle>         get one agent as JSON
+- POST  /api/agents                  create (JSON body), persists to the file
+- PATCH /api/agents/<handle>         update (JSON body), persists to the file
+- PUT   /api/agents/<handle>         update alias, same handler as PATCH
+- POST  /api/agents/<handle>/retire  retire (soft), persists; body optional
 
+Bad JSON bodies and non-object JSON bodies get a clean 400, never a 500.
 Standard library only. Localhost only. No accounts, $0.
 """
 
@@ -35,9 +38,15 @@ from registry import (
     load_registry,
     retire_agent,
     save_registry,
+    update_agent,
 )
 
 REGISTRY_PATH = str(HERE / "registry.json")
+MAX_BODY = 65536
+
+
+class BadBodyError(ValueError):
+    """Raised when a request body cannot be used; maps to HTTP 400."""
 
 
 class RegistryHandler(BaseHTTPRequestHandler):
@@ -57,6 +66,39 @@ class RegistryHandler(BaseHTTPRequestHandler):
             code,
             "application/json; charset=utf-8",
         )
+
+    def _content_length(self):
+        """Parse Content-Length; anything unusable is a 400, not a 500."""
+        raw = self.headers.get("Content-Length")
+        if raw is None:
+            return 0
+        try:
+            length = int(raw)
+        except ValueError:
+            raise BadBodyError("bad Content-Length") from None
+        if length < 0 or length > MAX_BODY:
+            raise BadBodyError("bad request body")
+        return length
+
+    def _json_body(self):
+        """Read the request body as a JSON object, or raise BadBodyError."""
+        length = self._content_length()
+        if length <= 0:
+            raise BadBodyError("bad request body")
+        raw = self.rfile.read(length)
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise BadBodyError("malformed JSON body") from exc
+        if not isinstance(payload, dict):
+            raise BadBodyError("JSON body must be an object")
+        return payload
+
+    def _drain_optional_body(self):
+        """Retire takes no body; read and ignore one if a client sent it."""
+        length = self._content_length()
+        if length > 0:
+            self.rfile.read(length)
 
     def do_GET(self):
         try:
@@ -101,30 +143,57 @@ class RegistryHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
             parsed = urlparse(self.path)
-            length = int(self.headers.get("Content-Length") or 0)
-            if length <= 0 or length > 65536:
-                self._send_json({"error": "bad request body"}, 400)
+            parts = [p for p in parsed.path.split("/") if p]
+            if (
+                parts[:2] == ["api", "agents"]
+                and len(parts) == 4
+                and parts[3] == "retire"
+            ):
+                self._drain_optional_body()
+                data = load_registry(self.registry_path)
+                agent = retire_agent(data, parts[2])
+                save_registry(data, self.registry_path)
+                self._send_json(agent)
                 return
-            payload = json.loads(self.rfile.read(length).decode("utf-8", "replace"))
+            payload = self._json_body()
             data = load_registry(self.registry_path)
             if parsed.path == "/api/agents":
                 agent = create_agent(data, payload)
                 save_registry(data, self.registry_path)
                 self._send_json(agent, 201)
                 return
-            if parsed.path.startswith("/api/agents/") and parsed.path.endswith(
-                "/retire"
-            ):
-                handle = parsed.path.split("/")[3]
-                agent = retire_agent(data, handle)
-                save_registry(data, self.registry_path)
-                self._send_json(agent)
-                return
             self._send_json({"error": "unknown route"}, 404)
+        except BadBodyError as exc:
+            self._send_json({"error": str(exc)}, 400)
         except RegistryError as exc:
             self._send_json({"error": str(exc)}, 400)
         except Exception as exc:  # noqa: BLE001, deliberate: no traceback to browser
             self._send_json({"error": type(exc).__name__}, 500)
+
+    def _do_update(self):
+        try:
+            parsed = urlparse(self.path)
+            parts = [p for p in parsed.path.split("/") if p]
+            if parts[:2] != ["api", "agents"] or len(parts) != 3:
+                self._send_json({"error": "unknown route"}, 404)
+                return
+            payload = self._json_body()
+            data = load_registry(self.registry_path)
+            if get_agent(data, parts[2]) is None:
+                self._send_json({"error": "unknown agent"}, 404)
+                return
+            agent = update_agent(data, parts[2], payload)
+            save_registry(data, self.registry_path)
+            self._send_json(agent)
+        except BadBodyError as exc:
+            self._send_json({"error": str(exc)}, 400)
+        except RegistryError as exc:
+            self._send_json({"error": str(exc)}, 400)
+        except Exception as exc:  # noqa: BLE001, deliberate: no traceback to browser
+            self._send_json({"error": type(exc).__name__}, 500)
+
+    do_PATCH = _do_update
+    do_PUT = _do_update
 
     def log_message(self, *args):
         pass

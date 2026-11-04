@@ -16,10 +16,11 @@ First run on the after HTML, 4 findings:
   the same way.
 - cream-palette, both pages: KEPT ON PURPOSE. The bone and concrete
   background is the established palette of the live TW-485 family board
-  (board.py in twistor-lab/agent-ops/agentbus/board). This prototype is a
-  registry layer for that exact board, so the surface must read as the
-  same board to Justynn, not a new brand. Detector re-run after the fix:
-  2 findings, both this kept item, one per page.
+  (board.py in twistor-lab/agent-ops/agentbus/board). This prototype is
+  a registry data layer patterned on that board (not a drop-in for it;
+  see the README), so the surface must read as the same board to
+  Justynn, not a new brand. Detector re-run after the fix: 2 findings,
+  both this kept item, one per page.
 
 Manual 15-tell audit: no gradients, no gradient text, no purple or blue,
 no pill badges (tags are 4px corners), no glassmorphism, no icon in
@@ -51,7 +52,9 @@ type, layout, details, visuals, motion needed no change after the audit.
 - Semantic table with thead and th for the registry; detail page uses dl.
 - Filter selects have visible labels; agent names are real links.
 - Mobile view at 375 verified by screenshot: rows stack, all fields stay
-  reachable, filter controls are at least 44px tall, no hover dependence.
+  reachable, filter controls and board-row agent links are at least
+  44px tall (fix round 1 gave the agent links the same 44px floor the
+  filter controls already had), no hover dependence.
 - Status is text (Active, Paused, Retired), never color alone.
 - Link contrast fixed per the detector run above.
 

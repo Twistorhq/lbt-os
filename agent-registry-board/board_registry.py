@@ -7,11 +7,14 @@ tool scope, access scope, and status on the page comes from registry.json
 through registry.py. Nothing about an agent is hardcoded here.
 
 Browser-first layout: a wide registry table on desktop. Mobile view: the
-same rows stack into a single column with every field still reachable,
-touch targets at least 44px, no hover-only behavior.
+same rows stack into a single column with every field still reachable, no
+hover-only behavior. The filter controls and the board-row agent links
+are at least 44px tall, so the main touch targets meet the 44px floor.
 """
 
 import html
+
+from registry import ARCHETYPES
 
 STATUS_LABEL = {"active": "Active", "paused": "Paused", "retired": "Retired"}
 
@@ -53,14 +56,7 @@ def render_board(agents, total_agents, archetype=None, status=None):
     )
     arch_options = "".join(
         f'<option value="{_e(a)}"{" selected" if a == archetype else ""}>{_e(a)}</option>'
-        for a in [
-            "",
-            "generalist",
-            "sales",
-            "marketing",
-            "frontend-developer",
-            "backend-developer",
-        ]
+        for a in ["", *ARCHETYPES]
     )
     status_options = "".join(
         f'<option value="{_e(s)}"{" selected" if s == status else ""}>{_e(s)}</option>'
@@ -99,7 +95,8 @@ def render_board(agents, total_agents, archetype=None, status=None):
     background: var(--concrete); border-bottom: 2px solid var(--line); }}
   .registry td {{ padding: 10px 12px; border-bottom: 1px solid var(--line);
     vertical-align: top; font-size: .92rem; }}
-  .cell-name a {{ color: var(--ink); font-weight: 700; }}
+  .cell-name a {{ color: var(--ink); font-weight: 700; display: inline-flex;
+    align-items: center; min-height: 44px; }}
   .handle {{ display: block; color: var(--muted); font-size: .8rem; }}
   .tag {{ display: inline-block; border: 1px solid var(--line); border-radius: 4px;
     background: var(--bone); padding: 1px 7px; margin: 0 4px 4px 0; font-size: .8rem; }}
