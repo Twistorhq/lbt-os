@@ -1,0 +1,37 @@
+{
+  "access": {
+    "channels": [
+      "board"
+    ],
+    "read": [
+      "board",
+      "tickets",
+      "repos"
+    ],
+    "write": [
+      "board",
+      "tickets",
+      "repos"
+    ]
+  },
+  "archetype": "frontend-developer",
+  "files": [
+    "custom-skills/local-twistor-frontend-engineer/SKILL.md"
+  ],
+  "handle": "sofia",
+  "id": "agent:sofia",
+  "name": "Sofia Reyes",
+  "registered_at": "2026-10-13",
+  "role": "Frontend Engineer",
+  "skills": [
+    "twistor-frontend-engineer"
+  ],
+  "status": "active",
+  "tools": [
+    "code",
+    "design",
+    "git",
+    "tickets"
+  ],
+  "updated_at": "2026-11-04"
+}

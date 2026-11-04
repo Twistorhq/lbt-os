@@ -1,0 +1,528 @@
+{
+  "agents": [
+    {
+      "access": {
+        "channels": [
+          "board"
+        ],
+        "read": [
+          "board",
+          "tickets",
+          "repos"
+        ],
+        "write": [
+          "board",
+          "tickets",
+          "repos"
+        ]
+      },
+      "archetype": "generalist",
+      "files": [
+        "custom-skills/local-twistor-coding-engineer/SKILL.md"
+      ],
+      "handle": "zeke",
+      "id": "agent:zeke",
+      "name": "Zeke Okafor",
+      "registered_at": "2026-10-13",
+      "role": "Lead Build Engineer",
+      "skills": [
+        "twistor-coding-engineer"
+      ],
+      "status": "active",
+      "tools": [
+        "code",
+        "tests",
+        "git",
+        "tickets"
+      ],
+      "updated_at": "2026-11-04"
+    },
+    {
+      "access": {
+        "channels": [
+          "board"
+        ],
+        "read": [
+          "board",
+          "tickets",
+          "repos"
+        ],
+        "write": [
+          "board",
+          "tickets"
+        ]
+      },
+      "archetype": "generalist",
+      "files": [
+        "custom-skills/local-twistor-code-reviewer/SKILL.md"
+      ],
+      "handle": "rosa",
+      "id": "agent:rosa",
+      "name": "Rosa Delgado",
+      "registered_at": "2026-10-13",
+      "role": "Chief Quality Guardian",
+      "skills": [
+        "twistor-code-reviewer"
+      ],
+      "status": "active",
+      "tools": [
+        "code-review",
+        "git",
+        "tickets"
+      ],
+      "updated_at": "2026-11-04"
+    },
+    {
+      "access": {
+        "channels": [
+          "board"
+        ],
+        "read": [
+          "board",
+          "tickets"
+        ],
+        "write": [
+          "board",
+          "tickets"
+        ]
+      },
+      "archetype": "sales",
+      "files": [
+        "custom-skills/local-twistor-sdr/SKILL.md"
+      ],
+      "handle": "dez",
+      "id": "agent:dez",
+      "name": "Dez Mitchell",
+      "registered_at": "2026-10-13",
+      "role": "Head of Prospecting",
+      "skills": [
+        "twistor-sdr"
+      ],
+      "status": "active",
+      "tools": [
+        "research",
+        "tickets"
+      ],
+      "updated_at": "2026-11-04"
+    },
+    {
+      "access": {
+        "channels": [
+          "board"
+        ],
+        "read": [
+          "board",
+          "tickets"
+        ],
+        "write": [
+          "board",
+          "tickets"
+        ]
+      },
+      "archetype": "sales",
+      "files": [
+        "custom-skills/local-twistor-sales-ops/SKILL.md"
+      ],
+      "handle": "priya",
+      "id": "agent:priya",
+      "name": "Priya Raman",
+      "registered_at": "2026-10-13",
+      "role": "Pipeline Operations Lead",
+      "skills": [
+        "twistor-sales-ops"
+      ],
+      "status": "active",
+      "tools": [
+        "tracker",
+        "tickets"
+      ],
+      "updated_at": "2026-11-04"
+    },
+    {
+      "access": {
+        "channels": [
+          "board"
+        ],
+        "read": [
+          "board",
+          "tickets"
+        ],
+        "write": [
+          "board",
+          "tickets"
+        ]
+      },
+      "archetype": "sales",
+      "files": [
+        "custom-skills/local-twistor-deal-desk/SKILL.md"
+      ],
+      "handle": "tommy",
+      "id": "agent:tommy",
+      "name": "Tommy Running Horse",
+      "registered_at": "2026-10-13",
+      "role": "Deal Desk Strategist",
+      "skills": [
+        "twistor-deal-desk"
+      ],
+      "status": "active",
+      "tools": [
+        "proposals",
+        "tickets"
+      ],
+      "updated_at": "2026-11-04"
+    },
+    {
+      "access": {
+        "channels": [
+          "board"
+        ],
+        "read": [
+          "board",
+          "tickets",
+          "repos"
+        ],
+        "write": [
+          "board",
+          "tickets",
+          "repos"
+        ]
+      },
+      "archetype": "backend-developer",
+      "files": [
+        "custom-skills/local-twistor-backend-engineer/SKILL.md"
+      ],
+      "handle": "dre",
+      "id": "agent:dre",
+      "name": "Dre Coleman",
+      "registered_at": "2026-10-13",
+      "role": "Senior Backend Engineer and DBA",
+      "skills": [
+        "twistor-backend-engineer"
+      ],
+      "status": "active",
+      "tools": [
+        "code",
+        "database",
+        "git",
+        "tickets"
+      ],
+      "updated_at": "2026-11-04"
+    },
+    {
+      "access": {
+        "channels": [
+          "board"
+        ],
+        "read": [
+          "board",
+          "tickets",
+          "repos"
+        ],
+        "write": [
+          "board",
+          "tickets",
+          "repos"
+        ]
+      },
+      "archetype": "frontend-developer",
+      "files": [
+        "custom-skills/local-twistor-frontend-engineer/SKILL.md"
+      ],
+      "handle": "sofia",
+      "id": "agent:sofia",
+      "name": "Sofia Reyes",
+      "registered_at": "2026-10-13",
+      "role": "Frontend Engineer",
+      "skills": [
+        "twistor-frontend-engineer"
+      ],
+      "status": "active",
+      "tools": [
+        "code",
+        "design",
+        "git",
+        "tickets"
+      ],
+      "updated_at": "2026-11-04"
+    },
+    {
+      "access": {
+        "channels": [
+          "board"
+        ],
+        "read": [
+          "board",
+          "tickets"
+        ],
+        "write": [
+          "board",
+          "tickets"
+        ]
+      },
+      "archetype": "generalist",
+      "files": [
+        "custom-skills/local-twistor-legal-coordinator/SKILL.md"
+      ],
+      "handle": "angela",
+      "id": "agent:angela",
+      "name": "Angela Price",
+      "registered_at": "2026-10-13",
+      "role": "Legal and Filing Coordinator",
+      "skills": [
+        "twistor-legal-coordinator"
+      ],
+      "status": "active",
+      "tools": [
+        "filings",
+        "tickets"
+      ],
+      "updated_at": "2026-11-04"
+    },
+    {
+      "access": {
+        "channels": [
+          "board"
+        ],
+        "read": [
+          "board",
+          "tickets",
+          "repos"
+        ],
+        "write": [
+          "board",
+          "tickets"
+        ]
+      },
+      "archetype": "generalist",
+      "files": [
+        "custom-skills/local-twistor-security-engineer/SKILL.md"
+      ],
+      "handle": "rex",
+      "id": "agent:rex",
+      "name": "Rex Ryder",
+      "registered_at": "2026-10-13",
+      "role": "Offensive Security Engineer",
+      "skills": [
+        "twistor-security-engineer"
+      ],
+      "status": "active",
+      "tools": [
+        "security-audit",
+        "code-review",
+        "tickets"
+      ],
+      "updated_at": "2026-11-04"
+    },
+    {
+      "access": {
+        "channels": [
+          "board"
+        ],
+        "read": [
+          "board",
+          "tickets"
+        ],
+        "write": [
+          "board",
+          "tickets"
+        ]
+      },
+      "archetype": "marketing",
+      "files": [
+        "custom-skills/local-twistor-brand-director/SKILL.md"
+      ],
+      "handle": "imani",
+      "id": "agent:imani",
+      "name": "Imani Carter",
+      "registered_at": "2026-10-13",
+      "role": "Brand Director",
+      "skills": [
+        "twistor-brand-director"
+      ],
+      "status": "active",
+      "tools": [
+        "brand",
+        "content",
+        "tickets"
+      ],
+      "updated_at": "2026-11-04"
+    },
+    {
+      "access": {
+        "channels": [
+          "board"
+        ],
+        "read": [
+          "board",
+          "tickets"
+        ],
+        "write": [
+          "board",
+          "tickets"
+        ]
+      },
+      "archetype": "marketing",
+      "files": [
+        "custom-skills/local-twistor-content-lead/SKILL.md"
+      ],
+      "handle": "nia",
+      "id": "agent:nia",
+      "name": "Nia Baker",
+      "registered_at": "2026-10-13",
+      "role": "Head of Content and Community",
+      "skills": [
+        "twistor-content-lead"
+      ],
+      "status": "active",
+      "tools": [
+        "content",
+        "social",
+        "tickets"
+      ],
+      "updated_at": "2026-11-04"
+    },
+    {
+      "access": {
+        "channels": [
+          "board"
+        ],
+        "read": [
+          "board",
+          "tickets",
+          "repos"
+        ],
+        "write": [
+          "board",
+          "tickets"
+        ]
+      },
+      "archetype": "generalist",
+      "files": [
+        "custom-skills/local-twistor-analytics-engineer/SKILL.md"
+      ],
+      "handle": "maya",
+      "id": "agent:maya",
+      "name": "Maya Chen",
+      "registered_at": "2026-10-13",
+      "role": "Analytics Engineer",
+      "skills": [
+        "twistor-analytics-engineer"
+      ],
+      "status": "active",
+      "tools": [
+        "data",
+        "dashboards",
+        "tickets"
+      ],
+      "updated_at": "2026-11-04"
+    },
+    {
+      "access": {
+        "channels": [
+          "board"
+        ],
+        "read": [
+          "board",
+          "tickets"
+        ],
+        "write": [
+          "board",
+          "tickets"
+        ]
+      },
+      "archetype": "generalist",
+      "files": [
+        "custom-skills/local-twistor-idea-scout/SKILL.md"
+      ],
+      "handle": "diego",
+      "id": "agent:diego",
+      "name": "Diego Ramos",
+      "registered_at": "2026-10-13",
+      "role": "Head of Opportunity Discovery",
+      "skills": [
+        "twistor-idea-scout"
+      ],
+      "status": "active",
+      "tools": [
+        "research",
+        "tickets"
+      ],
+      "updated_at": "2026-11-04"
+    },
+    {
+      "access": {
+        "channels": [
+          "board"
+        ],
+        "read": [
+          "board",
+          "tickets",
+          "repos"
+        ],
+        "write": [
+          "board",
+          "tickets",
+          "repos"
+        ]
+      },
+      "archetype": "frontend-developer",
+      "files": [
+        "custom-skills/local-twistor-devex-engineer/SKILL.md"
+      ],
+      "handle": "jalen",
+      "id": "agent:jalen",
+      "name": "Jalen Brooks",
+      "registered_at": "2026-10-13",
+      "role": "DevEx and Portfolio Engineer",
+      "skills": [
+        "twistor-devex-engineer"
+      ],
+      "status": "active",
+      "tools": [
+        "code",
+        "docs",
+        "git",
+        "tickets"
+      ],
+      "updated_at": "2026-11-04"
+    },
+    {
+      "access": {
+        "channels": [
+          "board"
+        ],
+        "read": [
+          "board",
+          "tickets"
+        ],
+        "write": [
+          "board",
+          "tickets"
+        ]
+      },
+      "archetype": "generalist",
+      "files": [
+        "custom-skills/local-twistor-arc-research-engineer/SKILL.md"
+      ],
+      "handle": "kofi",
+      "id": "agent:kofi",
+      "name": "Kofi Mensah",
+      "registered_at": "2026-10-13",
+      "role": "ARC Research Engineer",
+      "skills": [
+        "twistor-arc-research-engineer"
+      ],
+      "status": "active",
+      "tools": [
+        "research",
+        "code",
+        "tickets"
+      ],
+      "updated_at": "2026-11-04"
+    }
+  ],
+  "registry": "twistor-agent-registry",
+  "source_pattern": "LibreChat Agent Management API (danny-avila/LibreChat, MIT): agents, skills, files, access scopes, create-discover-update-retire lifecycle. Patterns only, no LibreChat code, no MongoDB, no Meilisearch.",
+  "updated_at": "2026-11-04",
+  "version": 1
+}

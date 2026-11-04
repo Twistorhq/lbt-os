@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Twistor Family Board, Agent Registry</title>
+<style>
+  :root {
+    --bone: #f4efe4; --concrete: #e9e3d3; --card: #fffdf7;
+    --ink: #211d16; --muted: #6f6a5c; --orange: #e85d04; --link: #9a3a00; --line: #d8d0bc;
+    --green: #2d6a2d; --red: #a31621;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bone); color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif; line-height: 1.45; }
+  header { background: #211d16; color: var(--bone); padding: 14px 20px;
+    border-bottom: 3px solid var(--orange); }
+  header h1 { margin: 0; font-size: 1.15rem; }
+  header h1 .dot { color: var(--orange); }
+  header p { margin: 4px 0 0; color: #b9b2a0; font-size: .85rem; }
+  .filters { display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+    padding: 12px 20px; background: var(--concrete); border-bottom: 1px solid var(--line); }
+  .filters select { min-height: 44px; padding: 6px 10px; border: 1px solid var(--line);
+    border-radius: 4px; background: #fff; font: inherit; }
+  .filters a { color: var(--link); min-height: 44px; display: inline-flex; align-items: center; }
+  main { max-width: 1180px; margin: 0 auto; padding: 16px 16px 60px; }
+  .summary { color: var(--muted); margin: 4px 0 14px; }
+  table.registry { width: 100%; border-collapse: collapse; background: var(--card);
+    border: 1px solid var(--line); }
+  .registry th { text-align: left; font-size: .82rem; padding: 10px 12px;
+    background: var(--concrete); border-bottom: 2px solid var(--line); }
+  .registry td { padding: 10px 12px; border-bottom: 1px solid var(--line);
+    vertical-align: top; font-size: .92rem; }
+  .cell-name a { color: var(--ink); font-weight: 700; display: inline-flex;
+    align-items: center; min-height: 44px; }
+  .handle { display: block; color: var(--muted); font-size: .8rem; }
+  .tag { display: inline-block; border: 1px solid var(--line); border-radius: 4px;
+    background: var(--bone); padding: 1px 7px; margin: 0 4px 4px 0; font-size: .8rem; }
+  .status { font-weight: 700; font-size: .85rem; }
+  .status-active { color: var(--green); }
+  .status-paused { color: var(--link); }
+  .status-retired { color: var(--red); }
+  .empty { color: var(--muted); }
+  footer { text-align: center; color: var(--muted); font-size: .78rem; padding: 20px; }
+  @media (max-width: 700px) {
+    .registry thead { display: none; }
+    .registry, .registry tbody, .registry tr, .registry td { display: block; width: 100%; }
+    .registry tr { border-bottom: 2px solid var(--line); padding: 8px 0; }
+    .registry td { border-bottom: none; padding: 4px 12px; }
+    .cell-name a { font-size: 1.05rem; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="dot">Twistor</span> Family Board, Agent Registry</h1>
+  <p>Registry pattern from LibreChat Agent Management API, applied to the family board. Prepared by Twistor Holdings LLC</p>
+</header>
+<div class="filters">
+  <form method="get" action="/">
+    <label>Archetype
+      <select name="archetype" onchange="this.form.submit()"><option value=""></option><option value="generalist">generalist</option><option value="sales">sales</option><option value="marketing">marketing</option><option value="ads">ads</option><option value="seo">seo</option><option value="frontend-developer">frontend-developer</option><option value="backend-developer">backend-developer</option><option value="c-suite">c-suite</option><option value="payroll">payroll</option><option value="inbox">inbox</option><option value="hr">hr</option></select>
+    </label>
+    <label>Status
+      <select name="status" onchange="this.form.submit()"><option value=""></option><option value="active">active</option><option value="paused">paused</option><option value="retired">retired</option></select>
+    </label>
+    <noscript><button type="submit">Filter</button></noscript>
+  </form>
+  <a href="/">Clear filters</a>
+  <a href="/api/agents">Registry JSON API</a>
+</div>
+<main>
+  <p class="summary">15 of 15 agents shown, 15 active. Archetypes in view: backend-developer, frontend-developer, generalist, marketing, sales.</p>
+  <table class="registry">
+    <thead><tr><th>Agent</th><th>Role</th><th>Archetype</th><th>Skills</th><th>Tool scope</th><th>Status</th></tr></thead>
+    <tbody>
+
+<tr class="agent-row" data-status="active">
+  <td class="cell-name"><a href="/agents/angela">Angela Price</a>
+    <span class="handle">@angela</span></td>
+  <td>Legal and Filing Coordinator</td>
+  <td>generalist</td>
+  <td><span class="tag">twistor-legal-coordinator</span></td>
+  <td><span class="tag">filings</span><span class="tag">tickets</span></td>
+  <td><span class="status status-active">Active</span></td>
+</tr>
+
+<tr class="agent-row" data-status="active">
+  <td class="cell-name"><a href="/agents/dez">Dez Mitchell</a>
+    <span class="handle">@dez</span></td>
+  <td>Head of Prospecting</td>
+  <td>sales</td>
+  <td><span class="tag">twistor-sdr</span></td>
+  <td><span class="tag">research</span><span class="tag">tickets</span></td>
+  <td><span class="status status-active">Active</span></td>
+</tr>
+
+<tr class="agent-row" data-status="active">
+  <td class="cell-name"><a href="/agents/diego">Diego Ramos</a>
+    <span class="handle">@diego</span></td>
+  <td>Head of Opportunity Discovery</td>
+  <td>generalist</td>
+  <td><span class="tag">twistor-idea-scout</span></td>
+  <td><span class="tag">research</span><span class="tag">tickets</span></td>
+  <td><span class="status status-active">Active</span></td>
+</tr>
+
+<tr class="agent-row" data-status="active">
+  <td class="cell-name"><a href="/agents/dre">Dre Coleman</a>
+    <span class="handle">@dre</span></td>
+  <td>Senior Backend Engineer and DBA</td>
+  <td>backend-developer</td>
+  <td><span class="tag">twistor-backend-engineer</span></td>
+  <td><span class="tag">code</span><span class="tag">database</span><span class="tag">git</span><span class="tag">tickets</span></td>
+  <td><span class="status status-active">Active</span></td>
+</tr>
+
+<tr class="agent-row" data-status="active">
+  <td class="cell-name"><a href="/agents/imani">Imani Carter</a>
+    <span class="handle">@imani</span></td>
+  <td>Brand Director</td>
+  <td>marketing</td>
+  <td><span class="tag">twistor-brand-director</span></td>
+  <td><span class="tag">brand</span><span class="tag">content</span><span class="tag">tickets</span></td>
+  <td><span class="status status-active">Active</span></td>
+</tr>
+
+<tr class="agent-row" data-status="active">
+  <td class="cell-name"><a href="/agents/jalen">Jalen Brooks</a>
+    <span class="handle">@jalen</span></td>
+  <td>DevEx and Portfolio Engineer</td>
+  <td>frontend-developer</td>
+  <td><span class="tag">twistor-devex-engineer</span></td>
+  <td><span class="tag">code</span><span class="tag">docs</span><span class="tag">git</span><span class="tag">tickets</span></td>
+  <td><span class="status status-active">Active</span></td>
+</tr>
+
+<tr class="agent-row" data-status="active">
+  <td class="cell-name"><a href="/agents/kofi">Kofi Mensah</a>
+    <span class="handle">@kofi</span></td>
+  <td>ARC Research Engineer</td>
+  <td>generalist</td>
+  <td><span class="tag">twistor-arc-research-engineer</span></td>
+  <td><span class="tag">research</span><span class="tag">code</span><span class="tag">tickets</span></td>
+  <td><span class="status status-active">Active</span></td>
+</tr>
+
+<tr class="agent-row" data-status="active">
+  <td class="cell-name"><a href="/agents/maya">Maya Chen</a>
+    <span class="handle">@maya</span></td>
+  <td>Analytics Engineer</td>
+  <td>generalist</td>
+  <td><span class="tag">twistor-analytics-engineer</span></td>
+  <td><span class="tag">data</span><span class="tag">dashboards</span><span class="tag">tickets</span></td>
+  <td><span class="status status-active">Active</span></td>
+</tr>
+
+<tr class="agent-row" data-status="active">
+  <td class="cell-name"><a href="/agents/nia">Nia Baker</a>
+    <span class="handle">@nia</span></td>
+  <td>Head of Content and Community</td>
+  <td>marketing</td>
+  <td><span class="tag">twistor-content-lead</span></td>
+  <td><span class="tag">content</span><span class="tag">social</span><span class="tag">tickets</span></td>
+  <td><span class="status status-active">Active</span></td>
+</tr>
+
+<tr class="agent-row" data-status="active">
+  <td class="cell-name"><a href="/agents/priya">Priya Raman</a>
+    <span class="handle">@priya</span></td>
+  <td>Pipeline Operations Lead</td>
+  <td>sales</td>
+  <td><span class="tag">twistor-sales-ops</span></td>
+  <td><span class="tag">tracker</span><span class="tag">tickets</span></td>
+  <td><span class="status status-active">Active</span></td>
+</tr>
+
+<tr class="agent-row" data-status="active">
+  <td class="cell-name"><a href="/agents/rex">Rex Ryder</a>
+    <span class="handle">@rex</span></td>
+  <td>Offensive Security Engineer</td>
+  <td>generalist</td>
+  <td><span class="tag">twistor-security-engineer</span></td>
+  <td><span class="tag">security-audit</span><span class="tag">code-review</span><span class="tag">tickets</span></td>
+  <td><span class="status status-active">Active</span></td>
+</tr>
+
+<tr class="agent-row" data-status="active">
+  <td class="cell-name"><a href="/agents/rosa">Rosa Delgado</a>
+    <span class="handle">@rosa</span></td>
+  <td>Chief Quality Guardian</td>
+  <td>generalist</td>
+  <td><span class="tag">twistor-code-reviewer</span></td>
+  <td><span class="tag">code-review</span><span class="tag">git</span><span class="tag">tickets</span></td>
+  <td><span class="status status-active">Active</span></td>
+</tr>
+
+<tr class="agent-row" data-status="active">
+  <td class="cell-name"><a href="/agents/sofia">Sofia Reyes</a>
+    <span class="handle">@sofia</span></td>
+  <td>Frontend Engineer</td>
+  <td>frontend-developer</td>
+  <td><span class="tag">twistor-frontend-engineer</span></td>
+  <td><span class="tag">code</span><span class="tag">design</span><span class="tag">git</span><span class="tag">tickets</span></td>
+  <td><span class="status status-active">Active</span></td>
+</tr>
+
+<tr class="agent-row" data-status="active">
+  <td class="cell-name"><a href="/agents/tommy">Tommy Running Horse</a>
+    <span class="handle">@tommy</span></td>
+  <td>Deal Desk Strategist</td>
+  <td>sales</td>
+  <td><span class="tag">twistor-deal-desk</span></td>
+  <td><span class="tag">proposals</span><span class="tag">tickets</span></td>
+  <td><span class="status status-active">Active</span></td>
+</tr>
+
+<tr class="agent-row" data-status="active">
+  <td class="cell-name"><a href="/agents/zeke">Zeke Okafor</a>
+    <span class="handle">@zeke</span></td>
+  <td>Lead Build Engineer</td>
+  <td>generalist</td>
+  <td><span class="tag">twistor-coding-engineer</span></td>
+  <td><span class="tag">code</span><span class="tag">tests</span><span class="tag">git</span><span class="tag">tickets</span></td>
+  <td><span class="status status-active">Active</span></td>
+</tr>
+    </tbody>
+  </table>
+</main>
+<footer>agent registry, TW-924. Internal, family eyes only.</footer>
+</body>
+</html>
