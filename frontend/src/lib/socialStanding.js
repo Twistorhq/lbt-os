@@ -33,9 +33,12 @@
  * Thresholds mirror backend/app/social/trust.py exactly (Regular 5
  * nights at 80 percent, Fixture 20 at 85 percent plus corroboration,
  * Pillar 40 at 90 percent plus reviews and hosted rooms, Keyholder 75
- * plus the review, hosting, streak, and tenure bars). The catalog
- * (twistor-social-reward-catalog.md Section 1) is the authority for
- * the names and meanings; this module never invents a number.
+ * at a 90 percent show rate sustained - trust.py _meets_keyholder
+ * chains through _meets_pillar, which requires PILLAR_SHOW_RATE
+ * 0.90 - plus the review, hosting, streak, and tenure bars). The
+ * catalog (twistor-social-reward-catalog.md Section 1) is the
+ * authority for the names and meanings; this module never invents
+ * a number.
  *
  * The Verified rung is a future-phase rung at launch (parked
  * verification phase, TW-941 brief): it is part of the design, it is
@@ -66,6 +69,7 @@ export const THRESHOLDS = {
   },
   keyholder: {
     nights: 75,
+    showRate: 0.9,
     wmaRate: 0.95,
     wmaMinReviews: 30,
     hostedClean: 15,
@@ -147,12 +151,21 @@ export function deriveProgress(stats, targetTier) {
       target,
       met: current !== null && current >= target,
     })
+  // Catalog Section 5: the show rate is not stated until the member
+  // has 5 or more decided RSVPs. Below that a showRate condition
+  // would leak the rate (as a current fact, or as Done), so it is
+  // omitted entirely - no current rate, no met flag - until the
+  // record is large enough to state (TW-941 fix round 1, Rosa M2).
+  const showRateStated = stats.decidedRsvps >= SHOW_RATE_MIN_RSVPS
+  const showRate = (key, current, target) => {
+    if (showRateStated) rate(key, current, target)
+  }
   if (targetTier === 'regular') {
     count('nights', stats.completedNights, t.nights)
-    rate('showRate', stats.showRate, t.showRate)
+    showRate('showRate', stats.showRate, t.showRate)
   } else if (targetTier === 'fixture') {
     count('nights', stats.completedNights, t.nights)
-    rate('showRate', stats.showRate, t.showRate)
+    showRate('showRate', stats.showRate, t.showRate)
     conditions.push({
       key: 'corroboration',
       kind: 'either',
@@ -165,12 +178,13 @@ export function deriveProgress(stats, targetTier) {
     })
   } else if (targetTier === 'pillar') {
     count('nights', stats.completedNights, t.nights)
-    rate('showRate', stats.showRate, t.showRate)
+    showRate('showRate', stats.showRate, t.showRate)
     rate('wmaRate', stats.wouldMeetAgainRate, t.wmaRate)
     count('wmaReviews', stats.reviewsReceived, t.wmaMinReviews)
     count('hostedClean', stats.hostedClean, t.hostedClean)
   } else if (targetTier === 'keyholder') {
     count('nights', stats.completedNights, t.nights)
+    showRate('showRate', stats.showRate, t.showRate)
     rate('wmaRate', stats.wouldMeetAgainRate, t.wmaRate)
     count('wmaReviews', stats.reviewsReceived, t.wmaMinReviews)
     count('hostedClean', stats.hostedClean, t.hostedClean)
@@ -212,33 +226,77 @@ function normalizeServerProgress(raw) {
   return out
 }
 
+/** The immediate successor of a tier, with the teen cap applied. */
+function cappedNextTierFor(activityTier, isTeen) {
+  const next = nextTierFor(activityTier)
+  // Catalog Section 7: Keyholder does not exist in the teen tier;
+  // Pillar is the top of the teen ladder, so it has no successor.
+  if (isTeen && next === 'keyholder') return null
+  return next
+}
+
 /**
- * Fail-closed normalizer: an unrecognized tier or a malformed payload
- * normalizes to null, and the surface renders its error state rather
- * than inventing standing. A payload tier of "verified" is the base
- * state before any activity rung; it is never an earned display tier.
+ * Fail-closed normalizer: an unrecognized tier, an unrecognized or
+ * missing safety band, or a malformed payload normalizes to null,
+ * and the surface renders its error state rather than inventing
+ * standing. There is no default band (TW-652 M1 no-default-band
+ * doctrine, TW-941 fix round 1): a band off the trusted /
+ * good_standing / watch / restricted vocabulary is off-contract,
+ * exactly like an unrecognized tier. A payload tier of "verified"
+ * is the base state before any activity rung; it is never an
+ * earned display tier.
+ *
+ * Cross-field consistency is enforced here, not left to the
+ * display (TW-941 fix round 1):
+ * - Teen cap: a teen activity tier is capped at Pillar in the
+ *   normalizer itself, and a teen next tier is never Keyholder.
+ * - Ladder order: a declared next_tier is accepted only when it
+ *   is the immediate successor of the normalized current tier
+ *   (null at the top, and null while suspended). A declared next
+ *   tier that skips, repeats, or reverses a rung is disregarded
+ *   in favor of the computed successor, and any server progress
+ *   that arrived with it is disregarded with it, because that
+ *   progress was stated against the wrong rung.
+ * - Show rate: server progress is gated the same way derived
+ *   progress is - a showRate condition is dropped below 5 decided
+ *   RSVPs, so the rate cannot leak through a server payload.
  */
 export function normalizeStanding(raw) {
   if (!raw || typeof raw !== 'object') return null
   const tier = typeof raw.standing_tier === 'string' ? raw.standing_tier : null
   if (!TIER_ORDER.includes(tier)) return null
-  const band = BANDS.includes(raw.band) ? raw.band : 'good_standing'
+  if (!BANDS.includes(raw.band)) return null
+  const band = raw.band
   const suspended =
     raw.suspended === true || band === 'watch' || band === 'restricted'
-  const activityTier = ACTIVITY_TIERS.includes(tier) ? tier : null
+  const ageBand = typeof raw.age_band === 'string' ? raw.age_band : null
+  const isTeen = ageBand === 'teen'
+  let activityTier = ACTIVITY_TIERS.includes(tier) ? tier : null
+  if (isTeen && activityTier === 'keyholder') activityTier = 'pillar'
   const stats = normalizeStats(raw.stats)
   const declaredNext = ACTIVITY_TIERS.includes(raw.next_tier) ? raw.next_tier : null
-  const nextTier = suspended ? null : (declaredNext ?? nextTierFor(activityTier))
-  const serverProgress = normalizeServerProgress(raw.progress)
+  const expectedNext = suspended ? null : cappedNextTierFor(activityTier, isTeen)
+  const nextTier = expectedNext
+  const declaredNextMatches =
+    declaredNext === null || declaredNext === expectedNext
+  const serverProgress =
+    !suspended && declaredNextMatches
+      ? normalizeServerProgress(raw.progress)
+      : null
+  const progress = suspended
+    ? []
+    : (serverProgress ?? (nextTier ? deriveProgress(stats, nextTier) : []))
   return {
     activityTier,
     band,
     suspended,
-    ageBand: typeof raw.age_band === 'string' ? raw.age_band : null,
+    ageBand,
     stats,
     nextTier,
     progress:
-      serverProgress ?? (nextTier ? deriveProgress(stats, nextTier) : []),
+      stats.decidedRsvps >= SHOW_RATE_MIN_RSVPS
+        ? progress
+        : progress.filter((condition) => condition.key !== 'showRate'),
     lastMovement:
       raw.last_movement === 'dormancy' || raw.last_movement === 'conduct'
         ? raw.last_movement

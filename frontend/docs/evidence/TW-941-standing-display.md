@@ -52,11 +52,15 @@ Mounting rides the profile surface when it lands.
 
 ## Tests
 
-- New: src/lib/__tests__/socialStanding.test.js (12 tests),
-  src/components/social/__tests__/SocStanding.test.jsx (10 tests).
-- Targeted run (with strings parity): 28/28 passed.
-- Full frontend suite: 21 files, 180/180 passed (158 on main plus
-  22 new), zero regressions.
+- New: src/lib/__tests__/socialStanding.test.js (18 tests after
+  fix round 1),
+  src/components/social/__tests__/SocStanding.test.jsx (14 tests
+  after fix round 1).
+- Targeted run (with strings parity): 38/38 passed after fix
+  round 1 (28/28 at the original build).
+- Full frontend suite: 21 files, 190/190 passed after fix round 1
+  (180/180 at the original build; 158 on main plus 32 new), zero
+  regressions.
 - Build: vite build succeeded with a dummy Clerk key; the standing
   code is unreferenced by App.jsx (see Not wired), so it is not in
   the bundle, the same as every other Social component on main.
@@ -94,6 +98,56 @@ Mounting rides the profile surface when it lands.
   token scale, number formats are uniform (counts as "12 of 20",
   rates as whole percents), headings state facts, no greeting
   headline.
+
+## Fix round 1 (Rosa gate: REQUEST CHANGES)
+
+Rosa's rerun verified the original counts and rules, then returned
+four must-fixes. All four are fixed on this branch; nothing she
+verified clean was changed (Verified stays future-phase only,
+watch/restricted still hide tier, ladder, and progress, EN/ES stay
+at parity, no purchase affordances were added).
+
+1. BLOCKER, Keyholder show rate: `THRESHOLDS.keyholder` now carries
+   `showRate: 0.90` and `deriveProgress('keyholder')` states it,
+   mirroring catalog Section 1 and trust.py (`_meets_keyholder`
+   chains through `_meets_pillar`, `PILLAR_SHOW_RATE` 0.90). The
+   contract test that enshrined the wrong exact key list now asserts
+   the corrected list (nights, showRate, wmaRate, wmaReviews,
+   hostedClean, streak, tenureDays) and the 0.90 target itself.
+2. BLOCKER, show-rate leak below 5 decided RSVPs: a showRate
+   condition is now omitted in `deriveProgress`, dropped from
+   server-supplied progress in `normalizeStanding`, and filtered
+   again at render in `SocStanding.jsx`, all gated on
+   `SHOW_RATE_MIN_RSVPS`. Below 5 decided there is no current rate
+   and no Done anywhere; the newMember fixture (4 decided, 75
+   percent) renders no showRate condition and no "75 percent" text.
+   The regenerated preview HTML contains no "75 percent".
+3. MAJOR, fail-open band: `normalizeStanding` no longer defaults an
+   unknown or missing band to `good_standing`. An off-vocabulary
+   band normalizes to null, so `fetchMyStanding` throws and the
+   screen renders its error state, matching the TW-652 M1
+   no-default-band doctrine.
+4. MAJOR, cross-field consistency: the normalizer, not just the
+   display, now enforces it. A teen tier of keyholder caps to
+   pillar and a teen next tier is never keyholder (catalog
+   Section 7); a declared `next_tier` is accepted only as the
+   immediate successor of the normalized current tier (null at the
+   top and while suspended), and a skipping, repeating, or
+   reversing declaration is disregarded in favor of the computed
+   successor, with any server progress that arrived with it
+   disregarded too. The component's closing line for a capped teen
+   is the teen cap note, not the adult top-tier line.
+
+Tests after fix round 1: 10 tests added or corrected in place
+(contract 12 to 18, component 10 to 14; each must-fix has at least
+one contract assertion and, where it is a display leak, a component
+assertion written from Rosa's probes). Targeted run with strings
+parity: 38/38 passed. Full frontend suite: 21 files, 190/190
+passed, zero regressions. Vite build succeeds with a dummy Clerk
+key. Preview HTML and the 1440/375 screenshots were regenerated
+from the fixed code; the Impeccable preview scan is unchanged at
+the same 10 documented kept-on-purpose findings (preview phone
+frame x8, mandated Inter/Fraunces pairing x2), source scan clean.
 
 ## Accessibility checks
 

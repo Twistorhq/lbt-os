@@ -17,12 +17,18 @@ import './social.css'
  *   rooms, reviews, streaks, vouches, tenure). No percentage bar,
  *   no estimate, no raw trust score (pattern 06).
  * - The show rate appears only at 5 or more decided RSVPs; below
- *   that the profile reads as still building a record (catalog S.5).
+ *   that the profile reads as still building a record (catalog S.5),
+ *   and no progress condition states it either: rate conditions are
+ *   filtered out of the progress list below the same threshold, so
+ *   the rate cannot leak as a Next-rung fact (TW-941 fix round 1).
  * - While the safety band is watch or restricted, no tier is
  *   displayed anywhere in this component and no ladder or progress
  *   renders; the member still sees their own record and the path
  *   back (pattern 06).
- * - Teen accounts cap at Pillar: no Keyholder rung renders.
+ * - Teen accounts cap at Pillar: no Keyholder rung renders. The
+ *   cap itself is enforced in normalizeStanding (tier and next
+ *   tier); this component's ladder filter is the display belt on
+ *   top of that normalizer brace.
  * - No purchase, boost, gift, or transfer affordance exists here.
  *
  * The component renders a normalized standing object (see
@@ -123,6 +129,12 @@ export default function SocStanding({ standing, locale = 'en' }) {
   const s = getStrings(locale)
   const { stats } = standing
   const showRateVisible = stats.decidedRsvps >= SHOW_RATE_MIN_RSVPS && stats.showRate !== null
+  // Defense in depth on top of the normalizer gate: a showRate
+  // condition never renders below 5 decided RSVPs, whatever object
+  // this component was handed.
+  const visibleProgress = (standing.progress ?? []).filter(
+    (condition) => condition.key !== 'showRate' || showRateVisible,
+  )
   const isTeen = standing.ageBand === 'teen'
   const ladderTiers = isTeen
     ? ACTIVITY_TIERS.filter((tier) => tier !== 'keyholder')
@@ -214,7 +226,9 @@ export default function SocStanding({ standing, locale = 'en' }) {
                 )
               })}
             </ol>
-            {isTeen ? <p className="soc-body soc-body--dim">{s.standing.teenCapNote}</p> : null}
+            {isTeen && standing.nextTier ? (
+              <p className="soc-body soc-body--dim">{s.standing.teenCapNote}</p>
+            ) : null}
           </section>
 
           {standing.nextTier ? (
@@ -223,7 +237,7 @@ export default function SocStanding({ standing, locale = 'en' }) {
                 {fill(s.standing.nextTitle, { tier: tierName(s, standing.nextTier) })}
               </h3>
               <ul className="soc-conds">
-                {standing.progress.map((condition) => (
+                {visibleProgress.map((condition) => (
                   <li
                     key={condition.key}
                     className="soc-cond"
@@ -242,7 +256,9 @@ export default function SocStanding({ standing, locale = 'en' }) {
               </ul>
             </section>
           ) : (
-            <p className="soc-body">{s.standing.topTier}</p>
+            <p className="soc-body">
+              {isTeen ? s.standing.teenCapNote : s.standing.topTier}
+            </p>
           )}
         </>
       )}

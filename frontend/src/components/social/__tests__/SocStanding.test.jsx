@@ -65,9 +65,93 @@ describe('SocStanding (TW-941, pattern 06)', () => {
   })
 
   it('hides the show rate below 5 decided RSVPs and shows the building-record line', () => {
-    renderFixture('newMember')
+    const { container } = renderFixture('newMember')
     expect(screen.getAllByText('New: still building a record').length).toBeGreaterThan(0)
     expect(screen.queryByText(/Shows up:/)).toBeNull()
+    // Fix round 1 (Rosa blocker): the rate must not leak through the
+    // Next: Regular progress conditions either - no showRate
+    // condition, no 75 percent fact, no Done for it.
+    expect(container.querySelector('[data-condition="showRate"]')).toBeNull()
+    expect(container.textContent).not.toContain('75 percent')
+    expect(screen.getByText('Next: Regular')).toBeInTheDocument()
+    expect(container.querySelector('[data-condition="nights"]')).not.toBeNull()
+  })
+
+  it('does not render a showRate condition below 5 decided even if handed one directly', () => {
+    const standing = normalizeStanding(FIXTURE_STANDING.newMember)
+    const { container } = render(
+      <SocStanding
+        standing={{
+          ...standing,
+          progress: [
+            ...standing.progress,
+            { key: 'showRate', kind: 'rate', current: 0.75, target: 0.8, met: false },
+          ],
+        }}
+      />,
+    )
+    expect(container.querySelector('[data-condition="showRate"]')).toBeNull()
+    expect(container.textContent).not.toContain('75 percent')
+  })
+
+  it('shows the Keyholder show-rate condition at 90 percent for a Pillar climbing to Keyholder', () => {
+    const { container } = render(
+      <SocStanding
+        standing={normalizeStanding({
+          standing_tier: 'pillar',
+          band: 'good_standing',
+          suspended: false,
+          age_band: '21+',
+          stats: {
+            completed_nights: 50,
+            decided_rsvps: 55,
+            show_rate: 50 / 55,
+            reviews_received: 20,
+            would_meet_again_rate: 0.95,
+            hosted_clean: 8,
+            best_series_streak: 5,
+            distinct_vouches: 4,
+            tenure_days: 120,
+          },
+          next_tier: 'keyholder',
+          progress: null,
+          last_movement: null,
+        })}
+      />,
+    )
+    expect(screen.getByText('Next: Keyholder')).toBeInTheDocument()
+    const show = container.querySelector('[data-condition="showRate"]')
+    expect(show).not.toBeNull()
+    expect(show.textContent).toContain('90 percent')
+    expect(show.dataset.met).toBe('true')
+  })
+
+  it('titles a teen Keyholder payload as Pillar and never renders a Next: Keyholder section', () => {
+    const { container } = render(
+      <SocStanding
+        standing={normalizeStanding({
+          ...FIXTURE_STANDING.keyholder,
+          age_band: 'teen',
+        })}
+      />,
+    )
+    expect(screen.getByRole('heading', { name: 'Pillar' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Keyholder' })).toBeNull()
+    expect(screen.queryByText('Next: Keyholder')).toBeNull()
+    expect(container.querySelector('[data-rung="keyholder"]')).toBeNull()
+  })
+
+  it('renders Regular as next for a verified payload that wrongly declares Keyholder next', () => {
+    render(
+      <SocStanding
+        standing={normalizeStanding({
+          ...FIXTURE_STANDING.newMember,
+          next_tier: 'keyholder',
+        })}
+      />,
+    )
+    expect(screen.getByText('Next: Regular')).toBeInTheDocument()
+    expect(screen.queryByText('Next: Keyholder')).toBeNull()
   })
 
   it('hides tier, ladder, and progress entirely while the band is suspended', () => {
