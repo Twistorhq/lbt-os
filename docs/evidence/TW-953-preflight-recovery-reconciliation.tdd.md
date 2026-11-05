@@ -170,6 +170,112 @@ authored file of the round. Rosa N1 is also fixed: the
 fire_job docstring no longer claims the router wires a Notify
 delivery seam (it names TW-965 instead).
 
+### Fix round 2 (Rex F2b HIGH, on tip 4e94885)
+
+Rex re-probe of the F2 surface found a status-flip bypass that
+falsified row 22 as originally stated: the one-door guarantee
+held only on resume and trigger, while three other transitions
+moved a job out of 'review' unconditionally.
+
+Reproduction on 4e94885 (probe harness: a review job built
+through the real reaper path, its interrupted fire carrying a
+non-idempotent step journaled started and never executed, so
+its outcome is unknown):
+
+- pause then resume: pause_job moved review to paused with no
+  refusal; resume_job then returned the job ACTIVE with
+  review_reason and review_fire_id cleared and no
+  reconciliation. Confirmed.
+- remove then resume: remove_job moved review to archived with
+  no refusal; resume_job then returned the job ACTIVE, markers
+  cleared, no reconciliation. Confirmed.
+- block then resume: block_job moved review to blocked with no
+  refusal (the marker values survived the block write itself;
+  the status flip is what armed the bypass); resume_job then
+  returned the job ACTIVE and cleared the markers, no
+  reconciliation. Confirmed.
+- Bonus probe: resume_job on a plain archived job returned it
+  ACTIVE, so archive was not terminal either. Confirmed.
+
+RED (commit f984a39, tests only): 15 new tests in
+TestRexF2bFixRound2; 12 failed on 4e94885, and the 3 passes are
+the positive controls and audit pins that must hold before and
+after (edit preserves review, resume_after_review remains the
+door, normal-job transitions unchanged).
+
+GREEN (commit 8e7b7cf): one file, backend/app/agent_jobs
+/service.py, following the F2 refusal pattern (raise
+AgentJobError, markers untouched, no fire, no alert):
+
+- pause_job refuses a 'review' job and an 'archived' job.
+- remove_job refuses a 'review' job.
+- block_job refuses a 'review' job (before its already-blocked
+  idempotence return, so a refused block sends no alert and
+  writes no blocked markers) and an 'archived' job.
+- resume_job refuses an 'archived' job, in addition to the F2
+  review refusal.
+- No router change was needed: the shipped pause, resume, and
+  remove endpoints delegate to these service functions through
+  the router guard, so the refusals surface as HTTP 400, pinned
+  by router-level tests. preflight.py, reconciliation.py,
+  recovery.py, heartbeat.py, execution.py, ticker.py, and
+  models.py are untouched; the migration file is untouched.
+
+Transition audit (every status-mutating path on the job
+service and router, checked for the same bypass class):
+
+- create_job: creation to active; not an exit from any state.
+- pause_job: gated (review and archived refuse). FIXED.
+- resume_job: gated (review refuses since F2; archived refuses
+  since this round). FIXED for archived.
+- edit_job: writes definition fields only, never status; its
+  next_fire_at recompute runs only for active jobs. Pinned:
+  editing a review job preserves its status and markers.
+- remove_job: gated (review refuses). FIXED.
+- block_job: gated (review and archived refuse). FIXED. Its
+  production callers (ticker._block, preflight_scan,
+  trigger_now) only ever pass active or paused jobs, and
+  preflight_scan and the ticker scan select active jobs only,
+  so the guard changes no legitimate block.
+- trigger_now: already refused review, archived, and blocked
+  since F2; its inner block_job call is now guarded too.
+- cancel_run: writes fire status only; job status untouched.
+- fire_job: fire lifecycle and continuity only; job status
+  untouched, and every firing caller refuses review jobs.
+- recovery.reap_stranded_fires: writes INTO review from active
+  or paused only; it is the legitimate entry, not an exit.
+- recovery.resume_after_review: the one door out of review;
+  positive control pinned end to end.
+- ticker._advance: next_fire_at only; ticker scans active
+  jobs only.
+- reconciliation.reconcile_fire: fire and step data only; no
+  job status write.
+- heartbeat: writes the tick heartbeat row only.
+- Router endpoints (create, list, get, edit, pause, resume,
+  remove, trigger, cancel-run, reconcile, resume-after-review,
+  tick, tick-health): all delegate to the service paths above;
+  the pause and remove chains are pinned at router level.
+
+Additional doors found by this audit and closed the same way:
+pause_job on an archived job and block_job on an archived job
+would each have let pause-then-resume or block-then-resume
+resurrect an archived job once resume refused archived alone;
+both now refuse archived, so archive is terminal across every
+transition, not only at resume. No other door was found.
+
+After the fix, the same probe refuses all three chains at the
+first step, with the job still in review and its markers
+intact, and resume on an archived job refuses.
+
+Counts: B5 suite 74 passed (59 + 15); B4 suite 41 passed,
+unchanged; neighboring set (the Section 3 file list) 852
+passed (837 + 15); flows and flags 154 passed; full suite
+2836 passed (2821 + 15), 21 failed = the identical
+pre-existing baseline (8 bi_whitelabel, 11 missed_call,
+1 pilot_blockers, 1 telemetry_service), 9 xmlsec collection
+errors, none in touched files. Ruff check and format --check
+clean on service.py and the test file.
+
 ## 4. Guarantees table
 
 | # | What is guaranteed | Test file or command | Type | Result | Evidence |
@@ -195,12 +301,13 @@ delivery seam (it names TW-965 instead).
 | 19 | The status vocabulary and the migration agree: interrupted fires and review jobs exist in code; the migration is additive, attributed, and marked never applied by this ticket | TestVocabularyAndMigration (2 tests) | unit | PASS | Section 3 counts |
 | 20 | No B4 guarantee regressed: the full B4 suite passes unchanged on this branch, including per-job containment, fire-first recovery, DuplicateFireError translation, and the last-step cancel fence | tests/test_agent_jobs_tw952.py (41 tests) in the neighboring run | unit | PASS | Section 3 counts |
 | 21 | Fix round (Rex F1 = Rosa MF2): delivery counts as configured ONLY when an enabled ntf_providers row builds a real provider: a 'null'-only binding is not configured, null enabled with the only real provider disabled is not configured, a row build_provider would skip (unknown provider) is not configured; a real enabled provider is configured. The router tick fixture now configures a real 'resend' row, not the null pipe | TestRexRetestFixRound (5 delivery tests); TestRouterWiring::test_tick_endpoint_tolls_through_shared_control (fixture fixed) | RED | PASS | Fix-round counts below |
-| 22 | Fix round (Rex F2): the resume gate has exactly one door. Plain resume_job refuses a 'review' job and leaves its review markers untouched; trigger_now refuses a 'review' job and creates no fire; a review job resumes only via resume_after_review (which resumes through the internal resume write after its checks) | TestRexRetestFixRound::test_resume_job_refuses_a_review_job, test_trigger_now_refuses_a_review_job | RED | PASS | Fix-round counts below |
+| 22 | Fix round (Rex F2), corrected by fix round 2 (Rex F2b, row 28): the resume gate has exactly one door, now enforced across ALL job status transitions, not only resume and trigger. Plain resume_job refuses a 'review' job and leaves its review markers untouched; trigger_now refuses a 'review' job and creates no fire; pause_job, remove_job, and block_job each refuse a 'review' job and leave its status and review markers untouched; edit_job writes no status and preserves review status and markers; a review job resumes only via resume_after_review (which resumes through the internal resume write after its checks). Audited transitions: create_job, pause_job, resume_job, edit_job, remove_job, block_job, trigger_now, cancel_run, fire_job, recovery.reap_stranded_fires, recovery.resume_after_review, ticker scan and advance, preflight_scan, reconciliation.reconcile_fire, and every router endpoint delegating to them (full audit in the fix round 2 section of Section 3) | TestRexRetestFixRound::test_resume_job_refuses_a_review_job, test_trigger_now_refuses_a_review_job; TestRexF2bFixRound2 (15 tests) | RED | PASS | Fix-round counts below + fix round 2 section |
 | 23 | Fix round (Rex F3, closing Rosa N2): resume_after_review refuses, naming the steps, while any executed step remains untolled after apply (toll sink still down), and the job stays in review with zero toll rows lost; with toll_sink=None the same refusal fires, so the None-sink path cannot resume over untolled steps | TestRexRetestFixRound::test_resume_after_review_refused_while_executed_untolled; TestRosaGateFixRound::test_resume_after_review_without_sink_refuses_untolled | RED | PASS | Fix-round counts below |
 | 24 | Fix round (Rex F4): reconciliation classifies the journal UNION the plan: a journal-only started step classifies unknown (its idempotency contract is unrecoverable once it leaves the plan, so it fails closed) and blocks resume by name; a journal-only executed step with an outstanding toll marker classifies executed_untolled | TestRexRetestFixRound::test_reconcile_classifies_journal_only_started_step_unknown, test_reconcile_classifies_journal_only_executed_step_untolled, test_resume_after_review_refused_on_journal_only_unknown | RED | PASS | Fix-round counts below |
 | 25 | Fix round (Rex F5): the production step shape can surface unknown: the router's run_task step is explicitly idempotent=False (enqueueing a runtime task has no dedupe contract), so a kill inside the only production handler classifies unknown and trips the resume gate. The JobStep default stays True; every existing B4/B5 caller that relies on the default keeps its semantics, and only the router step, the one shape Rex probed, changes | TestRexRetestFixRound::test_router_run_task_step_is_non_idempotent | RED | PASS | Fix-round counts below |
 | 26 | Fix round (Rosa MF1): a never-ticked scheduler alerts exactly once per stale episode: the first check_scheduler_health alert inserts the singleton heartbeat row carrying health_alerted_for='never', and a second check does not re-alert | TestRosaGateFixRound::test_never_ticked_scheduler_alerts_once_per_episode | RED | PASS | Fix-round counts below |
 | 27 | Fix round (Rosa MF3, wired per coordinator preference): the tick path calls preflight_scan (contained; scan-blocked jobs land in the tick summary's blocked list) and, when a health alerter is wired, check_scheduler_health against the previous heartbeat; GET /tick-health runs the full alerting check through the app.state alerter (log fallback). Neither pass can wedge the tick: both are wrapped and their failures are logged and listed in the summary | TestRosaGateFixRound::test_tick_quarantines_not_yet_due_poisoned_job, test_tick_runs_scheduler_health_check_and_alerts_once | RED | PASS | Fix-round counts below |
+| 28 | Fix round 2 (Rex F2b HIGH): no status flip escapes review. pause_job, remove_job, and block_job each refuse a 'review' job at service level (status and review_reason/review_fire_id untouched, no alert from a refused block, no fire created), so the pause-then-resume, remove-then-resume, and block-then-resume chains cannot reach active on a review job carrying an unknown step, at service level and, for the two HTTP-reachable chains, through the shipped router endpoints (400 via the router guard). Archive is terminal: resume_job refuses an archived job, and pause_job and block_job refuse one too, so no transition resurrects an archived job. resume_after_review remains the only door out of review and still works end to end (positive control: a fully classified review job resumes active with markers cleared by that door). Non-regression: pause, resume, block, and remove on a normal job behave exactly as before | TestRexF2bFixRound2 (15 tests: 12 RED on 4e94885, 3 positive controls passing before and after) | RED | PASS | Fix round 2 section in Section 3 |
 
 ## 5. Inherited-item map (ticket body + TW-952 review scope)
 
@@ -241,6 +348,13 @@ delivery seam (it names TW-965 instead).
   (row 27). Rex follow-up F6 was promoted by Rosa to MF1 and
   built (rows 15, 26); Rex follow-ups F7-F11 were NOT built
   (ticketed on TW-953); Rosa's seam gaps ride TW-965.
+- Fix round 2 (Rex F2b HIGH on 4e94885): the status-flip
+  bypass. pause, remove, and block each refuse a review job;
+  resume, pause, and block each refuse an archived job, so
+  archive is terminal across every transition. Row 22 is
+  corrected to the all-transitions guarantee and row 28
+  records the round; the full transition audit lives in the
+  fix round 2 section of Section 3.
 
 ## 6. B3 dependency note (binding for merge order)
 
