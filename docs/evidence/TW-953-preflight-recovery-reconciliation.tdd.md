@@ -276,6 +276,130 @@ pre-existing baseline (8 bi_whitelabel, 11 missed_call,
 errors, none in touched files. Ruff check and format --check
 clean on service.py and the test file.
 
+### Fix round 3 (Rex F2c HIGH, on tip c9fa58a)
+
+Rosa's spot re-gate approved c9fa58a and Rex's re-probe closed
+F2b, but the re-probe found one blocking bypass on the reap
+side: recovery.reap_stranded_fires moved a job into review
+only from active or paused. A job BLOCKED when its stranded
+fire went stale got the fire parked as interrupted but never
+entered review; plain resume_job (the normal blocked-resume
+path) reactivated it with zero reconciliation, and
+resume_after_review refused the non-review job, so no gated
+path existed at all. Sequential, fresh reads, no race.
+
+Reproduction on c9fa58a (probe harness, both shapes, plus the
+paused contrast):
+
+- Tick shape: tick 1 while the fire is fresh: the tick's own
+  preflight_scan blocks the poisoned job (1 alert, fire still
+  running, status blocked). Tick 2 after staleness: the reaper
+  parks the fire interrupted, the job stays blocked with
+  review_fire_id None. The owner fixes the definition; plain
+  resume returns ACTIVE, 0 tolls; resume_after_review then
+  refuses the now-active job. Confirmed.
+- Trigger shape: trigger_now with a failing preflight checker
+  blocks the active job while its fire is fresh (status
+  blocked, fire running, 1 alert); the reap parks the fire
+  interrupted and the job stays blocked; plain resume returns
+  ACTIVE, 0 tolls. Confirmed.
+- Contrast: the identical job PAUSED at reap time enters
+  review and plain resume refuses. Blocked was the one
+  resumable status the reaper skipped. Confirmed.
+
+RED (commit dc5fd98, tests only): 13 new tests in
+TestRexF2cFixRound3; 9 failed on c9fa58a, and the 4 passes are
+the non-regression controls and scope pins that must hold
+before and after (blocked with no fires resumes plain, blocked
+with only terminal fires resumes plain, the active and paused
+reap paths unchanged, and the gated door not widened to an
+ordinary blocked job with no interrupted fire).
+
+GREEN (commit 25d1b5b): both halves of Rex's fix shape,
+implemented, neither dropped. Two files:
+
+- backend/app/agent_jobs/recovery.py, half (a): the reaper's
+  move into review now lands from active, paused, AND blocked,
+  with the same review markers (review_reason naming the fire,
+  review_fire_id) and the same exactly-one alert keyed to the
+  durable transition as the active and paused path. Its
+  resume_after_review gains the door corollary of half (b):
+  the gate is keyed to the interrupted fire, not only to the
+  review status, so a job carrying an interrupted fire that
+  never entered review (blocked at reap time on pre-fix data,
+  or flipped out of review by the stale-snapshot race) resumes
+  through this same reconciliation gate. Without that, half
+  (b)'s refusal would leave exactly the no-gated-path hole
+  F2c reported. Archived stays terminal inside the door too:
+  resume_after_review refuses an archived job even with an
+  interrupted fire, and a job with no interrupted fire keeps
+  the original refusal, so ordinary blocked and paused jobs
+  still resume via the plain path, never through here.
+- backend/app/agent_jobs/service.py, half (b): resume_job,
+  after the existing review and archived refusals, refuses
+  ANY job carrying an interrupted fire, naming the fire: the
+  refusal does not depend on the reaper having run or on the
+  job's current status. A blocked job with no interrupted
+  fire, and a blocked job whose fires are all terminal (done
+  or failed, none interrupted), resume via plain resume
+  exactly as before.
+- preflight.py, reconciliation.py, heartbeat.py,
+  execution.py, ticker.py, models.py, and router.py are
+  untouched; the migration file is untouched. No exception
+  was required.
+
+The invariant, restated as now status-independent: for every
+resumable status, a job carrying an interrupted fire can
+reach active ONLY through resume_after_review, after
+reconciliation classifies every step of that fire (unknown
+refuses by name; executed-but-untolled after apply refuses;
+all done or reconciled resumes active, with the blocked and
+review markers cleared by that door only, through the shared
+internal resume write).
+
+- active: the reaper moves it to review when its stranded
+  fire is parked. If an interrupted fire exists while the job
+  still reads active, plain resume refuses on the fire check.
+- paused: the reaper moves it to review the same way; plain
+  resume refuses on the status check once in review and on
+  the fire check before the reaper runs.
+- blocked: the reaper now moves it to review the same way
+  (half a). Before any reap, or on pre-fix data where the
+  transition never landed, plain resume refuses on the fire
+  check (half b), and the door accepts the job from blocked
+  on the strength of its interrupted fire.
+- review: unchanged since F2 and F2b: every plain exit
+  refuses, and resume_after_review is the one door.
+- archived: terminal on every path, now including the gated
+  door itself.
+
+F7 follow-through (non-blocking observation, race-only):
+block_job trusting a stale pre-review snapshot can still flip
+review to blocked; the full F7 fix was NOT built, per the
+brief. Confirmed by probe on the fixed tip that half (b)
+closes its follow-through: after reap to review, a block_job
+call carrying the stale active snapshot lands the job in
+blocked, plain resume then REFUSES on the interrupted fire
+(the job stays blocked, 0 tolls), and resume_after_review
+completes the gated loop from blocked to active once the
+fire's steps classify done. The flip can still happen; the
+ungated reactivation behind it cannot.
+
+After the fix, the same probes read: tick shape, tick 2
+reaps the fire and the job enters review with review_fire_id
+set, plain resume refuses, resume_after_review accepts;
+trigger shape, the reap enters review with one reaper alert,
+plain resume refuses; the paused contrast is unchanged.
+
+Counts: B5 suite 87 passed (74 + 13); B4 suite 41 passed,
+unchanged; neighboring set (the Section 3 file list) 865
+passed (852 + 13); flows and flags 154 passed; full suite
+2849 passed (2836 + 13), 21 failed = the identical
+pre-existing baseline (8 bi_whitelabel, 11 missed_call,
+1 pilot_blockers, 1 telemetry_service), 9 xmlsec collection
+errors, none in touched files. Ruff check and format --check
+clean on recovery.py, service.py, and the test file.
+
 ## 4. Guarantees table
 
 | # | What is guaranteed | Test file or command | Type | Result | Evidence |
@@ -301,13 +425,14 @@ clean on service.py and the test file.
 | 19 | The status vocabulary and the migration agree: interrupted fires and review jobs exist in code; the migration is additive, attributed, and marked never applied by this ticket | TestVocabularyAndMigration (2 tests) | unit | PASS | Section 3 counts |
 | 20 | No B4 guarantee regressed: the full B4 suite passes unchanged on this branch, including per-job containment, fire-first recovery, DuplicateFireError translation, and the last-step cancel fence | tests/test_agent_jobs_tw952.py (41 tests) in the neighboring run | unit | PASS | Section 3 counts |
 | 21 | Fix round (Rex F1 = Rosa MF2): delivery counts as configured ONLY when an enabled ntf_providers row builds a real provider: a 'null'-only binding is not configured, null enabled with the only real provider disabled is not configured, a row build_provider would skip (unknown provider) is not configured; a real enabled provider is configured. The router tick fixture now configures a real 'resend' row, not the null pipe | TestRexRetestFixRound (5 delivery tests); TestRouterWiring::test_tick_endpoint_tolls_through_shared_control (fixture fixed) | RED | PASS | Fix-round counts below |
-| 22 | Fix round (Rex F2), corrected by fix round 2 (Rex F2b, row 28): the resume gate has exactly one door, now enforced across ALL job status transitions, not only resume and trigger. Plain resume_job refuses a 'review' job and leaves its review markers untouched; trigger_now refuses a 'review' job and creates no fire; pause_job, remove_job, and block_job each refuse a 'review' job and leave its status and review markers untouched; edit_job writes no status and preserves review status and markers; a review job resumes only via resume_after_review (which resumes through the internal resume write after its checks). Audited transitions: create_job, pause_job, resume_job, edit_job, remove_job, block_job, trigger_now, cancel_run, fire_job, recovery.reap_stranded_fires, recovery.resume_after_review, ticker scan and advance, preflight_scan, reconciliation.reconcile_fire, and every router endpoint delegating to them (full audit in the fix round 2 section of Section 3) | TestRexRetestFixRound::test_resume_job_refuses_a_review_job, test_trigger_now_refuses_a_review_job; TestRexF2bFixRound2 (15 tests) | RED | PASS | Fix-round counts below + fix round 2 section |
+| 22 | Fix round (Rex F2), corrected by fix round 2 (Rex F2b, row 28) and completed on the reap side by fix round 3 (Rex F2c, row 29): the resume gate has exactly one door, now enforced across ALL job status transitions and independent of status, not only resume and trigger. Plain resume_job refuses a 'review' job and leaves its review markers untouched; trigger_now refuses a 'review' job and creates no fire; pause_job, remove_job, and block_job each refuse a 'review' job and leave its status and review markers untouched; edit_job writes no status and preserves review status and markers; a review job resumes only via resume_after_review (which resumes through the internal resume write after its checks). Fix round 3 completes the guarantee on the entry side: the reaper moves a blocked job into review when it parks its stranded fire, and plain resume_job refuses ANY job carrying an interrupted fire whatever its status, so the one-door guarantee no longer depends on which status the job happened to hold when the fire went stale. Audited transitions: create_job, pause_job, resume_job, edit_job, remove_job, block_job, trigger_now, cancel_run, fire_job, recovery.reap_stranded_fires, recovery.resume_after_review, ticker scan and advance, preflight_scan, reconciliation.reconcile_fire, and every router endpoint delegating to them (full audit in the fix round 2 section of Section 3) | TestRexRetestFixRound::test_resume_job_refuses_a_review_job, test_trigger_now_refuses_a_review_job; TestRexF2bFixRound2 (15 tests); TestRexF2cFixRound3 (13 tests) | RED | PASS | Fix-round counts below + fix round 2 and fix round 3 sections |
 | 23 | Fix round (Rex F3, closing Rosa N2): resume_after_review refuses, naming the steps, while any executed step remains untolled after apply (toll sink still down), and the job stays in review with zero toll rows lost; with toll_sink=None the same refusal fires, so the None-sink path cannot resume over untolled steps | TestRexRetestFixRound::test_resume_after_review_refused_while_executed_untolled; TestRosaGateFixRound::test_resume_after_review_without_sink_refuses_untolled | RED | PASS | Fix-round counts below |
 | 24 | Fix round (Rex F4): reconciliation classifies the journal UNION the plan: a journal-only started step classifies unknown (its idempotency contract is unrecoverable once it leaves the plan, so it fails closed) and blocks resume by name; a journal-only executed step with an outstanding toll marker classifies executed_untolled | TestRexRetestFixRound::test_reconcile_classifies_journal_only_started_step_unknown, test_reconcile_classifies_journal_only_executed_step_untolled, test_resume_after_review_refused_on_journal_only_unknown | RED | PASS | Fix-round counts below |
 | 25 | Fix round (Rex F5): the production step shape can surface unknown: the router's run_task step is explicitly idempotent=False (enqueueing a runtime task has no dedupe contract), so a kill inside the only production handler classifies unknown and trips the resume gate. The JobStep default stays True; every existing B4/B5 caller that relies on the default keeps its semantics, and only the router step, the one shape Rex probed, changes | TestRexRetestFixRound::test_router_run_task_step_is_non_idempotent | RED | PASS | Fix-round counts below |
 | 26 | Fix round (Rosa MF1): a never-ticked scheduler alerts exactly once per stale episode: the first check_scheduler_health alert inserts the singleton heartbeat row carrying health_alerted_for='never', and a second check does not re-alert | TestRosaGateFixRound::test_never_ticked_scheduler_alerts_once_per_episode | RED | PASS | Fix-round counts below |
 | 27 | Fix round (Rosa MF3, wired per coordinator preference): the tick path calls preflight_scan (contained; scan-blocked jobs land in the tick summary's blocked list) and, when a health alerter is wired, check_scheduler_health against the previous heartbeat; GET /tick-health runs the full alerting check through the app.state alerter (log fallback). Neither pass can wedge the tick: both are wrapped and their failures are logged and listed in the summary | TestRosaGateFixRound::test_tick_quarantines_not_yet_due_poisoned_job, test_tick_runs_scheduler_health_check_and_alerts_once | RED | PASS | Fix-round counts below |
-| 28 | Fix round 2 (Rex F2b HIGH): no status flip escapes review. pause_job, remove_job, and block_job each refuse a 'review' job at service level (status and review_reason/review_fire_id untouched, no alert from a refused block, no fire created), so the pause-then-resume, remove-then-resume, and block-then-resume chains cannot reach active on a review job carrying an unknown step, at service level and, for the two HTTP-reachable chains, through the shipped router endpoints (400 via the router guard). Archive is terminal: resume_job refuses an archived job, and pause_job and block_job refuse one too, so no transition resurrects an archived job. resume_after_review remains the only door out of review and still works end to end (positive control: a fully classified review job resumes active with markers cleared by that door). Non-regression: pause, resume, block, and remove on a normal job behave exactly as before | TestRexF2bFixRound2 (15 tests: 12 RED on 4e94885, 3 positive controls passing before and after) | RED | PASS | Fix round 2 section in Section 3 |
+| 28 | Fix round 2 (Rex F2b HIGH): no status flip escapes review. pause_job, remove_job, and block_job each refuse a 'review' job at service level (status and review_reason/review_fire_id untouched, no alert from a refused block, no fire created), so the pause-then-resume, remove-then-resume, and block-then-resume chains cannot reach active on a review job carrying an unknown step, at service level and, for the two HTTP-reachable chains, through the shipped router endpoints (400 via the router guard). Archive is terminal: resume_job refuses an archived job, and pause_job and block_job refuse one too, so no transition resurrects an archived job. resume_after_review remains the only door out of review and still works end to end (positive control: a fully classified review job resumes active with markers cleared by that door). Non-regression: pause, resume, block, and remove on a normal job behave exactly as before. One wording correction from fix round 3: this round's audit listed the reaper as writing into review from active or paused only; fix round 3 (row 29) extends that entry set to blocked, which is the reap-side completion of the one-door guarantee | TestRexF2bFixRound2 (15 tests: 12 RED on 4e94885, 3 positive controls passing before and after) | RED | PASS | Fix round 2 section in Section 3 |
+| 29 | Fix round 3 (Rex F2c HIGH): the gate is status-independent on the reap and resume side. A blocked job whose stranded fire is reaped now enters review (review markers set on the transition, exactly one reaper alert), in both the tick shape (preflight_scan blocks while the fire is fresh, the next tick's reap moves blocked to review) and the trigger shape (a failing trigger preflight blocks while the fire is fresh, the reap moves blocked to review); plain resume then refuses and the job reaches active only through resume_after_review. Plain resume_job refuses a blocked or paused job carrying an interrupted fire even when the reaper has not run, naming the fire, with status and markers untouched and zero tolls. resume_after_review is the door for a blocked-sourced review job and for a blocked job carrying an interrupted fire that never entered review: an unknown step refuses by name and the job stays put; all steps done resumes active with blocked and review markers cleared by that door only; the door does not widen to an ordinary blocked job with no interrupted fire. Non-regression: a blocked job with no fires, and a blocked job whose fires are all terminal, resume via plain resume exactly as before; the reaper's active and paused paths are unchanged; the F2b guards are untouched and still passing | TestRexF2cFixRound3 (13 tests: 9 RED on c9fa58a, 4 controls passing before and after) | RED | PASS | Fix round 3 section in Section 3 |
 
 ## 5. Inherited-item map (ticket body + TW-952 review scope)
 
@@ -355,6 +480,17 @@ clean on service.py and the test file.
   corrected to the all-transitions guarantee and row 28
   records the round; the full transition audit lives in the
   fix round 2 section of Section 3.
+- Fix round 3 (Rex F2c HIGH on c9fa58a): the blocked-
+  intermediate reap bypass. Both halves built: the reaper
+  moves blocked jobs into review when it parks their stranded
+  fires, and plain resume refuses any job carrying an
+  interrupted fire whatever its status, with
+  resume_after_review keyed to the interrupted fire as the
+  gated door (archived still terminal through it, no widening
+  to ordinary blocked jobs). Rows 22 and 28 are updated for
+  the reap-side completion and row 29 records the round; the
+  status-independent invariant and the F7 follow-through
+  confirmation live in the fix round 3 section of Section 3.
 
 ## 6. B3 dependency note (binding for merge order)
 
