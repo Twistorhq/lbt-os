@@ -1311,6 +1311,106 @@ class TestRexRetestFixRound:
         assert steps[0].idempotent is False
 
 
+class TestRosaGateFixRound:
+    """Rosa TW-953 gate REQUEST CHANGES on 78a6e08: MF1 (never-
+    ticked scheduler double-alerts), MF3 (preflight_scan and
+    check_scheduler_health had no production caller). Each test
+    here failed on 78a6e08 before this fix round."""
+
+    # MF1: the episode marker must persist even when no
+    # heartbeat row exists yet (Rosa's probe: 2 checks, 2 alerts).
+    def test_never_ticked_scheduler_alerts_once_per_episode(self, db):
+        alerts = []
+        alerter = lambda health: alerts.append(health) or "alert-1"  # noqa: E731
+        now = dt(2026, 11, 5, 16, 0)
+        first = heartbeat.check_scheduler_health(
+            db, now=now, stale_after=timedelta(minutes=15), health_alerter=alerter
+        )
+        second = heartbeat.check_scheduler_health(
+            db,
+            now=now + timedelta(minutes=5),
+            stale_after=timedelta(minutes=15),
+            health_alerter=alerter,
+        )
+        assert first["alerted"] is True
+        assert second["alerted"] is False
+        assert len(alerts) == 1
+        # The marker persisted on a row the alert itself created.
+        rows = db.tables.get("agt_job_tick_heartbeats", [])
+        assert len(rows) == 1
+        assert rows[0]["health_alerted_for"] == "never"
+
+    # MF3a: the tick wires preflight_scan, so a poisoned job is
+    # quarantined even when it is not yet due (Rosa's probe left
+    # it 'active').
+    def test_tick_quarantines_not_yet_due_poisoned_job(self, db, tolls, alerter):
+        bad = _job(db, dt(2026, 11, 5, 15, 0), name="poisoned-future")
+        for row in db.tables["agt_jobs"]:
+            if row["id"] == bad["id"]:
+                row["cron_expr"] = "not-a-cron"
+        # Tick runs an hour before the job's 09:00 Denver slot.
+        out = _tick(db, dt(2026, 11, 5, 15, 30), tolls=tolls, alerter=alerter)
+        assert out["fired"] == []
+        assert service.get_job(db, ORG, AGENT, bad["id"])["status"] == "blocked"
+        assert [b["job_id"] for b in out["blocked"]] == [bad["id"]]
+        assert len(alerter.calls) == 1
+
+    # MF3b: the tick wires the scheduler health check: a stale
+    # heartbeat alerts through the tick path, once per episode.
+    def test_tick_runs_scheduler_health_check_and_alerts_once(self, db, tolls):
+        _job(db, dt(2026, 11, 5, 15, 0))
+        alerts = []
+        health_alerter = lambda health: alerts.append(health) or "ha-1"  # noqa: E731
+        out1 = _tick(
+            db, dt(2026, 11, 5, 16, 0), tolls=tolls, health_alerter=health_alerter
+        )
+        assert out1["scheduler_health"]["alerted"] is True
+        assert len(alerts) == 1
+        # Ten minutes later the heartbeat is fresh: no new alert.
+        out2 = _tick(
+            db, dt(2026, 11, 5, 16, 10), tolls=tolls, health_alerter=health_alerter
+        )
+        assert out2["scheduler_health"]["alerted"] is False
+        assert len(alerts) == 1
+
+    # Rosa N2 (closed by the Rex F3 fix): resume_after_review
+    # with NO toll sink must refuse over executed-but-untolled
+    # steps, not resume past them.
+    def test_resume_after_review_without_sink_refuses_untolled(self, db):
+        now = dt(2026, 11, 5, 18, 0)
+        job = _job(db, dt(2026, 11, 5, 15, 0))
+        fire = _stranded_fire(db, job, started_minutes_ago=120, now=now)
+        journal = reconciliation.make_db_step_journal(
+            db, ORG, AGENT, fire["id"], fire["fire_key"]
+        )
+        step = execution.JobStep(
+            name="chase",
+            handler=lambda _c: {},
+            toll_event="agent.email_action",
+            idempotent=False,
+        )
+        journal("started", step)
+        journal("executed", step)
+        recovery.reap_stranded_fires(db, now=now, stale_after=timedelta(minutes=30))
+
+        def factory(ctx):
+            return [step]
+
+        with pytest.raises(AgentJobError) as excinfo:
+            recovery.resume_after_review(
+                db,
+                ORG,
+                AGENT,
+                job["id"],
+                executor_factory=factory,
+                toll_sink=None,
+                toll_reader=FakeTollSink().reader,
+                now=dt(2026, 11, 5, 19, 0),
+            )
+        assert "chase" in str(excinfo.value)
+        assert service.get_job(db, ORG, AGENT, job["id"])["status"] == "review"
+
+
 class TestVocabularyAndMigration:
     def test_interrupted_and_review_statuses_exist(self):
         assert "interrupted" in pmodels.FIRE_STATUSES
