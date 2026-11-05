@@ -155,8 +155,10 @@ drives `service.revoke` and renders `composed_stop_status`.
 
 ## 6. Test runs
 
-- **B7 suites: 42/42 passed** (`test_agentperms_floor_tw954.py` 12,
-  `test_agentperms_policy_tw954.py` 23, `test_agentperms_policy_migration_tw954.py` 7).
+- **B7 suites: 42/42 passed** (`test_agentperms_floor_tw954.py` 11,
+  `test_agentperms_policy_tw954.py` 24, `test_agentperms_policy_migration_tw954.py` 7).
+  (Per-file split corrected in the fix round per Rosa N1 — the round-1
+  draft had floor/policy transposed as 12/23; the 42 total was exact.)
 - **Neighboring suites** (agentperms service/models/fencing/multiagent/
   migrations, persistence service + migration, agent identity
   models/service/multiagent/migrations): **280 passed, 1 failed** — the one
@@ -179,7 +181,70 @@ drives `service.revoke` and renders `composed_stop_status`.
   authored/edited Python files (floor.py, policy.py, composed.py,
   service.py, the three test files).
 
-## 7. Known limits, stated plainly
+## 7. Fix round — Rex hard-gate FAIL + Rosa REQUEST CHANGES on tip 2f2cfb5
+
+Both gates landed on the round-1 tip: Rex FAIL (4 blocking findings,
+all reproduced live with probe scripts) and Rosa REQUEST CHANGES
+(one must-fix, MF1, identical to Rex's F3). Round: RED `cb515b6`,
+GREEN `7a5f5f7`. One new test file,
+`backend/tests/test_agentperms_fixround_tw954.py` — 42 tests
+(24 functions, parametrized): RED run 37 failed / 5 passed (the 5
+are regression pins for behavior that already held: layer order,
+attended job/tool omission, known grant statuses, explicit-arg
+stop signal, value masking); GREEN 42/42.
+
+| Finding | Fix | Proof |
+| --- | --- | --- |
+| **F1 CRITICAL (Rex)** — floor + ledger skipped when `action_class=None`: revoked agent / `approvals_off=True` / `pii_raw_in_projection=True` all returned `unattended_permitted`; attended + None returned `granted` with no ledger check; omitted job/tool classes vacuously permitted | `floor.check_floor_global()` carries rules 1–3 as a class-free check; `check_floor` delegates to it; `evaluate_action` runs the global check when no class is named (same masked `floor_blocked` event). Absent dimensions refuse: class-less denies in every context (`action_class_required`); unattended denies omitted job/tool (`job_class_required` / `tool_class_required`). Layer order unchanged (floor → ledger → absent-dimension → policy membership); attended omission of job/tool still permitted (attended names none by design) | F1 tests: each global fact × None, each unattended context × None, attended × None, job-only / tool-only / job+tool / all-omitted, layer-order pins (revoked + omitted job reads as the floor block; ledger-denied + omitted job reads as the ledger denial) |
+| **F2 HIGH (Rex)** — `service.check_permission` treated any status other than exactly `denied`/`revoked` as granted; raw `agt_grants` rows with status `bypass`/`Granted`/`active`/``/`revoked ` + `extends_unattended=true` acted as full grants (`payment.charge` $100 verified allowed under a forged $500 cap) | **B1-FILE CHANGE RIDING THE B7 BRANCH** — `backend/app/agentperms/service.py` is B1 persistence code (B1 gate-complete at `7df0bfb`, NOT merged). Smallest possible change: an exact-match status allowlist in `check_permission` (byte-for-byte, no case/whitespace tolerance): the three statable statuses keep their meanings; anything else, including a missing status, denies as `unknown_grant_status`. Flagged here and on the ticket for the coordinator: when B1 and B7 merge, this hunk is the interaction point | Hostile-grant-row tests mirror the round-1 hostile-policy-row coverage: 7 unknown statuses + missing status × `check_permission` and × `evaluate_action` (permissive policy), forged money grants for `payment.charge`/`purchase` under their own caps, known-status regression pin |
+| **F3 MEDIUM (Rex) = MF1 (Rosa)** — `composed.build_stop_signal()` default path computed the epoch from the unresolved `agent_identity_id` parameter: per-agent revoke + default call raised `LedgerError 'epoch must be >= 1, got 0'`; with org-wide revocations present it would silently stamp the wrong scope's epoch | Resolve the agent first (explicit arg, else the revocation's own agent), then count the epoch for that scope | Default-call test for a per-agent revocation; mixed-scope test (org-wide + per-agent revocations present: per-agent signal stamps epoch 2, org-wide signal stamps 1); explicit-arg fan-out pin |
+| **F4 MEDIUM (Rex)** — `_mask_detail` masked string values only: a raw email planted as a `mandate_scope` dict KEY and a 10-digit phone planted as an INT leaf survived verbatim into the append-only event history | `_mask_detail` masks the whole serialized structure recursively: keys via `mask_text`, numeric leaves judged by their digit string (a digit run `mask_text` would alter is replaced by its masked form; ordinary small numbers keep type/value; bools/None pass through) | Stored-event tests planting PII in keys, int leaves, and nested lists/dicts; direct `_mask_detail` recursion test; no-regression pin (string values, `version`, `seats`, permitted lists all read as before) |
+| **N1 (Rosa)** — evidence per-file split wrong | Corrected in Section 6 above: floor 11, policy 24, migration 7 (verified by collection count) | — |
+| **N2 (Rosa)** — a class-less `evaluate_action` is policy-only and must never authorize a concrete action | The F1 fix is stronger than the note: a class-less evaluation now DENIES outright in every context (after the floor/ledger layers), so no reading of it can authorize anything. Stated in `evaluate_action`'s code comment and `policy.py`'s module docstring | F1 attended/unattended None tests |
+
+**Rex probe re-run (his own scripts, unmodified):** round 1 now
+50 held / 1 changed; round 2 every hostile status denies
+`unknown_grant_status` at the ledger and through evaluation, the
+forged money grants deny, and the partial-re-grant semantics are
+unchanged. The one changed round-1 line is the B-sanity call
+(`payment.charge` at cap, `context="background"`, NO job/tool
+classes named): round-1 semantics permitted it vacuously; the F1
+absent-dimension law now denies it `job_class_required`, which is
+the briefed behavior — with the dimensions named, the same call
+permits (`unattended_permitted`), at-cap permits and over-cap
+floor-blocks, both verified live. The probes2 re-granted
+`booking.create` line changed for the same reason and likewise
+permits with dimensions named.
+
+**Fix-round test runs:**
+
+- Fix-round suite: **42/42**; B7 suites total now **84/84**
+  (round-1 42 + fix-round 42).
+- Neighboring suites (all agentperms incl. migrations, persistence
+  service + migration, agent identity models/service/multiagent/
+  migration/router, agent multiagent migration): **332 passed,
+  0 failed**.
+- Full backend suite, same invocation on both trees
+  (`pytest tests --continue-on-collection-errors`): this branch
+  **2805 passed, 21 failed, 76 skipped, 9 errors**; B1 base
+  `7df0bfb` **2721 passed, 21 failed, 76 skipped, 9 errors**.
+  FAILED and ERROR sets byte-identical (diffed); passed delta is
+  exactly 84 = the 42 round-1 B7 tests + the 42 fix-round tests.
+  **Zero regressions.**
+- Ruff: `ruff check` clean and `ruff format --check` clean on all
+  5 authored/edited Python files (floor.py, policy.py,
+  composed.py, service.py, test_agentperms_fixround_tw954.py).
+- Migration untouched in the fix round; still FILE only, never applied.
+
+**Not built (Rex follow-ups, ticketed, per brief):** receipt
+provenance hardening in `composed_stop_status` (propagation half),
+class/channel revocation over-fence note, `assert_not_fenced` vs
+re-grant distinction (ledger per-step check stays mandatory —
+already documented in Section 4), `_scan_forbidden` porosity
+(inert; `mandate_scope` is never wired into evaluation), verbatim
+event actor (B1-wide pattern).
+
+## 8. Known limits, stated plainly
 
 - The propagation half is not built (by design of this run): jobs, triggers,
   and delegated children do not yet consume stop signals, because B4/B5/B10/
