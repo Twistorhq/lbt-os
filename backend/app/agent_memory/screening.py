@@ -29,7 +29,18 @@ imported), layered on the B1 masking pipeline:
   matched span whose raw form carries dropped characters
   with the marker; plain spaced IBANs are untouched and
   keep their exact B1 output, and grouped numbers that
-  fail IBAN validation are never rewritten.
+  fail IBAN validation are never rewritten. The detection
+  copy is shape-normalized as well (round 5): each
+  surviving character is case-folded and every whitespace
+  character maps to a single space, a per-character 1:1
+  mapping alongside the index map, so a laced lowercase or
+  non-space-separated spaced IBAN matches the same
+  canonical shape; the laced-span condition is unchanged,
+  so plain lowercase and plain non-space-separated forms
+  still keep their exact output. A validated IBAN with
+  one digit glued to its final group is neutralized as
+  the whole glued span when laced, the same wholesale
+  destruction B1 gives its plain form.
 - injection-shaped and steering text is BLOCKED: classic
   instruction-override phrasing, and (F4) directive phrasing
   that reads as a standing order to the agent (always-approve
@@ -296,7 +307,7 @@ def _normalize_for_detection(text: str) -> str:
     return re.sub(r"\s+", " ", _drop_format_chars(text))
 
 
-# -- spaced IBANs laced with invisible characters (R4) -------------
+# -- spaced IBANs laced with invisible characters (R4, R5) --------
 
 # Registered IBAN total lengths by country code. A spaced
 # candidate whose despaced length disagrees with its country's
@@ -319,12 +330,55 @@ _IBAN_COUNTRY_LENGTHS: dict[str, int] = {
 
 # The canonical printed IBAN form: country and check prefix,
 # then BBAN groups of four separated by single spaces, with a
-# final group of one to four. Matched on the format-dropped
-# copy, where laced groups read exactly as their plain form.
+# final group of one to four. Matched on the format-dropped,
+# shape-normalized copy (round 5, see
+# _normalize_detection_char), where laced groups read exactly
+# as their plain canonical form.
 _SPACED_IBAN_RE = re.compile(
     r"(?<![A-Z0-9])[A-Z]{2}\d{2}(?: [A-Z0-9]{4}){1,7}(?: [A-Z0-9]{1,4})?"
     r"(?![A-Z0-9])"
 )
+
+
+def _normalize_detection_char(ch: str) -> str:
+    """Per-character shape normalization for the spaced-IBAN
+    detection copy (Rex retest round 5, TW-951): ASCII letters
+    case-fold to uppercase, and every whitespace character
+    (space, tab, line break, and the rest of the whitespace
+    class) maps to a single U+0020 space.
+
+    The mapping is 1:1 for every character it touches: the
+    fold is ASCII-only (a-z to A-Z, one character in, one
+    character out, never the expanding folds some Unicode
+    letters have), and the whitespace map replaces one
+    character with one character by construction. The
+    normalized copy therefore stays index-aligned with the
+    format-dropped copy and with the index map back to the
+    raw text, so a matched span still names exact raw
+    offsets. Normalization decides only; it never rewrites
+    stored content."""
+    if "a" <= ch <= "z":
+        return chr(ord(ch) - 32)
+    if ch.isspace():
+        return " "
+    return ch
+
+
+def _is_glued_valid_iban(despaced: str) -> bool:
+    """True when a despaced candidate is a valid IBAN with
+    exactly one extra digit glued onto its end (round 5,
+    R5-3): the registered country length is exceeded by
+    exactly one, the extra character is a digit, and the
+    candidate minus that digit passes full IBAN validation.
+    The glued form's plain output is wholesale destruction
+    by B1, so a laced glued span is neutralized whole (see
+    _neutralize_laced_spaced_ibans), never in part."""
+    expected = _IBAN_COUNTRY_LENGTHS.get(despaced[:2])
+    if expected is None or len(despaced) != expected + 1:
+        return False
+    if not despaced[-1].isdigit():
+        return False
+    return _is_valid_iban(despaced[:-1])
 
 
 def _is_valid_iban(despaced: str) -> bool:
@@ -351,7 +405,8 @@ def _is_valid_iban(despaced: str) -> bool:
 
 def _neutralize_laced_spaced_ibans(text: str) -> str:
     """Neutralize a spaced IBAN whose raw span carries
-    invisible characters (Rex retest round 4, TW-951).
+    invisible characters (Rex retest round 4, TW-951; the
+    normalized-shape extension is round 5).
 
     The plain spaced IBAN is destroyed downstream by the B1
     phone masking (it stores as DE[phone]), but format
@@ -368,17 +423,45 @@ def _neutralize_laced_spaced_ibans(text: str) -> str:
     characters in its raw span is the plain form and is left
     untouched, so plain spaced IBANs keep exactly the B1
     masking output they have today, and benign grouped
-    numbers that fail IBAN validation are never rewritten."""
-    dropped_chars: list[str] = []
+    numbers that fail IBAN validation are never rewritten.
+
+    Round 5: the detection copy is also shape-normalized
+    per character (_normalize_detection_char: case-fold,
+    any whitespace to a single space), because the round-4
+    detector matched only the exact canonical byte shape
+    (uppercase, literal space separators, single line), so
+    a laced lowercase spaced IBAN and laced forms with a
+    line break or tab in place of a space separator stored
+    verbatim on both gate paths. Normalization is 1:1 per
+    surviving character, so the index map stays exact, and
+    country-length plus mod-97 validation are unchanged:
+    false-positive parity holds (a lowercase grouping whose
+    check digits fail mod-97 is still never rewritten), and
+    the laced-span condition is unchanged, so plain
+    lowercase and plain non-space-separated forms carry no
+    dropped characters, are never neutralized here, and
+    keep exactly their current output.
+
+    R5-3, a decision pinned in the round-5 tests: when a
+    candidate is a validated IBAN with one digit glued to
+    its final group (_is_glued_valid_iban), the WHOLE glued
+    span, IBAN and glued digit together, is the span that
+    is neutralized. Parity: B1 destroys the plain glued
+    form wholesale (DE[phone], no digit survives), so the
+    laced form gets that same wholesale outcome; replacing
+    only the IBAN substring would leave the glued digit
+    behind as a remnant the plain form never leaves."""
+    normalized_chars: list[str] = []
     index_map: list[int] = []
     for i, ch in enumerate(text):
         if not _is_detection_dropped(ch):
-            dropped_chars.append(ch)
+            normalized_chars.append(_normalize_detection_char(ch))
             index_map.append(i)
-    dropped = "".join(dropped_chars)
+    normalized = "".join(normalized_chars)
     spans: list[tuple[int, int]] = []
-    for match in _SPACED_IBAN_RE.finditer(dropped):
-        if not _is_valid_iban(match.group(0).replace(" ", "")):
+    for match in _SPACED_IBAN_RE.finditer(normalized):
+        despaced = match.group(0).replace(" ", "")
+        if not _is_valid_iban(despaced) and not _is_glued_valid_iban(despaced):
             continue
         raw_start = index_map[match.start()]
         raw_end = index_map[match.end() - 1] + 1
