@@ -229,8 +229,40 @@ def resume_job(
     *,
     now: datetime | None = None,
 ) -> dict:
-    now = now or _now()
+    """Resume a paused or blocked job.
+
+    Rex TW-953 F2: a job paused for REVIEW is refused here. A
+    review job's interrupted fire may hold steps with unknown
+    outcomes; reactivating it without reconciliation (the plain
+    B4 resume path did exactly that, clearing the review
+    markers) defeats the B5 gate. A review job resumes ONLY
+    through recovery.resume_after_review, which reconciles
+    first; this refusal is what makes that gate the only door.
+    """
     job = _require_job(db, org_id, agent_id, job_id)
+    if job.get("status") == "review":
+        raise AgentJobError(
+            f"job {job_id!r} is paused for review; it resumes only via "
+            "resume-after-review, after reconciliation clears its "
+            "interrupted fire"
+        )
+    return _resume_job(db, org_id, agent_id, job, now=now)
+
+
+def _resume_job(
+    db: Any,
+    org_id: str,
+    agent_id: str,
+    job: dict,
+    *,
+    now: datetime | None = None,
+) -> dict:
+    """The resume write itself, shared by resume_job (which
+    refuses review jobs) and recovery.resume_after_review (the
+    one gated door a review job may resume through, after its
+    reconciliation checks pass)."""
+    now = now or _now()
+    job_id = job["id"]
     nxt = _next_fire_for(job, now)
     if nxt is not None and job.get("cron_expr") is None and nxt <= now:
         nxt = None  # a one-shot whose instant passed while paused never fires
@@ -522,8 +554,11 @@ def fire_job(
     failure) fails the fire, because a run whose delivery was
     never durably handed off is not complete, however its steps
     went. With no delivery seam wired, completion is the B4
-    behavior (steps done = run done); production wiring passes
-    the Notify-backed seam.
+    behavior (steps done = run done). NOTE (Rosa N1): the
+    router does NOT currently wire a delivery seam for the
+    adapter path; that is a declared deployment-wiring gap
+    (TW-965), not production behavior. The seam itself is
+    fully tested here; the B4 task-id handoff stands meanwhile.
     """
     job_id = job["id"]
     fire_key = mint_fire_key(job_id, slot)
@@ -793,6 +828,16 @@ def trigger_now(
     job = _require_job(db, org_id, agent_id, job_id)
     if job.get("status") in ("archived", "blocked"):
         raise AgentJobError(f"job {job_id!r} is {job.get('status')!r}; cannot fire")
+    if job.get("status") == "review":
+        # Rex TW-953 F2: firing a review job runs it to
+        # completion with no reconciliation, bypassing the
+        # resume gate entirely. Refused: a review job resumes
+        # only via resume_after_review.
+        raise AgentJobError(
+            f"job {job_id!r} is paused for review; it cannot fire until "
+            "it resumes via resume-after-review, after reconciliation "
+            "clears its interrupted fire"
+        )
     from .preflight import validate_definition
 
     failures = validate_definition(job)

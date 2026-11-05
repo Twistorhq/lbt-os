@@ -21,9 +21,12 @@ Resumption is an operator action with a gate:
 resume_after_review runs reconciliation (apply=True) over the
 job's interrupted fires first. Any step classified unknown
 refuses the resume and names the step: an unknown outcome is
-surfaced to a human, never auto-retried. Only when every
-planned step is classified done / not done / reconciled does
-the job return to active, with its next slot recomputed.
+surfaced to a human, never auto-retried. Any step still
+executed-but-untolled after apply refuses too (Rex F3). And
+this gate is the ONLY door: the plain resume and trigger
+paths refuse 'review' jobs outright (Rex F2). Only when every
+step is classified done / not done / reconciled does the job
+return to active, with its next slot recomputed.
 """
 
 from __future__ import annotations
@@ -155,10 +158,19 @@ def resume_after_review(
 
     Reconciles every interrupted fire of the job (apply=True:
     executed-but-untolled steps are tolled exactly once). Any
-    unknown step refuses the resume, by name. On success the
-    job returns to active via the normal resume path (next slot
-    recomputed; review markers cleared). The interrupted fire
-    rows stay interrupted: they are history, not work to redo.
+    unknown step refuses the resume, by name. Rex TW-953 F3:
+    any step STILL executed-but-untolled after apply refuses
+    too, by name: the gate used to check only unknown_steps,
+    so with the toll sink still down it returned the job active
+    over unposted tolls. This also closes Rosa N2: with
+    toll_sink=None, apply cannot post, the steps classify
+    executed_untolled, and this refusal fires, so the None-sink
+    path is not a hole. On success the job returns to active
+    through service._resume_job (next slot recomputed; review
+    markers cleared): the public resume_job refuses review
+    jobs by design (Rex F2), and this gated path is the one
+    door it leaves open. The interrupted fire rows stay
+    interrupted: they are history, not work to redo.
     """
     job = service.get_job(db, org_id, agent_id, job_id)
     if job is None:
@@ -170,6 +182,7 @@ def resume_after_review(
         )
     fires = service.list_fires_for_job(db, org_id, agent_id, job_id)
     reports = []
+    untolled: list[str] = []
     for fire in fires:
         if fire.get("status") != "interrupted":
             continue
@@ -191,6 +204,16 @@ def resume_after_review(
                 f"({', '.join(report['unknown_steps'])}); a human must "
                 "resolve them before this job resumes"
             )
+        untolled.extend(
+            f"{fire['fire_key']}:{name}" for name in report["executed_untolled"]
+        )
         reports.append(report)
-    resumed = service.resume_job(db, org_id, agent_id, job_id, now=now)
+    if untolled:
+        raise AgentJobError(
+            "resume refused: executed steps are still untolled after "
+            f"reconciliation ({', '.join(untolled)}); the toll sink "
+            "must recover and reconciliation must post them before "
+            "this job resumes"
+        )
+    resumed = service._resume_job(db, org_id, agent_id, job, now=now)
     return {"job": resumed, "reports": reports}

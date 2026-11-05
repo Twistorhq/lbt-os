@@ -36,6 +36,16 @@ TW-953 additions:
 - A durable heartbeat records every tick's outcome (and the
   scan failure's) in agt_job_tick_heartbeats, so a dead
   scheduler is visible in-system (heartbeat.py, Rex F7 tail).
+- Fix round (Rosa MF3): the tick WIRES the two passes that
+  used to be operator-only. preflight_scan runs at the head of
+  every tick, so a poisoned definition is quarantined when it
+  lands, even if the job is not yet due; and when a
+  health_alerter is wired, check_scheduler_health evaluates
+  the PREVIOUS heartbeat at the head of the tick, so a
+  scheduler that died between ticks alerts through the tick
+  path itself (GET /tick-health runs the same check). Both
+  passes are contained: a failure in either is logged and
+  listed in the summary, and never wedges the tick.
 
 Due semantics and ordering are B4's: next_fire_at is the slot;
 fire-first ordering with the namespaced fire_key UNIQUE and a
@@ -153,6 +163,8 @@ def tick(
     alerter: Callable[..., str] | None = None,
     reap_stale_after: timedelta | None = None,
     record_heartbeat: bool = True,
+    health_alerter: Callable[[dict], str] | None = None,
+    run_preflight_scan: bool = True,
 ) -> dict:
     """Fire every due job once. Returns a summary dict with the
     fired outcomes, blocked jobs, failures, reaped fires, and
@@ -185,6 +197,39 @@ def tick(
         except Exception as exc:
             log.error("agent_jobs: reaper failed: %s", exc)
             summary["reaper_error"] = str(exc)
+    if health_alerter is not None:
+        # Rosa MF3: the dead-scheduler alert has a production
+        # caller. Evaluated against the PREVIOUS tick's
+        # heartbeat, before this tick records a fresh one, and
+        # contained: a health-check failure never wedges a tick.
+        try:
+            summary["scheduler_health"] = heartbeat.check_scheduler_health(
+                db, now=now, health_alerter=health_alerter
+            )
+        except Exception as exc:
+            log.error("agent_jobs: scheduler health check failed: %s", exc)
+            summary["scheduler_health_error"] = str(exc)
+    if run_preflight_scan:
+        # Rosa MF3: the definition quarantine has a production
+        # caller. It runs before the due scan so jobs it blocks
+        # leave the active set this same tick, due or not.
+        # Contained per the B4 posture: block_job contains each
+        # job, and a scan-level failure is logged and listed,
+        # never raised into the tick.
+        try:
+            scan = preflight_mod.preflight_scan(db, alerter=alerter)
+            for entry in scan["blocked"]:
+                blocked_entry = {
+                    "job_id": entry["job_id"],
+                    "status": "blocked",
+                    "error": entry["error"],
+                }
+                summary["blocked"].append(blocked_entry)
+                summary["errors"].append(blocked_entry)
+            summary["preflight_scan_ok"] = scan["ok"]
+        except Exception as exc:
+            log.error("agent_jobs: preflight scan failed: %s", exc)
+            summary["preflight_scan_error"] = str(exc)
     try:
         query = db.table("agt_jobs").select("*").eq("status", "active")
         if hasattr(query, "order"):

@@ -192,12 +192,15 @@ def reconcile_fire(
     apply: bool = False,
     now: datetime | None = None,
 ) -> dict:
-    """Classify every planned step of one fire against its
-    journal and toll evidence. With apply=True, executed-but-
-    untolled steps are tolled exactly once (same fire-key-rooted
-    idempotency key the original run used). Step handlers are
-    NEVER re-run here. Returns the classification report; any
-    unknown step is named in 'unknown_steps' for the operator.
+    """Classify every step of one fire against its journal and
+    toll evidence: the planned steps UNION the journaled steps
+    (Rex TW-953 F4: a journaled step the current plan no longer
+    names still classifies, fail closed). With apply=True,
+    executed-but-untolled steps are tolled exactly once (same
+    fire-key-rooted idempotency key the original run used).
+    Step handlers are NEVER re-run here. Returns the
+    classification report; any unknown step is named in
+    'unknown_steps' for the operator.
     """
     fire = service.get_fire(db, org_id, agent_id, fire_id)
     if fire is None:
@@ -282,6 +285,42 @@ def reconcile_fire(
                 unknown_steps.append(step.name)
         else:
             entry["classification"] = "not_done"
+        steps_report.append(entry)
+
+    # Rex TW-953 F4: journal steps the current plan no longer
+    # names are evidence too. Reconciliation used to iterate
+    # planned steps only, so a started step dropped from the
+    # factory's plan vanished from the report and the resume
+    # gate never saw it. Journal-only steps classify from the
+    # journal row alone, fail closed: a started step whose
+    # idempotency contract can no longer be read from any plan
+    # is unknown (its effect may or may not have happened), and
+    # an executed step with an outstanding toll marker is
+    # executed_untolled (its toll event name is unrecoverable
+    # from the journal, so apply cannot post it here; the
+    # resume gate holds on it until a human settles it).
+    planned_names = {step.name for step in planned}
+    for step_name, row in journal.items():
+        if step_name in planned_names:
+            continue
+        key = f"{fire['fire_key']}:step:{step_name}"
+        entry = {
+            "name": step_name,
+            "toll_event": None,
+            "idempotency_key": key,
+            "journal_only": True,
+        }
+        if key in toll_keys:
+            entry["classification"] = "done"
+        elif row.get("status") == "executed":
+            if row.get("toll_status") == "none":
+                entry["classification"] = "done"
+            else:
+                entry["classification"] = "executed_untolled"
+                untolled.append(step_name)
+        else:
+            entry["classification"] = "unknown"
+            unknown_steps.append(step_name)
         steps_report.append(entry)
 
     report = {

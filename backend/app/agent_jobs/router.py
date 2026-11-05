@@ -90,6 +90,34 @@ def _alerter(request: Request):
     return getattr(request.app.state, "agent_jobs_alerter", None) or log_alerter
 
 
+def _health_alerter(request: Request):
+    """The dead-scheduler alerter (Rosa MF3): adapts the
+    job-shaped alerter seam to heartbeat.check_scheduler_health's
+    health-dict shape. A deployment may wire a dedicated
+    app.state.agent_jobs_health_alerter; otherwise the shared
+    alerter fires with a synthetic scheduler job row, falling
+    back to the loud log alerter, so a dead scheduler is never
+    silent either."""
+    dedicated = getattr(request.app.state, "agent_jobs_health_alerter", None)
+    if dedicated is not None:
+        return dedicated
+    base = _alerter(request)
+
+    def health_alerter(health: dict) -> str:
+        reason = (
+            "agent-jobs scheduler heartbeat is stale: status "
+            f"{health.get('status')!r}, last tick {health.get('last_tick_at')!r}"
+        )
+        return base(
+            None,
+            "",
+            {"id": "agent-jobs-ticker", "name": "agent-jobs scheduler"},
+            reason,
+        )
+
+    return health_alerter
+
+
 def _preflight_checker(request: Request) -> PreflightChecker:
     """TW-953: the tick/trigger preflight. Delivery and ledger
     checks use their db-backed defaults (Notify providers, the
@@ -121,11 +149,20 @@ def _executor_factory(request: Request, db: Client, org_id: str):
         # vocabulary; on a base without B3 the toll sink fails
         # loud, never silently untolled) with the fire-key-rooted
         # idempotency key run_steps builds.
+        # Fix round (Rex F5 / P9): the step is explicitly
+        # NON-idempotent. Enqueueing a runtime task is an
+        # external effect with no dedupe contract, so a worker
+        # killed inside this handler leaves an outcome that is
+        # genuinely unknown; with the JobStep default of
+        # idempotent=True reconciliation classified that
+        # not_done and the resume gate never tripped on the only
+        # production step shape there is.
         return [
             JobStep(
                 name="run_task",
                 handler=lambda _ctx: adapter(_ctx),
                 toll_event="agent.task_completed",
+                idempotent=False,
             )
         ]
 
@@ -330,6 +367,10 @@ def tick_jobs(
         preflight=_preflight_checker(request),
         alerter=_alerter(request),
         reap_stale_after=timedelta(minutes=30),
+        # Rosa MF3: the tick path runs the scheduler health
+        # check (dead-scheduler alert) and, inside ticker.tick,
+        # the preflight definition scan, every tick.
+        health_alerter=_health_alerter(request),
     )
 
 
@@ -341,8 +382,17 @@ def tick_health(
 ):
     """TW-953: the durable tick heartbeat, readable in-system so
     a dead scheduler is visible without calling the tick first.
-    Same tick-key guard as the tick endpoint."""
+    Same tick-key guard as the tick endpoint.
+
+    Fix round (Rosa MF3): this endpoint runs the full health
+    check, not just the read: a stale heartbeat fires the
+    dead-scheduler alert here too (exactly once per episode),
+    so the alert has a production caller even between ticks."""
     configured = settings.agent_jobs_tick_key
     if not configured or x_tick_key != configured:
         raise HTTPException(status_code=403, detail="tick key required")
-    return heartbeat.get_tick_health(db, now=datetime.now(timezone.utc))
+    return heartbeat.check_scheduler_health(
+        db,
+        now=datetime.now(timezone.utc),
+        health_alerter=_health_alerter(request),
+    )

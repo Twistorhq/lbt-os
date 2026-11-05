@@ -110,11 +110,25 @@ def validate_definition(job: dict) -> list[str]:
 
 def notify_delivery_configured(db: Any, org_id: str) -> bool:
     """Default delivery check: the org has at least one enabled
-    Notify provider binding. Reads ntf_providers directly (the
-    Notify service falls back to a null pipe when nothing is
-    configured, which is exactly what preflight must NOT accept
-    as a configured delivery target). Any read failure is a
-    not-configured answer: fail closed."""
+    Notify provider binding that resolves to a REAL delivery
+    provider. Reads ntf_providers directly (the Notify service
+    falls back to a null pipe when nothing is configured, which
+    is exactly what preflight must NOT accept as a configured
+    delivery target).
+
+    Rex TW-953 F1: an enabled row is not enough. The 'null'
+    provider (NullProvider) sends nothing and always succeeds,
+    so a null-only org, or an org whose only real provider is
+    disabled while null stays enabled, has NO delivery target
+    and must fail closed here, not fire-and-spend against a
+    no-op pipe. Rows Notify's build_provider would skip
+    (unknown provider name, malformed row) do not count either:
+    delivery counts as configured only when build_provider
+    builds an enabled, non-null provider from a stored row.
+    Any read failure is a not-configured answer: fail closed."""
+    from ..notify import providers as notify_providers
+    from ..notify import service as notify_service
+
     try:
         rows = (
             db.table("ntf_providers").select("*").eq("org_id", org_id).execute().data
@@ -123,7 +137,19 @@ def notify_delivery_configured(db: Any, org_id: str) -> bool:
     except Exception as exc:
         log.error("agent_jobs: delivery config read failed for org %s: %s", org_id, exc)
         return False
-    return any(bool(r.get("is_enabled", True)) for r in rows)
+    for row in rows:
+        if not bool(row.get("is_enabled", True)):
+            continue
+        try:
+            provider = notify_service.build_provider(
+                row["provider_name"], row["channel"], row.get("config") or {}
+            )
+        except Exception:
+            continue  # a row build_provider would skip is not a target
+        if isinstance(provider, notify_providers.NullProvider):
+            continue  # the null pipe delivers nothing, ever
+        return True
+    return False
 
 
 def _default_ledger_check(
@@ -327,10 +353,10 @@ def make_notify_alerter(to_address: str) -> Callable[..., str]:
 
 def preflight_scan(db: Any, *, alerter: Callable[..., str] | None = None) -> dict:
     """Validate every active job's definition and quarantine the
-    poisoned ones, whether or not they are due. This is the
-    preflight pass an operator (or a scheduler wrapper) runs so
-    corruption is caught when it lands, not when the job's slot
-    arrives. Returns {"blocked": [...], "ok": int}."""
+    poisoned ones, whether or not they are due. Wired into every
+    tick (ticker.tick, Rosa MF3) and callable directly by an
+    operator, so corruption is caught when it lands, not when
+    the job's slot arrives. Returns {"blocked": [...], "ok": int}."""
     from . import service
 
     rows = db.table("agt_jobs").select("*").eq("status", "active").execute().data or []

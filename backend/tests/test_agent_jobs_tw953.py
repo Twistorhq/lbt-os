@@ -1038,7 +1038,13 @@ class TestRouterWiring:
             "active": True,
         }
         db.table("ntf_providers").insert(
-            {"org_id": ORG, "provider_name": "null", "is_enabled": True}
+            {
+                "org_id": ORG,
+                "provider_name": "resend",
+                "channel": "email",
+                "is_enabled": True,
+                "config": {},
+            }
         ).execute()
         summary = router_mod.tick_jobs(request, x_tick_key="s3cret", db=db)
         assert len(summary["fired"]) == 1
@@ -1096,9 +1102,7 @@ class TestRexRetestFixRound:
         self._provider_row(db, "null")
         assert preflight.notify_delivery_configured(db, ORG) is False
 
-    def test_null_enabled_with_only_real_provider_disabled_is_not_configured(
-        self, db
-    ):
+    def test_null_enabled_with_only_real_provider_disabled_is_not_configured(self, db):
         self._provider_row(db, "null", enabled=True)
         self._provider_row(db, "resend", enabled=False)
         assert preflight.notify_delivery_configured(db, ORG) is False
@@ -1225,9 +1229,7 @@ class TestRexRetestFixRound:
         assert report["unknown_steps"] == ["ghost"]
         assert by_name["work"] == "not_done"
 
-    def test_reconcile_classifies_journal_only_executed_step_untolled(
-        self, db, tolls
-    ):
+    def test_reconcile_classifies_journal_only_executed_step_untolled(self, db, tolls):
         job, fire, journal = self._journal_only_setup(db)
         ghost = execution.JobStep(
             name="ghost_exec",

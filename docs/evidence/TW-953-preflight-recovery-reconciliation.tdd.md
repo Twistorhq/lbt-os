@@ -154,6 +154,22 @@ app/persistence/models.py, and tests/test_agent_jobs_tw953.py;
 `ruff format --check` clean on the same set. app/config.py was
 not touched by this ticket.
 
+Fix round (Rex retest FAIL F1-F5 + Rosa gate MF1-MF3, N1, N2;
+tip under review 78a6e08): RED checkpoints a19e1d4 (12 new
+tests: 10 failed on the unrepaired tree, the 2 passes are
+positive controls for F1) and bb2bf02 (4 more tests; with the
+F3/F5 carryovers, 6 failed). GREEN on the new tip: B5 suite 59
+passed (43 original + 16 fix-round); B4 suite 41 passed,
+unchanged; neighboring set (the Section 3 file list) 837
+passed (821 + 16); flows/flags 154 passed; full suite 2821
+passed (2805 + 16), 21 failed = the identical pre-existing
+baseline (8 bi_whitelabel, 11 missed_call, 1 pilot_blockers,
+1 telemetry_service), 9 xmlsec collection errors, none in
+touched files. Ruff check + format --check clean on every
+authored file of the round. Rosa N1 is also fixed: the
+fire_job docstring no longer claims the router wires a Notify
+delivery seam (it names TW-965 instead).
+
 ## 4. Guarantees table
 
 | # | What is guaranteed | Test file or command | Type | Result | Evidence |
@@ -163,7 +179,7 @@ not touched by this ticket.
 | 3 | The phone pack is a reserved B14 hook: no hook records the reservation as a note and passes; a wired hook's failures block | TestPreflightChecks::test_phone_hook_reserved_without_hook, test_phone_hook_failure_blocks | RED | PASS | Section 3 counts |
 | 4 | A job definition naming an unknown action class is a construction error (fail closed at the surface) | TestPreflightChecks::test_job_spec_rejects_unknown_action_class | RED | PASS | Section 3 counts |
 | 5 | A failed preflight creates no task, no fire row, and no spend; the job is blocked with one alert; a second tick sends no second alert | TestPreflightBlocking::test_failed_preflight_blocks_alerts_once_creates_no_task | RED | PASS | Section 3 counts |
-| 6 | A poisoned definition (bad cron written past the surface) is quarantined blocked at preflight while healthy jobs still fire; preflight_scan blocks a poisoned job before it is due | TestPreflightBlocking::test_poisoned_cron_quarantined_at_preflight_not_mid_tick, test_preflight_scan_blocks_poisoned_job_before_it_is_due | RED | PASS | Section 3 counts |
+| 6 | A poisoned definition (bad cron written past the surface) is quarantined blocked at preflight while healthy jobs still fire; preflight_scan blocks a poisoned job before it is due, and (fix round, Rosa MF3) preflight_scan is wired into every tick, so the quarantine is a system behavior, not an operator-only pass | TestPreflightBlocking::test_poisoned_cron_quarantined_at_preflight_not_mid_tick, test_preflight_scan_blocks_poisoned_job_before_it_is_due; TestRosaGateFixRound::test_tick_quarantines_not_yet_due_poisoned_job | RED | PASS | Section 3 counts + fix-round counts |
 | 7 | A manual trigger preflights identically: failure blocks the job, alerts once, creates no fire, and raises | TestPreflightBlocking::test_trigger_now_preflight_failure_blocks_and_raises | RED | PASS | Section 3 counts |
 | 8 | A fire completes only on a durable delivery handoff receipt: receipt stored on the fire row; no receipt or a delivery failure fails the fire | TestDeliveryHandoff (3 tests) | RED | PASS | Section 3 counts |
 | 9 | A fire stranded in running past the threshold is parked interrupted and its job paused for review, with one alert; a fresh running fire is untouched; reaping twice parks and alerts nothing twice | TestReaper::test_stale_running_fire_is_interrupted_and_job_paused_for_review, test_fresh_running_fire_is_untouched, test_reaper_is_idempotent | RED | PASS | Section 3 counts |
@@ -172,12 +188,19 @@ not touched by this ticket.
 | 12 | Reconciliation apply posts the missing toll exactly once with the fire-key-rooted idempotency key; a second apply classifies done and posts nothing; the step handler never re-runs | TestReconciliation::test_reconcile_apply_posts_toll_exactly_once | RED | PASS | Section 3 counts |
 | 13 | Kill between send and journal (acceptance scenario): the step classifies unknown, is surfaced by name, is never auto-tolled or re-sent; the outbox holds exactly one send | TestReconciliation::test_kill_between_send_and_journal_is_unknown_never_retried | RED | PASS | Section 3 counts |
 | 14 | Resume after review is refused while any step is unknown (job stays in review), and succeeds when every step classifies done (job returns active, next slot recomputed) | TestReconciliation::test_resume_after_review_refused_on_unknown, test_resume_after_review_succeeds_when_all_classified | RED | PASS | Section 3 counts |
-| 15 | Every tick records a durable heartbeat (last_tick_at, outcome, counts); a scan failure records status scan_failed before raising; a dead scheduler reads stale in-system and alerts exactly once per stale episode | TestTickHeartbeat (3 tests) | RED | PASS | Section 3 counts |
+| 15 | Every tick records a durable heartbeat (last_tick_at, outcome, counts); a scan failure records status scan_failed before raising; a dead scheduler reads stale in-system and alerts exactly once per stale episode, including the never-ticked episode (fix round, Rosa MF1: the first alert creates the singleton row to carry the marker); the health check is wired into the tick path and GET /tick-health (fix round, Rosa MF3), so the alert has production callers | TestTickHeartbeat (3 tests); TestRosaGateFixRound::test_never_ticked_scheduler_alerts_once_per_episode, test_tick_runs_scheduler_health_check_and_alerts_once | RED | PASS | Section 3 counts + fix-round counts |
 | 16 | Catch-up accounting counts slots (Rex F8): a 5-day-stale daily job inside its window fires once with missed_collapsed 5; a 3-day-stale daily job outside its window counts missed_skipped 4 (its slot plus the three slots the advance skips past) | TestCatchUpAccounting (2 tests) | RED | PASS | Section 3 counts |
 | 17 | Tick-summary accuracy (Rex P14): a job whose post-fire advance write fails appears in fired and advance_failed only, never in failed/errors, and its fire row exists | TestTickSummaryAccuracy::test_advance_failure_after_fire_is_not_double_listed | RED | PASS | Section 3 counts |
 | 18 | Router wiring (Rex F5): one shared RunControl instance serves tick/trigger/cancel; the runtime step carries toll_event agent.task_completed; the HTTP tick tolls through the production sink with a fire-key-rooted idempotency key and leaves a heartbeat; the cancel endpoint fences through the shared control | TestRouterWiring (4 tests) | RED | PASS | Section 3 counts |
 | 19 | The status vocabulary and the migration agree: interrupted fires and review jobs exist in code; the migration is additive, attributed, and marked never applied by this ticket | TestVocabularyAndMigration (2 tests) | unit | PASS | Section 3 counts |
 | 20 | No B4 guarantee regressed: the full B4 suite passes unchanged on this branch, including per-job containment, fire-first recovery, DuplicateFireError translation, and the last-step cancel fence | tests/test_agent_jobs_tw952.py (41 tests) in the neighboring run | unit | PASS | Section 3 counts |
+| 21 | Fix round (Rex F1 = Rosa MF2): delivery counts as configured ONLY when an enabled ntf_providers row builds a real provider: a 'null'-only binding is not configured, null enabled with the only real provider disabled is not configured, a row build_provider would skip (unknown provider) is not configured; a real enabled provider is configured. The router tick fixture now configures a real 'resend' row, not the null pipe | TestRexRetestFixRound (5 delivery tests); TestRouterWiring::test_tick_endpoint_tolls_through_shared_control (fixture fixed) | RED | PASS | Fix-round counts below |
+| 22 | Fix round (Rex F2): the resume gate has exactly one door. Plain resume_job refuses a 'review' job and leaves its review markers untouched; trigger_now refuses a 'review' job and creates no fire; a review job resumes only via resume_after_review (which resumes through the internal resume write after its checks) | TestRexRetestFixRound::test_resume_job_refuses_a_review_job, test_trigger_now_refuses_a_review_job | RED | PASS | Fix-round counts below |
+| 23 | Fix round (Rex F3, closing Rosa N2): resume_after_review refuses, naming the steps, while any executed step remains untolled after apply (toll sink still down), and the job stays in review with zero toll rows lost; with toll_sink=None the same refusal fires, so the None-sink path cannot resume over untolled steps | TestRexRetestFixRound::test_resume_after_review_refused_while_executed_untolled; TestRosaGateFixRound::test_resume_after_review_without_sink_refuses_untolled | RED | PASS | Fix-round counts below |
+| 24 | Fix round (Rex F4): reconciliation classifies the journal UNION the plan: a journal-only started step classifies unknown (its idempotency contract is unrecoverable once it leaves the plan, so it fails closed) and blocks resume by name; a journal-only executed step with an outstanding toll marker classifies executed_untolled | TestRexRetestFixRound::test_reconcile_classifies_journal_only_started_step_unknown, test_reconcile_classifies_journal_only_executed_step_untolled, test_resume_after_review_refused_on_journal_only_unknown | RED | PASS | Fix-round counts below |
+| 25 | Fix round (Rex F5): the production step shape can surface unknown: the router's run_task step is explicitly idempotent=False (enqueueing a runtime task has no dedupe contract), so a kill inside the only production handler classifies unknown and trips the resume gate. The JobStep default stays True; every existing B4/B5 caller that relies on the default keeps its semantics, and only the router step, the one shape Rex probed, changes | TestRexRetestFixRound::test_router_run_task_step_is_non_idempotent | RED | PASS | Fix-round counts below |
+| 26 | Fix round (Rosa MF1): a never-ticked scheduler alerts exactly once per stale episode: the first check_scheduler_health alert inserts the singleton heartbeat row carrying health_alerted_for='never', and a second check does not re-alert | TestRosaGateFixRound::test_never_ticked_scheduler_alerts_once_per_episode | RED | PASS | Fix-round counts below |
+| 27 | Fix round (Rosa MF3, wired per coordinator preference): the tick path calls preflight_scan (contained; scan-blocked jobs land in the tick summary's blocked list) and, when a health alerter is wired, check_scheduler_health against the previous heartbeat; GET /tick-health runs the full alerting check through the app.state alerter (log fallback). Neither pass can wedge the tick: both are wrapped and their failures are logged and listed in the summary | TestRosaGateFixRound::test_tick_quarantines_not_yet_due_poisoned_job, test_tick_runs_scheduler_health_check_and_alerts_once | RED | PASS | Fix-round counts below |
 
 ## 5. Inherited-item map (ticket body + TW-952 review scope)
 
@@ -208,6 +231,16 @@ not touched by this ticket.
   failures list under advance_failed only. Row 17.
 - Rex F9 (tick-key plain compare) was a note only in the retest
   and is unchanged, matching the house FLOWS_TICK_KEY pattern.
+- Fix round (Rex F1-F5 + Rosa MF1-MF3/N1/N2 on 78a6e08):
+  real-provider delivery check + router fixture (row 21), the
+  one-door resume gate (row 22), the untolled resume refusal
+  incl. the None-sink path (row 23), journal-union
+  reconciliation (row 24), the non-idempotent production step
+  (row 25), the never-ticked episode marker (row 26), and the
+  production wiring of preflight_scan + the health check
+  (row 27). Rex follow-up F6 was promoted by Rosa to MF1 and
+  built (rows 15, 26); Rex follow-ups F7-F11 were NOT built
+  (ticketed on TW-953); Rosa's seam gaps ride TW-965.
 
 ## 6. B3 dependency note (binding for merge order)
 
@@ -261,6 +294,29 @@ direction and is accepted here.
   the agent_runtime task enqueue, whose task id lands on the
   fire row as in B4). Wiring a Notify receipt into that path
   is deployment wiring, named here rather than faked.
+- Deployment wiring (TW-965, "TW-948 B5 deployment wiring"):
+  the remaining seam-level items live there, per Rosa's gap
+  disposition: the default-ledger-checker integration test,
+  the app.state alerter/credential/skill deployment seams,
+  and the Notify delivery seam for the adapter path above.
+  Two former gaps are NO LONGER gaps after the fix round:
+  preflight_scan and check_scheduler_health are wired into
+  production paths (ticker.tick for both; the router tick
+  endpoint passes the health alerter, and GET /tick-health
+  runs the alerting check), so guarantees 6, 15, and 27 hold
+  as system behavior. The router health alerter adapts the
+  job-shaped alerter seam with a synthetic scheduler job row;
+  a deployment can wire app.state.agent_jobs_health_alerter
+  for a dedicated shape (also TW-965 polish, not a guarantee
+  gap: with only the log fallback the alert is loud in logs,
+  never silent).
+- Journal-only executed steps (fix round, Rex F4): the step
+  journal does not record a step's toll event name, so a
+  journal-only executed step with an outstanding toll marker
+  classifies executed_untolled but reconciliation cannot post
+  its toll (the event is unrecoverable from the journal); the
+  resume gate holds on it (row 23) until a human settles it.
+  Fail-closed by construction, named here rather than hidden.
 - The reaper handles fires stranded in 'running'. A fire left
   in 'pending' by a crash between record_fire and the running
   transition is covered by B4's already_fired heal path (the

@@ -14,7 +14,11 @@ check_scheduler_health turns staleness into an alert, exactly
 once per stale episode: the alert marker is stored on the
 heartbeat row keyed to the last_tick_at it fired for, so a
 scheduler that stays dead does not re-alert every check, and a
-scheduler that recovers and dies again alerts again.
+scheduler that recovers and dies again alerts again. When no
+heartbeat row exists yet (the scheduler has never ticked), the
+first alert CREATES the singleton row to carry the marker
+(Rosa MF1): without a row to persist on, the 'never' episode
+re-alerted on every check.
 """
 
 from __future__ import annotations
@@ -164,11 +168,30 @@ def check_scheduler_health(
         return health
     health["alerted"] = True
     health["alert_receipt"] = receipt
-    if row is not None:
-        try:
+    try:
+        if row is not None:
             db.table(TABLE).update(
                 {"health_alerted_for": episode, "updated_at": now.isoformat()}
             ).eq("id", SINGLETON_ID).execute()
-        except Exception as exc:
-            log.error("agent_jobs: health alert marker write failed: %s", exc)
+        else:
+            # Rosa MF1: no row exists to carry the marker (the
+            # scheduler has never ticked), so create the
+            # singleton in its 'never' state with the marker on
+            # it. record_tick_heartbeat updates this row in
+            # place when the scheduler first ticks.
+            db.table(TABLE).insert(
+                {
+                    "id": SINGLETON_ID,
+                    "last_tick_at": None,
+                    "status": "never",
+                    "fired_count": 0,
+                    "failed_count": 0,
+                    "blocked_count": 0,
+                    "error": None,
+                    "health_alerted_for": episode,
+                    "updated_at": now.isoformat(),
+                }
+            ).execute()
+    except Exception as exc:
+        log.error("agent_jobs: health alert marker write failed: %s", exc)
     return health
