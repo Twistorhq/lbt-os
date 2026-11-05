@@ -12,14 +12,15 @@ and friends), which is the documented B3 dependency.
 
 import inspect
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import pytest
 
 os.environ.setdefault("TWISTOR_PERSISTENCE_HASH_KEY", "tw952-test-key")
 
 from app.agent_jobs import cron as cron_mod  # noqa: E402
-from app.agent_jobs import execution, service, ticker as ticker_mod  # noqa: E402
+from app.agent_jobs import execution, service  # noqa: E402
+from app.agent_jobs import ticker as ticker_mod
 from app.agent_jobs.models import AgentJobError, JobEdit, JobSpec  # noqa: E402
 
 ORG = "org-1"
@@ -126,8 +127,17 @@ class FakeTollSink:
         self.rows = {}
         self.calls = 0
 
-    def __call__(self, db, org_id, event_type, quantity=1, idempotency_key=None,
-                 source_type=None, source_id=None, amount_cents=None):
+    def __call__(
+        self,
+        db,
+        org_id,
+        event_type,
+        quantity=1,
+        idempotency_key=None,
+        source_type=None,
+        source_id=None,
+        amount_cents=None,
+    ):
         self.calls += 1
         if event_type not in self.KNOWN:
             raise ValueError(f"Unknown toll event type: {event_type}")
@@ -393,7 +403,9 @@ class TestExecution:
         assert cont["run_count"] == 2
         fires = psvc.list_fires(db, ORG, AGENT, job["id"])
         summaries = sorted(f["summary"] for f in fires)
-        assert summaries == ["found 1", "found 3"]
+        # First fire surfaces all three; the second fire's context
+        # carried them in continuity, so it resurfaced none.
+        assert summaries == ["found 0", "found 3"]
 
     def test_fire_writer_masks_summary_and_error(self, db, tolls):
         _job(db, dt(2026, 11, 5, 15, 0), name="mask-ok")
@@ -449,8 +461,9 @@ class TestExecution:
                 ),
             ]
 
-        out = _tick(db, dt(2026, 11, 5, 16, 0), factory=factory,
-                    tolls=tolls, control=control)
+        out = _tick(
+            db, dt(2026, 11, 5, 16, 0), factory=factory, tolls=tolls, control=control
+        )
         assert out["fired"][0]["status"] == "cancelled"
         assert ran == ["s1", "s2"]  # nothing further ran after the fence
         fire = db.tables["agt_job_fires"][0]
@@ -473,8 +486,15 @@ class TestExecution:
             scheduled_for=dt(2026, 11, 5, 16, 0),
             timezone_name="UTC",
         )
-        steps = factory(ctx)
-        execution.run_steps(ctx, steps[:2], toll_sink=tolls, db=db)
+        retry_steps = [
+            execution.JobStep(
+                name="s1", handler=lambda _c: {}, toll_event="agent.task_completed"
+            ),
+            execution.JobStep(
+                name="s2", handler=lambda _c: {}, toll_event="agent.task_completed"
+            ),
+        ]
+        execution.run_steps(ctx, retry_steps, toll_sink=tolls, db=db)
         assert len(tolls.rows) == 2
 
     def test_no_job_creates_job_by_construction(self, db, tolls):
@@ -501,9 +521,7 @@ class TestExecution:
         assert not hasattr(ctx, "db")
         assert "jobs.manage" not in ctx.capabilities
         # Construction takes no service or db handle at all.
-        params = inspect.signature(
-            execution.build_execution_context
-        ).parameters
+        params = inspect.signature(execution.build_execution_context).parameters
         assert "db" not in params and "service" not in params
         assert len(db.tables["agt_jobs"]) == 1  # only the parent job exists
 
@@ -558,6 +576,26 @@ class TestExecution:
         assert edited["next_fire_at"] == dt(2026, 11, 6, 15, 30).isoformat()
         assert [dict(r) for r in db.tables["agt_job_fires"]] == fires_before
         assert [dict(r) for r in db.tables["agt_job_continuity"]] == cont_before
+
+
+# -- migration file shape -----------------------------------------
+
+
+class TestMigrationFile:
+    def test_additive_columns_only_never_applied_by_ticket(self):
+        path = os.path.join(
+            os.path.dirname(__file__),
+            "..",
+            "..",
+            "supabase",
+            "migration_agent_jobs_tw952.sql",
+        )
+        sql = open(path).read()
+        assert "Prepared by Twistor Holdings LLC" in sql
+        assert "ADD COLUMN IF NOT EXISTS catch_up_window_minutes" in sql
+        assert "ADD COLUMN IF NOT EXISTS one_shot_at" in sql
+        assert "NEVER applied by this ticket" in sql
+        assert "DROP TABLE" not in sql
 
 
 # -- runtime adapter ----------------------------------------------
