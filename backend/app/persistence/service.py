@@ -1,21 +1,27 @@
 """TW-949 Tori persistence: scoped read and write service.
 
-Every function takes (db, org_id, agent_id) and filters on both,
-plus the row's workspace key, on every query. The db argument is
-the Supabase-style client the neighboring backend modules use
-(db.table(name).select/insert/update with eq/order/limit), so the
-tests exercise this module against a stateful in-memory fake in
-exactly the house pattern (see test_agentperms_service.py).
+Every function takes (db, org_id, agent_id) and filters on all
+three scope keys (org, agent, and the derived workspace key) on
+every query. A caller-supplied workspace_id that differs from
+the derived key is refused, never honored (TW-949 fix round,
+Rosa must-fix 1). The db argument is the Supabase-style client
+the neighboring backend modules use (db.table(name).select/
+insert/update with eq/order/limit), so the tests exercise this
+module against a stateful in-memory fake in exactly the house
+pattern (see test_agentperms_service.py).
 
 Discipline carried from durable_turns: a message append is a
 single insert that is acknowledged by the return of this
 function; callers write before answering, never after.
 
-PII: append_message stores the raw body in body_bronze ONLY.
-Every read path that serves retrieval returns message_projection
-dicts, which carry the masked projection and the hash and never
-the bronze column. The one exception is get_message_bronze,
-named for the bronze layer on purpose, for owner audit paths.
+PII: append_message stores the raw body in body_bronze ONLY
+and returns the masked projection, like every other retrieval
+path. Retrieval queries on agt_session_messages select the
+projection columns only, so body_bronze is never even loaded
+into retrieval-path memory (Rex finding F1). The one exception
+is get_message_bronze, named for the bronze layer on purpose,
+for owner audit paths; it is the only function that selects
+the bronze column.
 """
 
 from __future__ import annotations
@@ -44,17 +50,41 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _scope(db: Any, table: str, org_id: str, agent_id: str) -> Any:
+MESSAGE_PROJECTION_COLUMNS = (
+    "id,session_id,org_id,agent_identity_id,workspace_id,"
+    "role,seq,body_masked,body_hash,created_at"
+)
+MESSAGE_SEARCH_COLUMNS = MESSAGE_PROJECTION_COLUMNS + ",search_text"
+
+
+def _scope(
+    db: Any, table: str, org_id: str, agent_id: str, *, columns: str = "*"
+) -> Any:
     return (
         db.table(table)
-        .select("*")
+        .select(columns)
         .eq("org_id", org_id)
         .eq("agent_identity_id", agent_id)
+        .eq("workspace_id", workspace_id_for(org_id, agent_id))
     )
 
 
-def _one(db: Any, table: str, org_id: str, agent_id: str, row_id: str) -> dict | None:
-    rows = _scope(db, table, org_id, agent_id).eq("id", row_id).limit(1).execute().data
+def _one(
+    db: Any,
+    table: str,
+    org_id: str,
+    agent_id: str,
+    row_id: str,
+    *,
+    columns: str = "*",
+) -> dict | None:
+    rows = (
+        _scope(db, table, org_id, agent_id, columns=columns)
+        .eq("id", row_id)
+        .limit(1)
+        .execute()
+        .data
+    )
     return rows[0] if rows else None
 
 
@@ -62,6 +92,38 @@ def _require_scope(org_id: str, agent_id: str) -> str:
     if not org_id or not agent_id:
         raise PersistenceError("org_id and agent_id are required on every call")
     return workspace_id_for(org_id, agent_id)
+
+
+def _resolve_workspace(org_id: str, agent_id: str, override: str | None) -> str:
+    """The derived workspace key, or a loud refusal.
+
+    A workspace_id argument is accepted only when it equals the
+    key derived from (org, agent); stamping a foreign workspace
+    would break the B12 containment the column exists for.
+    """
+    ws = _require_scope(org_id, agent_id)
+    if override is not None and override != ws:
+        raise PersistenceError(
+            f"workspace_id {override!r} does not match the scope workspace {ws!r}"
+        )
+    return ws
+
+
+def _mask_free_text(value: Any) -> Any:
+    """mask_text applied to free-text fields and string leaves.
+
+    Used for the non-message free-text columns that share the
+    masking pipeline (Rex finding F6): session titles and
+    metadata, continuity summaries and surfaced ids, staged
+    write targets. Non-strings pass through untouched.
+    """
+    if isinstance(value, str):
+        return mask_text(value)
+    if isinstance(value, dict):
+        return {k: _mask_free_text(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_mask_free_text(v) for v in value]
+    return value
 
 
 # -- sessions ---------------------------------------------------
@@ -82,7 +144,7 @@ def create_session(
     scope. A parent id from another org or agent is refused, so a
     chain can never cross a tenant or roster boundary.
     """
-    ws = workspace_id or _require_scope(org_id, agent_id)
+    ws = _resolve_workspace(org_id, agent_id, workspace_id)
     if stmt.parent_session_id is not None:
         parent = _one(db, "agt_sessions", org_id, agent_id, stmt.parent_session_id)
         if parent is None:
@@ -99,8 +161,8 @@ def create_session(
         "parent_session_id": stmt.parent_session_id,
         "channel": stmt.channel,
         "status": stmt.status,
-        "title": stmt.title,
-        "metadata": metadata or {},
+        "title": mask_text(stmt.title),
+        "metadata": _mask_free_text(metadata or {}),
         "started_at": now,
         "ended_at": None,
         "created_at": now,
@@ -190,19 +252,23 @@ def append_message(
     *,
     seq: int | None = None,
 ) -> dict:
-    """Append one message to a scoped session and return its row.
+    """Append one message to a scoped session.
 
-    seq defaults to the next position in the session. An explicit
-    seq that is already taken is refused at this layer; the
-    UNIQUE (session_id, seq) constraint refuses it at the
-    database layer for writers that bypass this service.
+    Returns the masked projection, never the stored row: the
+    raw body leaves this service only through get_message_bronze
+    (Rosa must-fix 3, Rex finding F1). seq defaults to the next
+    position in the session. An explicit seq that is already
+    taken is refused at this layer; the UNIQUE (session_id,
+    seq) constraint refuses it at the database layer for
+    writers that bypass this service. The seq scan selects the
+    seq column only, so bronze is not loaded here either.
     """
     ws = _require_scope(org_id, agent_id)
     session = get_session(db, org_id, agent_id, session_id)
     if session is None:
         raise PersistenceError(f"session {session_id!r} not found in scope")
     existing = (
-        _scope(db, "agt_session_messages", org_id, agent_id)
+        _scope(db, "agt_session_messages", org_id, agent_id, columns="seq")
         .eq("session_id", session_id)
         .execute()
         .data
@@ -215,17 +281,18 @@ def append_message(
     row = {
         "org_id": org_id,
         "agent_identity_id": agent_id,
-        "workspace_id": session.get("workspace_id", ws),
+        "workspace_id": ws,
         "session_id": session_id,
         "role": stmt.role,
         "seq": seq,
         "body_bronze": stmt.body,
-        "body_hash": hash_body(stmt.body),
+        "body_hash": hash_body(stmt.body, org_id=org_id, agent_id=agent_id),
         "body_masked": masked,
         "search_text": masked,
         "created_at": _now_iso(),
     }
-    return db.table("agt_session_messages").insert(row).execute().data[0]
+    stored = db.table("agt_session_messages").insert(row).execute().data[0]
+    return message_projection(stored)
 
 
 def list_messages(db: Any, org_id: str, agent_id: str, session_id: str) -> list[dict]:
@@ -234,7 +301,13 @@ def list_messages(db: Any, org_id: str, agent_id: str, session_id: str) -> list[
     if get_session(db, org_id, agent_id, session_id) is None:
         raise PersistenceError(f"session {session_id!r} not found in scope")
     rows = (
-        _scope(db, "agt_session_messages", org_id, agent_id)
+        _scope(
+            db,
+            "agt_session_messages",
+            org_id,
+            agent_id,
+            columns=MESSAGE_PROJECTION_COLUMNS,
+        )
         .eq("session_id", session_id)
         .order("seq")
         .execute()
@@ -266,7 +339,17 @@ def search_messages(
     terms = {t for t in query_text.lower().split() if t}
     if not terms:
         return []
-    rows = _scope(db, "agt_session_messages", org_id, agent_id).execute().data
+    rows = (
+        _scope(
+            db,
+            "agt_session_messages",
+            org_id,
+            agent_id,
+            columns=MESSAGE_SEARCH_COLUMNS,
+        )
+        .execute()
+        .data
+    )
     scored: list[tuple[int, dict]] = []
     for row in rows:
         haystack = set((row.get("search_text") or "").lower().split())
@@ -289,7 +372,7 @@ def create_job(
     created_by: str = "",
     workspace_id: str | None = None,
 ) -> dict:
-    ws = workspace_id or _require_scope(org_id, agent_id)
+    ws = _resolve_workspace(org_id, agent_id, workspace_id)
     now = _now_iso()
     row = {
         "org_id": org_id,
@@ -328,31 +411,44 @@ def record_fire(
 ) -> dict:
     """Record one durable fire of a job.
 
-    Duplicate identity is refused at this layer before insert: a
-    fire_key that already exists anywhere, or the same job firing
-    again for the same scheduled_for, raises DuplicateFireError.
-    The migration's UNIQUE constraints are the second layer for
-    writers that bypass this service.
+    Duplicate identity is refused at this layer before insert,
+    with targeted queries only (Rosa must-fix 2): an eq on
+    fire_key for the global-uniqueness check, and a scoped eq
+    on job_id + scheduled_for for the same-job check. No
+    unscoped table scan ever happens here. The migration's
+    UNIQUE constraints are the second layer for writers that
+    bypass this service.
     """
     ws = _require_scope(org_id, agent_id)
     job = get_job(db, org_id, agent_id, job_id)
     if job is None:
         raise PersistenceError(f"job {job_id!r} not found in scope")
-    all_fires = db.table("agt_job_fires").select("*").execute().data
-    for existing in all_fires:
-        if existing.get("fire_key") == stmt.fire_key:
-            raise DuplicateFireError(f"fire_key {stmt.fire_key!r} already recorded")
-        if (
-            existing.get("job_id") == job_id
-            and existing.get("scheduled_for") == stmt.scheduled_for
-        ):
-            raise DuplicateFireError(
-                f"job {job_id!r} already fired for {stmt.scheduled_for!r}"
-            )
+    by_key = (
+        db.table("agt_job_fires")
+        .select("id,fire_key")
+        .eq("fire_key", stmt.fire_key)
+        .limit(1)
+        .execute()
+        .data
+    )
+    if by_key:
+        raise DuplicateFireError(f"fire_key {stmt.fire_key!r} already recorded")
+    by_slot = (
+        _scope(db, "agt_job_fires", org_id, agent_id, columns="id,job_id,scheduled_for")
+        .eq("job_id", job_id)
+        .eq("scheduled_for", stmt.scheduled_for)
+        .limit(1)
+        .execute()
+        .data
+    )
+    if by_slot:
+        raise DuplicateFireError(
+            f"job {job_id!r} already fired for {stmt.scheduled_for!r}"
+        )
     row = {
         "org_id": org_id,
         "agent_identity_id": agent_id,
-        "workspace_id": job.get("workspace_id", ws),
+        "workspace_id": ws,
         "job_id": job_id,
         "fire_key": stmt.fire_key,
         "scheduled_for": stmt.scheduled_for,
@@ -408,15 +504,20 @@ def update_continuity(
         .data
     )
     now = _now_iso()
+    # Continuity fields are free text in a non-bronze table, so
+    # they pass through the same masking pipeline as message
+    # projections before storage (Rex finding F6).
+    masked_summary = mask_text(summary)
+    masked_items = [mask_text(item) for item in surfaced_item_ids]
     if existing_rows:
         current = existing_rows[0]
         merged = list(current.get("surfaced_item_ids") or [])
-        for item in surfaced_item_ids:
+        for item in masked_items:
             if item not in merged:
                 merged.append(item)
         payload = {
             "last_fire_id": last_fire_id,
-            "last_run_summary": summary,
+            "last_run_summary": masked_summary,
             "surfaced_item_ids": merged,
             "run_count": int(current.get("run_count", 0)) + 1,
             "last_run_at": now,
@@ -426,6 +527,9 @@ def update_continuity(
             db.table("agt_job_continuity")
             .update(payload)
             .eq("id", current["id"])
+            .eq("org_id", org_id)
+            .eq("agent_identity_id", agent_id)
+            .eq("workspace_id", ws)
             .execute()
             .data
         )
@@ -433,11 +537,11 @@ def update_continuity(
     row = {
         "org_id": org_id,
         "agent_identity_id": agent_id,
-        "workspace_id": job.get("workspace_id", ws),
+        "workspace_id": ws,
         "job_id": job_id,
         "last_fire_id": last_fire_id,
-        "last_run_summary": summary,
-        "surfaced_item_ids": list(dict.fromkeys(surfaced_item_ids)),
+        "last_run_summary": masked_summary,
+        "surfaced_item_ids": list(dict.fromkeys(masked_items)),
         "run_count": 1,
         "last_run_at": now,
         "created_at": now,
@@ -473,20 +577,29 @@ def stage_write(
     """Stage a proposed memory or skill write for the gate.
 
     The staged body is stored in masked projection shape only;
-    this table has no bronze column by design.
+    this table has no bronze column by design. The masking
+    pipeline covers the body AND the target fields: a raw
+    identifier in target_key or target_ref would otherwise sit
+    unmasked in a non-bronze table and become permanent memory
+    when B2 applies the write (Rex finding F5). B2's approve
+    path must re-run the same masking as defense in depth
+    before applying; the staging shape here stores nothing raw
+    for it to approve.
     """
-    ws = workspace_id or _require_scope(org_id, agent_id)
+    ws = _resolve_workspace(org_id, agent_id, workspace_id)
     now = _now_iso()
     row = {
         "org_id": org_id,
         "agent_identity_id": agent_id,
         "workspace_id": ws,
         "kind": stmt.kind,
-        "target_key": stmt.target_key,
-        "target_ref": stmt.target_ref,
+        "target_key": mask_text(stmt.target_key),
+        "target_ref": mask_text(stmt.target_ref) if stmt.target_ref else None,
         "pinned_target_hash": stmt.pinned_target_hash,
         "proposed_body_masked": mask_text(stmt.proposed_body),
-        "proposed_body_hash": hash_body(stmt.proposed_body),
+        "proposed_body_hash": hash_body(
+            stmt.proposed_body, org_id=org_id, agent_id=agent_id
+        ),
         "status": "pending",
         "staged_by": staged_by,
         "decided_by": None,

@@ -2,23 +2,34 @@
 
 Runs against a stateful in-memory Supabase stand-in in the house
 pattern (test_agentperms_service.py). Behaviors pinned here:
-- every read and write is scoped to (org, agent); another org or
-  agent sees nothing and can parent nothing across the boundary,
+- every read and write is scoped to (org, agent, workspace);
+  another org or agent sees nothing and can parent nothing
+  across the boundary, and a foreign workspace_id override is
+  refused (fix round, Rosa must-fix 1),
 - lineage: a child session points at its parent and a chain walk
   returns the full order, root first,
-- duplicate fire identity is rejected at the service layer (the
-  migration UNIQUE is the database layer, pinned separately),
-- message reads return the masked projection only; the raw body
-  lives in the bronze column and its hash matches at ingestion,
-- continuity merges surfaced ids without duplicates,
-- staged writes land pending, in masked shape only.
+- duplicate fire identity is rejected at the service layer via
+  targeted queries (the migration UNIQUE is the database layer,
+  pinned separately),
+- message reads AND the append return are the masked projection
+  only; the raw body lives in the bronze column, reachable only
+  via get_message_bronze, and its keyed hash matches at
+  ingestion (Rosa must-fix 3, Rex F1 and F4),
+- mask_text covers every TW-552 identifier category (Rex F3),
+- continuity merges surfaced ids without duplicates, with its
+  free-text fields masked like the projections (Rex F6),
+- staged writes land pending, body and target fields masked
+  (Rex F5).
 """
 
 import hashlib
+import os
 
 import pytest
 
-from app.persistence import models, service
+os.environ.setdefault("TWISTOR_PERSISTENCE_HASH_KEY", "tw949-test-key")
+
+from app.persistence import models, service  # noqa: E402
 
 ORG = "org-1"
 OTHER_ORG = "org-2"
@@ -170,15 +181,49 @@ class TestMessages:
         row = service.append_message(
             db, ORG, AGENT, session["id"], models.MessageAppend(role="user", body=body)
         )
-        assert row["body_hash"] == hashlib.sha256(body.encode()).hexdigest()
-        assert row["body_bronze"] == body
+        # The append return is the masked projection: no bronze,
+        # no raw search text, ever (Rosa must-fix 3, Rex F1).
+        assert "body_bronze" not in row
+        assert "search_text" not in row
+        # The hash is the keyed ingestion hash, never a bare
+        # SHA-256 of the body (Rex F4).
+        assert row["body_hash"] == models.hash_body(body, org_id=ORG, agent_id=AGENT)
+        assert row["body_hash"] != hashlib.sha256(body.encode()).hexdigest()
+        assert row["body_hash"].startswith("hmac-sha256:")
         assert "720-555-0142" not in row["body_masked"]
         assert "sam@example.com" not in row["body_masked"]
+        # Bronze storage is proven through the named audit path.
+        bronze = service.get_message_bronze(db, ORG, AGENT, row["id"])
+        assert bronze is not None and bronze["body_bronze"] == body
+        assert service.get_message_bronze(db, OTHER_ORG, AGENT, row["id"]) is None
         projections = service.list_messages(db, ORG, AGENT, session["id"])
         assert len(projections) == 1
         assert "body_bronze" not in projections[0]
         assert projections[0]["body_masked"] == row["body_masked"]
         assert projections[0]["seq"] == 1
+
+    def test_short_message_hash_is_not_dictionary_reversible(self, db):
+        # A body that IS one identifier: with a bare SHA-256 the
+        # shipped hash would equal sha256(identifier). Keyed, it
+        # must not (Rex F4 probe).
+        session = _session(db)
+        body = "720-555-0142"
+        row = service.append_message(
+            db, ORG, AGENT, session["id"], models.MessageAppend(role="user", body=body)
+        )
+        bare = hashlib.sha256(body.encode()).hexdigest()
+        assert row["body_hash"] != bare
+        assert not row["body_hash"].endswith(bare)
+        staged = service.stage_write(
+            db,
+            ORG,
+            AGENT,
+            models.StagedWriteCreate(
+                kind="memory", target_key="owner.phone", proposed_body=body
+            ),
+        )
+        assert staged["proposed_body_hash"] != bare
+        assert staged["proposed_body_hash"].startswith("hmac-sha256:")
 
     def test_seq_increments_and_explicit_duplicate_seq_refused(self, db):
         session = _session(db)
@@ -324,3 +369,202 @@ class TestStagedWrites:
     def test_unknown_kind_refused_at_model_layer(self):
         with pytest.raises(models.PersistenceError):
             models.StagedWriteCreate(kind="webhook", target_key="k", proposed_body="b")
+
+    def test_stage_write_masks_body_and_target_fields(self, db):
+        # Rex F5 probe: address, UEI and 7-digit phone in the
+        # body, raw email in the target key. None may be stored.
+        row = service.stage_write(
+            db,
+            ORG,
+            AGENT,
+            models.StagedWriteCreate(
+                kind="memory",
+                target_key="sam@example.com",
+                target_ref="reach sam@example.com at 555-0142",
+                proposed_body=(
+                    "Owner at 1259 S Dallas Ct, UEI K7X9P2QW4RT8, call 555-0142"
+                ),
+            ),
+            staged_by=AGENT,
+        )
+        stored = " ".join(
+            str(row[k] or "")
+            for k in ("target_key", "target_ref", "proposed_body_masked")
+        )
+        for secret in (
+            "sam@example.com",
+            "Dallas",
+            "K7X9P2QW4RT8",
+            "555-0142",
+            "1259",
+        ):
+            assert secret not in stored
+
+
+class TestWorkspaceScoping:
+    """Rosa must-fix 1 regression: the probe that failed the gate.
+
+    create_session(workspace_id='someone-elses-workspace') used
+    to succeed and the row was visible under the default scope.
+    """
+
+    def test_foreign_workspace_override_refused_on_create_session(self, db):
+        with pytest.raises(models.PersistenceError):
+            service.create_session(
+                db,
+                ORG,
+                AGENT,
+                models.SessionCreate(),
+                workspace_id="someone-elses-workspace",
+            )
+        assert service.list_sessions(db, ORG, AGENT) == []
+
+    def test_foreign_workspace_override_refused_on_job_and_stage(self, db):
+        with pytest.raises(models.PersistenceError):
+            service.create_job(
+                db,
+                ORG,
+                AGENT,
+                models.JobCreate(name="j", prompt="p"),
+                workspace_id="someone-elses-workspace",
+            )
+        with pytest.raises(models.PersistenceError):
+            service.stage_write(
+                db,
+                ORG,
+                AGENT,
+                models.StagedWriteCreate(
+                    kind="memory", target_key="k", proposed_body="b"
+                ),
+                workspace_id="someone-elses-workspace",
+            )
+
+    def test_matching_workspace_override_accepted(self, db):
+        ws = models.workspace_id_for(ORG, AGENT)
+        row = service.create_session(
+            db, ORG, AGENT, models.SessionCreate(), workspace_id=ws
+        )
+        assert row["workspace_id"] == ws
+
+    def test_row_stamped_with_foreign_workspace_is_invisible(self, db):
+        # A bypass writer stamps a row with the same org and
+        # agent but a foreign workspace: scoped reads filter on
+        # the derived workspace, so the row cannot be read back
+        # through this service at all.
+        foreign = {
+            "id": "agt_sessions-foreign",
+            "org_id": ORG,
+            "agent_identity_id": AGENT,
+            "workspace_id": "someone-elses-workspace",
+            "parent_session_id": None,
+            "channel": "chat",
+            "status": "active",
+            "title": "foreign",
+            "metadata": {},
+            "started_at": "2026-11-05T00:00:00+00:00",
+            "ended_at": None,
+            "created_at": "2026-11-05T00:00:00+00:00",
+            "updated_at": "2026-11-05T00:00:00+00:00",
+        }
+        db.tables.setdefault("agt_sessions", []).append(foreign)
+        assert service.get_session(db, ORG, AGENT, "agt_sessions-foreign") is None
+        assert service.list_sessions(db, ORG, AGENT) == []
+
+
+class TestFireTargetedQueries:
+    def test_duplicate_fire_key_across_scopes_still_rejected(self, db):
+        # fire_key uniqueness is global (migration UNIQUE), so
+        # the targeted eq check refuses a key recorded under
+        # another org instead of scanning or missing it.
+        job = _job(db)
+        service.record_fire(
+            db,
+            ORG,
+            AGENT,
+            job["id"],
+            models.FireCreate(fire_key="fire-1", scheduled_for="2026-11-05T07:00:00Z"),
+        )
+        other_job = _job(db, org=OTHER_ORG, name="other-scan")
+        with pytest.raises(models.DuplicateFireError):
+            service.record_fire(
+                db,
+                OTHER_ORG,
+                AGENT,
+                other_job["id"],
+                models.FireCreate(
+                    fire_key="fire-1", scheduled_for="2026-11-06T07:00:00Z"
+                ),
+            )
+
+
+class TestMaskingCategories:
+    """One pin per TW-552 category Rex probed (finding F3)."""
+
+    @pytest.mark.parametrize(
+        "body,secret",
+        [
+            ("mail sam@example.com today", "sam@example.com"),
+            ("mail sam @ example.com today", "example.com"),
+            ("mail sam at example dot com today", "example"),
+            ("office 1259 S Dallas Ct suite 4", "Dallas"),
+            ("office 4821 Elm Street", "Elm Street"),
+            ("mail to PO Box 1234 please", "PO Box 1234"),
+            ("born 03/15/1990 in Denver", "03/15/1990"),
+            ("born 1990-03-15 in Denver", "1990-03-15"),
+            ("born March 15, 1990 in Denver", "March 15"),
+            ("ssn 123-45-6789 on file", "123-45-6789"),
+            ("ssn 123 45 6789 on file", "123 45 6789"),
+            ("ein 12-3456789 on file", "12-3456789"),
+            ("call 720-555-0142 today", "720-555-0142"),
+            ("call (720) 555-0142 today", "555-0142"),
+            ("call 7205550142 today", "7205550142"),
+            ("call 555-0142 today", "555-0142"),
+            ("call 5550142 today", "5550142"),
+            ("zip 80247 on file", "80247"),
+            ("zip 80247-1234 on file", "80247"),
+            ("uei K7X9P2QW4RT8 on file", "K7X9P2QW4RT8"),
+            ("acct 123456789012 on file", "123456789012"),
+        ],
+    )
+    def test_category_is_masked(self, body, secret):
+        assert secret not in models.mask_text(body)
+
+    def test_ordinary_words_pass_through(self):
+        text = "the estimate followup is overdue and the crew is booked"
+        assert models.mask_text(text) == text
+
+
+class TestFreeTextMasking:
+    """Rex F6, same-pipeline half: non-message free text."""
+
+    def test_session_title_and_metadata_masked(self, db):
+        row = service.create_session(
+            db,
+            ORG,
+            AGENT,
+            models.SessionCreate(title="Call sam@example.com about 555-0142"),
+            metadata={"note": "owner ssn 123-45-6789", "count": 3},
+        )
+        assert "sam@example.com" not in row["title"]
+        assert "555-0142" not in row["title"]
+        assert "123-45-6789" not in row["metadata"]["note"]
+        assert row["metadata"]["count"] == 3
+
+    def test_continuity_summary_and_items_masked(self, db):
+        # Rex F6 probe: raw email and SSN into continuity.
+        job = _job(db)
+        row = service.update_continuity(
+            db,
+            ORG,
+            AGENT,
+            job["id"],
+            last_fire_id=None,
+            summary="Emailed sam@example.com about ssn 123-45-6789",
+            surfaced_item_ids=["sam@example.com", "lead-9"],
+        )
+        assert "sam@example.com" not in row["last_run_summary"]
+        assert "123-45-6789" not in row["last_run_summary"]
+        assert "sam@example.com" not in row["surfaced_item_ids"]
+        assert "lead-9" in row["surfaced_item_ids"]
+        fetched = service.get_continuity(db, ORG, AGENT, job["id"])
+        assert "sam@example.com" not in fetched["last_run_summary"]

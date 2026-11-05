@@ -19,14 +19,24 @@
 -- (B12 builds the contained file area on this key; B1 lands the
 -- column so no later migration has to retrofit scoping).
 -- The backend filters all three manually on every query
--- (service-role client bypasses RLS, database.py discipline).
+-- (service-role client bypasses RLS, database.py discipline),
+-- and refuses any caller-supplied workspace_id that differs
+-- from the key derived from (org_id, agent_identity_id)
+-- (TW-949 fix round, Rosa must-fix 1).
 --
 -- PII doctrine (medallion, TW-552): agt_session_messages stores
 -- the raw body ONLY in body_bronze (bronze layer, never returned
--- by any retrieval projection). body_hash is the SHA-256 of the
--- raw body at ingestion. body_masked and search_text are the
--- masked retrieval projection; the full-text index is built on
--- search_text (the masked projection), never on body_bronze.
+-- by any retrieval projection; retrieval queries select the
+-- projection columns only, and the append return is the masked
+-- projection, so bronze exits only via the named audit path).
+-- body_hash and agt_staged_writes.proposed_body_hash are KEYED
+-- hashes (HMAC-SHA256, key in the server environment only,
+-- never stored in any row; TW-949 fix round, Rex finding F4):
+-- a bare SHA-256 of a short body is dictionary-reversible and
+-- is not used anywhere in this schema's services. body_masked
+-- and search_text are the masked retrieval projection; the
+-- full-text index is built on search_text (the masked
+-- projection), never on body_bronze.
 --
 -- Idempotency shapes (house pattern, migration_toll_ledger.sql):
 -- a fire carries a durable fire_key, UNIQUE, so a retried or
@@ -34,6 +44,10 @@
 -- scheduled identity. (job_id, scheduled_for) is also UNIQUE:
 -- the same job cannot fire twice for the same scheduled minute
 -- (Core ScheduleStore same-minute no-double-fire contract).
+-- NOTE FOR THE B4 BUILDER: the global fire_key UNIQUE matches
+-- the toll-ledger idempotency precedent and stays, so B4 must
+-- namespace fire keys per job (for example job id plus the
+-- scheduled slot) when it mints them.
 --
 -- RLS: deny-all on every table (the agt_ house pattern from
 -- TW-768 / TW-710: service role only). No org policy is added

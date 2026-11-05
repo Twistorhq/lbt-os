@@ -6,15 +6,24 @@ All semantic validation raises PersistenceError raw, via the
 StrictBase pattern the neighboring ledgers use.
 
 PII posture (medallion, TW-552): hash_body is the ingestion
-hash; mask_text builds the masked retrieval projection. The raw
-body is stored by the service in the bronze column only and is
-never part of a projection dict (see service.message_projection).
+hash; it is a KEYED hash (HMAC-SHA256, TW-949 fix round, Rex
+finding F4): the key lives only in the server environment and
+never in any stored row, so a hash that ships in a retrieval
+projection cannot be dictionary-reversed against known
+identifier shapes the way a bare SHA-256 can. mask_text builds
+the masked retrieval projection. The raw body is stored by the
+service in the bronze column only and is never part of a
+projection dict (see service.message_projection).
 """
 
 from __future__ import annotations
 
 import hashlib
+import hmac
+import os
 import re
+import secrets
+import warnings
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -78,27 +87,135 @@ def workspace_id_for(org_id: str, agent_id: str) -> str:
     return f"{org_id}/{agent_id}"
 
 
-def hash_body(body: str) -> str:
-    """SHA-256 of the raw body, computed at ingestion."""
-    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+HASH_KEY_ENV = "TWISTOR_PERSISTENCE_HASH_KEY"
+
+_ephemeral_hash_key: bytes | None = None
+
+
+def _hash_key() -> bytes:
+    """The keyed-hash key. Server environment only; never stored.
+
+    Production (APP_ENV=production) fails closed when the key is
+    unset: an ephemeral key would rotate every restart and an
+    unsalted fallback would reopen the F4 oracle. Outside
+    production a per-process ephemeral key keeps dev and test
+    runs working while staying non-reversible to anyone who
+    does not hold the key.
+    """
+    global _ephemeral_hash_key
+    configured = os.environ.get(HASH_KEY_ENV)
+    if configured:
+        return configured.encode("utf-8")
+    if os.environ.get("APP_ENV") == "production":
+        raise PersistenceError(
+            f"{HASH_KEY_ENV} is not set; refusing to hash PII bodies "
+            "without the keyed-hash key in production"
+        )
+    if _ephemeral_hash_key is None:
+        _ephemeral_hash_key = secrets.token_bytes(32)
+        warnings.warn(
+            f"{HASH_KEY_ENV} is not set; using an ephemeral per-process "
+            "hash key. Stored hashes will not verify across restarts. "
+            "Set the key before any production use.",
+            stacklevel=2,
+        )
+    return _ephemeral_hash_key
+
+
+def hash_body(body: str, *, org_id: str = "", agent_id: str = "") -> str:
+    """Keyed ingestion hash of the raw body (HMAC-SHA256).
+
+    The org and agent scope is domain-separated into the MAC so
+    the same body in two scopes hashes differently. The returned
+    value is safe to ship in retrieval projections: without the
+    server key it cannot be reversed by dictionary attack, even
+    when the body is a single short identifier (Rex F4).
+    """
+    msg = f"agt-body-v1\x00{org_id}\x00{agent_id}\x00{body}".encode("utf-8")
+    digest = hmac.new(_hash_key(), msg, hashlib.sha256).hexdigest()
+    return f"hmac-sha256:{digest}"
 
 
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+_OBFUSCATED_EMAIL_RE = re.compile(
+    r"[A-Za-z0-9._%+-]+\s*(?:@|\[at\]|\(at\)|\bat\b)\s*"
+    r"[A-Za-z0-9-]+(?:\s*(?:\.|\[dot\]|\(dot\)|\bdot\b)\s*|\s*\.\s*)"
+    r"(?:com|net|org|io|co|gov|edu|us)\b",
+    re.IGNORECASE,
+)
+_SSN_RE = re.compile(r"\b\d{3}[- ]\d{2}[- ]\d{4}\b")
+_EIN_RE = re.compile(r"\b\d{2}-\d{7}\b")
+_ISO_DATE_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
+_SLASH_DATE_RE = re.compile(r"\b\d{1,2}/\d{1,2}/\d{2,4}\b")
+_DASH_DATE_RE = re.compile(r"\b\d{1,2}-\d{1,2}-\d{4}\b")
+_MONTHS = (
+    r"Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
+    r"Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|"
+    r"Nov(?:ember)?|Dec(?:ember)?"
+)
+_MONTH_DATE_RE = re.compile(
+    rf"\b(?:{_MONTHS})\s+\d{{1,2}}(?:st|nd|rd|th)?,?\s+\d{{4}}\b"
+    rf"|\b\d{{1,2}}(?:st|nd|rd|th)?\s+(?:{_MONTHS})\s+\d{{4}}\b",
+    re.IGNORECASE,
+)
+_PO_BOX_RE = re.compile(r"\bP\.?\s*O\.?\s*Box\s+\d+\b", re.IGNORECASE)
+_STREET_RE = re.compile(
+    r"\b\d{1,6}\s+(?:[A-Za-z0-9.'-]+\s+){1,4}?"
+    r"(?:Street|St|Avenue|Ave|Boulevard|Blvd|Road|Rd|Drive|Dr|Lane|Ln|"
+    r"Court|Ct|Place|Pl|Way|Terrace|Ter|Circle|Cir|Highway|Hwy|"
+    r"Parkway|Pkwy|Trail|Trl|Square|Sq)\b\.?",
+    re.IGNORECASE,
+)
+_UEI_RE = re.compile(
+    r"\b(?=[A-Z0-9]{12}\b)(?=[A-Z0-9]*\d)(?=[A-Z0-9]*[A-Z])[A-Z0-9]{12}\b"
+)
+_CAGE_RE = re.compile(
+    r"\b(?=[A-Z0-9]{5}\b)(?=[A-Z0-9]*\d)(?=[A-Z0-9]*[A-Z])[A-Z0-9]{5}\b"
+)
+_ZIP4_RE = re.compile(r"\b\d{5}-\d{4}\b")
+_PAREN_PHONE_RE = re.compile(r"\(\d{3}\)\s*\d{3}[-. ]\d{4}\b")
+_CONTIGUOUS_PHONE_RE = re.compile(r"\b(?:1\d{10}|\d{10})\b")
+_SEVEN_DIGIT_PHONE_RE = re.compile(r"\b\d{3}[-. ]\d{4}\b")
 _PHONE_RE = re.compile(r"\+?\d[\d .()-]{7,}\d")
 _LONG_DIGITS_RE = re.compile(r"\d{9,}")
+_BARE_SEVEN_RE = re.compile(r"\b\d{7}\b")
+_BARE_FIVE_RE = re.compile(r"\b\d{5}\b")
 
 
 def mask_text(text: str) -> str:
     """Masked retrieval projection of a raw body.
 
-    Deterministic and conservative: email addresses, phone-shaped
-    digit runs, and long digit runs (account and government id
-    shapes) are replaced. Ordinary words pass through so full-text
-    search over the projection stays useful.
+    Deterministic and conservative. Covers every identifier
+    category the TW-552 doctrine names (TW-949 fix round, Rex
+    finding F3): email addresses including obfuscated shapes,
+    street addresses and PO boxes, dates (birth dates included),
+    SSNs, EINs, phone numbers in full and 7-digit shapes, ZIP
+    codes, SAM.gov UEI values and other business identifier
+    shapes (long digit runs, CAGE-style codes). Ordinary words
+    pass through so full-text search over the projection stays
+    useful. Personal names are not regex-maskable reliably; that
+    needs NER and is tracked outside this function.
     """
     masked = _EMAIL_RE.sub("[email]", text)
-    masked = _PHONE_RE.sub("[phone]", masked)
+    masked = _OBFUSCATED_EMAIL_RE.sub("[email]", masked)
+    masked = _SSN_RE.sub("[ssn]", masked)
+    masked = _EIN_RE.sub("[ein]", masked)
+    masked = _ISO_DATE_RE.sub("[date]", masked)
+    masked = _SLASH_DATE_RE.sub("[date]", masked)
+    masked = _DASH_DATE_RE.sub("[date]", masked)
+    masked = _MONTH_DATE_RE.sub("[date]", masked)
+    masked = _PO_BOX_RE.sub("[address]", masked)
+    masked = _STREET_RE.sub("[address]", masked)
+    masked = _UEI_RE.sub("[uei]", masked)
+    masked = _CAGE_RE.sub("[id]", masked)
+    masked = _ZIP4_RE.sub("[zip]", masked)
+    masked = _PAREN_PHONE_RE.sub("[phone]", masked)
+    masked = _CONTIGUOUS_PHONE_RE.sub("[phone]", masked)
     masked = _LONG_DIGITS_RE.sub("[number]", masked)
+    masked = _PHONE_RE.sub("[phone]", masked)
+    masked = _SEVEN_DIGIT_PHONE_RE.sub("[phone]", masked)
+    masked = _BARE_SEVEN_RE.sub("[phone]", masked)
+    masked = _BARE_FIVE_RE.sub("[number]", masked)
     return masked
 
 
