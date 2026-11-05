@@ -4,7 +4,9 @@ Routes are live and authenticated. TW-660 implemented the core loop
 (groups, events, series, RSVPs, location reveal, gold listings);
 TW-673 added the check-in loop routes (arrival, host confirm,
 encounter confirms, welfare, completion, reviews, review summary).
-Reports still delegate to a service stub that answers an honest
+TW-940 implemented reports and the Safety Desk Minimum (triage,
+sanctions, bans, appeals, evidence, disclosures) under /safety.
+Profiles still delegate to a service stub that answers an honest
 501 until its phase lands. A stub must never pretend to work.
 
 Auth: Twistor Identity JWT (RS256), verified through the identity
@@ -442,3 +444,199 @@ def create_report(
     db: Client = Depends(get_db),
 ):
     return _call(service.create_report, db, UUID(claims["sub"]), payload)
+
+
+# ---------------------------------------------------------------------------
+# TW-940 Safety Desk Minimum. Authorization lives in the service
+# layer (rsn_safety_staff / rsn_ambassadors role rows, fail closed);
+# see service.py's Safety Desk section header for who may do what
+# and the per-action rsn_audit_log trail. Disclosure endpoints are
+# data only: nothing here sends anything externally.
+# ---------------------------------------------------------------------------
+
+
+@router.get("/safety/reports")
+@limiter.limit("300/minute")
+def list_report_queue(
+    request: Request,
+    status: str | None = None,
+    claims: dict = Depends(_verified_claims),
+    db: Client = Depends(get_db),
+):
+    return _call(service.list_report_queue, db, UUID(claims["sub"]), status=status)
+
+
+@router.post("/safety/reports/{report_id}/claim")
+@limiter.limit("60/minute")
+def claim_report(
+    request: Request,
+    report_id: UUID,
+    claims: dict = Depends(_verified_claims),
+    db: Client = Depends(get_db),
+):
+    return _call(service.claim_report, db, UUID(claims["sub"]), report_id)
+
+
+@router.post("/safety/reports/{report_id}/resolve")
+@limiter.limit("60/minute")
+def resolve_report(
+    request: Request,
+    report_id: UUID,
+    payload: models.ReportResolve,
+    claims: dict = Depends(_verified_claims),
+    db: Client = Depends(get_db),
+):
+    return _call(service.resolve_report, db, UUID(claims["sub"]), report_id, payload)
+
+
+@router.post("/safety/reports/{report_id}/sanctions", status_code=201)
+@limiter.limit("60/minute")
+def issue_sanction(
+    request: Request,
+    report_id: UUID,
+    payload: models.SanctionCreate,
+    claims: dict = Depends(_verified_claims),
+    db: Client = Depends(get_db),
+):
+    return _call(service.issue_sanction, db, UUID(claims["sub"]), report_id, payload)
+
+
+@router.post("/safety/reports/{report_id}/ban", status_code=201)
+@limiter.limit("60/minute")
+def issue_ban(
+    request: Request,
+    report_id: UUID,
+    payload: models.BanCreate,
+    claims: dict = Depends(_verified_claims),
+    db: Client = Depends(get_db),
+):
+    return _call(service.issue_ban, db, UUID(claims["sub"]), report_id, payload)
+
+
+@router.get("/safety/reports/{report_id}/disclosure")
+@limiter.limit("300/minute")
+def get_report_disclosure(
+    request: Request,
+    report_id: UUID,
+    claims: dict = Depends(_verified_claims),
+    db: Client = Depends(get_db),
+):
+    return _call(service.get_report_disclosure, db, UUID(claims["sub"]), report_id)
+
+
+@router.post("/safety/appeals", status_code=201)
+@limiter.limit("60/minute")
+def create_appeal(
+    request: Request,
+    payload: models.AppealCreate,
+    claims: dict = Depends(_verified_claims),
+    db: Client = Depends(get_db),
+):
+    return _call(service.create_appeal, db, UUID(claims["sub"]), payload)
+
+
+@router.get("/safety/appeals")
+@limiter.limit("300/minute")
+def list_appeals(
+    request: Request,
+    status: str | None = None,
+    claims: dict = Depends(_verified_claims),
+    db: Client = Depends(get_db),
+):
+    return _call(service.list_appeals, db, UUID(claims["sub"]), status=status)
+
+
+@router.post("/safety/appeals/{appeal_id}/acknowledge")
+@limiter.limit("60/minute")
+def acknowledge_appeal(
+    request: Request,
+    appeal_id: UUID,
+    claims: dict = Depends(_verified_claims),
+    db: Client = Depends(get_db),
+):
+    return _call(service.acknowledge_appeal, db, UUID(claims["sub"]), appeal_id)
+
+
+@router.post("/safety/appeals/{appeal_id}/decision")
+@limiter.limit("60/minute")
+def decide_appeal(
+    request: Request,
+    appeal_id: UUID,
+    payload: models.AppealDecision,
+    claims: dict = Depends(_verified_claims),
+    db: Client = Depends(get_db),
+):
+    return _call(service.decide_appeal, db, UUID(claims["sub"]), appeal_id, payload)
+
+
+@router.post("/safety/evidence", status_code=201)
+@limiter.limit("60/minute")
+def create_evidence_packet(
+    request: Request,
+    payload: models.EvidencePacketCreate,
+    claims: dict = Depends(_verified_claims),
+    db: Client = Depends(get_db),
+):
+    return _call(service.create_evidence_packet, db, UUID(claims["sub"]), payload)
+
+
+@router.get("/safety/evidence/{packet_id}")
+@limiter.limit("300/minute")
+def get_evidence_packet(
+    request: Request,
+    packet_id: UUID,
+    claims: dict = Depends(_verified_claims),
+    db: Client = Depends(get_db),
+):
+    return _call(service.get_evidence_packet, db, UUID(claims["sub"]), packet_id)
+
+
+@router.post("/safety/evidence/{packet_id}/items", status_code=201)
+@limiter.limit("60/minute")
+def attach_evidence(
+    request: Request,
+    packet_id: UUID,
+    payload: models.EvidenceItemIn,
+    claims: dict = Depends(_verified_claims),
+    db: Client = Depends(get_db),
+):
+    return _call(service.attach_evidence, db, UUID(claims["sub"]), packet_id, payload)
+
+
+@router.post("/safety/evidence/{packet_id}/legal-hold")
+@limiter.limit("60/minute")
+def set_evidence_legal_hold(
+    request: Request,
+    packet_id: UUID,
+    payload: models.LegalHoldIn,
+    claims: dict = Depends(_verified_claims),
+    db: Client = Depends(get_db),
+):
+    return _call(
+        service.set_evidence_legal_hold, db, UUID(claims["sub"]), packet_id, payload
+    )
+
+
+@router.post("/safety/disclosures", status_code=201)
+@limiter.limit("60/minute")
+def create_disclosure(
+    request: Request,
+    payload: models.DisclosureCreate,
+    claims: dict = Depends(_verified_claims),
+    db: Client = Depends(get_db),
+):
+    return _call(service.create_disclosure, db, UUID(claims["sub"]), payload)
+
+
+@router.post("/safety/disclosures/{disclosure_id}/decision")
+@limiter.limit("60/minute")
+def decide_disclosure(
+    request: Request,
+    disclosure_id: UUID,
+    payload: models.DisclosureDecision,
+    claims: dict = Depends(_verified_claims),
+    db: Client = Depends(get_db),
+):
+    return _call(
+        service.decide_disclosure, db, UUID(claims["sub"]), disclosure_id, payload
+    )

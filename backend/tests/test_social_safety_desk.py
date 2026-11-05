@@ -35,14 +35,14 @@ Authorization model (documented for Rosa / Rex):
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
+from test_social_core_loop import NOW, FakeDb, add_member
 
 from app.social import models, service
-from test_social_core_loop import NOW, FakeDb, add_member
 
 LATER = NOW + timedelta(hours=1)
 
@@ -469,8 +469,7 @@ class TestSanctions:
         events = [
             e
             for e in db.rows("rsn_trust_events")
-            if e["user_id"] == subject
-            and e["event_type"] == "report_substantiated"
+            if e["user_id"] == subject and e["event_type"] == "report_substantiated"
         ]
         assert len(events) == 1
 
@@ -494,8 +493,9 @@ class TestSanctions:
         sanction(
             db, staff, report, action="suspend", expires_at=NOW + timedelta(hours=24)
         )
-        ctx = service.get_member_context(db, UUID(subject))
+        ctx = service.get_member_context(db, UUID(subject), now=NOW)
         assert ctx.can_write is False
+        assert ctx.suspended_until == NOW + timedelta(hours=24)
         with pytest.raises(service.ForbiddenError):
             service.create_group(
                 db,
@@ -510,8 +510,11 @@ class TestSanctions:
                 now=NOW,
             )
         # After expiry the sanction no longer binds.
-        ctx = service.get_member_context(db, UUID(subject))
-        assert ctx.suspended_until == NOW + timedelta(hours=24)
+        ctx = service.get_member_context(
+            db, UUID(subject), now=NOW + timedelta(hours=25)
+        )
+        assert ctx.suspended is False
+        assert ctx.can_write is True
 
     def test_restriction_blocks_hosting(self):
         db = FakeDb()
@@ -778,9 +781,7 @@ class TestEvidence:
             service.create_evidence_packet(
                 db,
                 UUID(staff),
-                models.EvidencePacketCreate(
-                    case_type="report", case_ref=str(uuid4())
-                ),
+                models.EvidencePacketCreate(case_type="report", case_ref=str(uuid4())),
                 now=NOW,
             )
 
@@ -790,7 +791,9 @@ class TestEvidence:
         created = packet(db, staff, report)
         assert created["retention_until"] is not None
         first = attach(db, staff, created["id"])
-        second = attach(db, staff, created["id"], ref="rsn_checkins/row-9", digest="b" * 64)
+        second = attach(
+            db, staff, created["id"], ref="rsn_checkins/row-9", digest="b" * 64
+        )
         items = second["snapshot_manifest"]["items"]
         assert len(items) == 2
         assert items[1]["prev_hash"] == items[0]["item_hash"]
@@ -958,9 +961,7 @@ class TestExternalDisclosures:
 class TestMigrationV3File:
     def test_v3_declares_staff_table_and_desk_columns(self):
         sql = (
-            Path(__file__).resolve().parents[2]
-            / "supabase"
-            / "migration_social_v3.sql"
+            Path(__file__).resolve().parents[2] / "supabase" / "migration_social_v3.sql"
         ).read_text()
         for needle in (
             "rsn_safety_staff",

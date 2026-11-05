@@ -385,6 +385,156 @@ class ReportCreate(_Strict):
         return _non_blank(v, "description")
 
 
+# ---------------------------------------------------------------------------
+# TW-940 Safety Desk Minimum. Vocabularies mirror migration_social_v1
+# plus migration_social_v3 (UNAPPLIED): rsn_sanctions gains the
+# 'strike' and 'suspension' levels the desk issues; 'warning' and
+# 'restriction' remain the ladder rungs from safety.py.
+# ---------------------------------------------------------------------------
+
+ReportCategory = Literal[
+    "harassment",
+    "identity_mismatch",
+    "unsafe_behavior",
+    "fraud",
+    "age_misrating",
+    "threats",
+    "sexual_misconduct",
+    "identity_fraud",
+    "other_serious",
+]
+
+
+class ReportResolve(_Strict):
+    """Triage resolution. 'escalated' is not a terminal status: it
+    returns the case to the staff queue unassigned (ambassadors use
+    it for anything beyond their bounded decisions)."""
+
+    outcome: Literal["actioned", "unfounded", "escalated"]
+    note: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("note")
+    @classmethod
+    def _check_note(cls, v: str) -> str:
+        return _non_blank(v, "note")
+
+
+class SanctionCreate(_Strict):
+    """One sanction action on a claimed report case. The desk
+    vocabulary is the ticket's: strike, suspend, restrict. Stored
+    levels: strike -> 'strike' (plus an identity_strike trust
+    event), suspend -> 'suspension' (expires_at required, capped
+    at 72 hours by the service, Section 6.2), restrict ->
+    'restriction'. 'purge' is never issuable here: it belongs to
+    the Section 6.7 integrity pipeline only."""
+
+    action: Literal["strike", "suspend", "restrict"]
+    reason_category: ReportCategory
+    note: str | None = Field(default=None, max_length=2000)
+    expires_at: datetime | None = None
+
+
+class BanCreate(_Strict):
+    """The identity-anchored ban (rsn_bans). safety_lead only."""
+
+    scope: Literal["platform", "group"] = "platform"
+    group_id: UUID | None = None
+    reason_category: ReportCategory
+    note: str | None = Field(default=None, max_length=2000)
+    evidence_packet_ref: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def _check_scope(self) -> "BanCreate":
+        if self.scope == "group" and self.group_id is None:
+            raise ValueError("a group-scope ban requires group_id")
+        if self.scope == "platform" and self.group_id is not None:
+            raise ValueError("a platform ban must not carry group_id")
+        return self
+
+
+class AppealCreate(_Strict):
+    """Appeal intake. The appellant is the token subject, never a
+    body field; the service binds the target to the appellant."""
+
+    target_type: Literal["sanction", "ban"]
+    target_id: UUID
+    statement: str = Field(min_length=1, max_length=4000)
+
+    @field_validator("statement")
+    @classmethod
+    def _check_statement(cls, v: str) -> str:
+        return _non_blank(v, "statement")
+
+
+class AppealDecision(_Strict):
+    """Fresh-reviewer decision. 'modified' applies to sanctions
+    only and requires the replacement level."""
+
+    decision: Literal["upheld", "overturned", "modified"]
+    outcome_note: str = Field(min_length=1, max_length=2000)
+    modified_level: Literal["warning", "restriction", "strike", "suspension"] | None = (
+        None
+    )
+
+    @field_validator("outcome_note")
+    @classmethod
+    def _check_outcome_note(cls, v: str) -> str:
+        return _non_blank(v, "outcome_note")
+
+
+class EvidencePacketCreate(_Strict):
+    case_type: Literal["report", "ban"]
+    case_ref: str = Field(min_length=1, max_length=200)
+    retention_days: int = Field(default=365, ge=30, le=3650)
+
+
+class EvidenceItemIn(_Strict):
+    """Attach one retained evidence record to a packet. The item
+    itself lives in its source system; the packet retains its
+    reference plus the sha256 of its content, hash-chained into
+    the packet manifest by the service."""
+
+    kind: Literal[
+        "report_text",
+        "checkin_record",
+        "review",
+        "message_export",
+        "location_reveal_log",
+        "staff_note",
+        "external_document",
+        "other",
+    ]
+    ref: str = Field(min_length=1, max_length=500)
+    content_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class LegalHoldIn(_Strict):
+    legal_hold: bool
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class DisclosureCreate(_Strict):
+    """External (legal) disclosure intake: a record only. Nothing
+    is sent anywhere by this workflow; a safety_lead decision sets
+    disclosed_at when the disclosure actually happens off-system."""
+
+    packet_id: UUID
+    request_type: Literal["subpoena", "court_order", "warrant", "emergency"]
+    requesting_agency: str = Field(min_length=1, max_length=200)
+    scope_note: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("requesting_agency", "scope_note")
+    @classmethod
+    def _check_text(cls, v: str) -> str:
+        return _non_blank(v, "field")
+
+
+class DisclosureDecision(_Strict):
+    decision: Literal["disclose", "deny"]
+    scope_note: str | None = Field(default=None, max_length=2000)
+
+
 class TrustEventIn(_Strict):
     user_id: UUID
     event_type: Literal[
