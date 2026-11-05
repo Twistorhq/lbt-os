@@ -146,9 +146,7 @@ class TestFeedVisibility:
         with pytest.raises(service.NotFoundError):
             service.get_post(db, outsider, post["id"])
 
-    def test_under_band_member_cannot_see_post_inheriting_group_rating(
-        self, db, host
-    ):
+    def test_under_band_member_cannot_see_post_inheriting_group_rating(self, db, host):
         adults = make_group(db, host, min_age_band="age_21_plus", slug="adults-21")
         post = make_post(db, host, adults)
         younger = add_member(db, band="age_18_20")
@@ -156,8 +154,12 @@ class TestFeedVisibility:
         # (fail-closed beats the membership table).
         db.seed(
             "rsn_group_memberships",
-            {"group_id": adults["id"], "user_id": younger, "role": "member",
-             "status": "active"},
+            {
+                "group_id": adults["id"],
+                "user_id": younger,
+                "role": "member",
+                "status": "active",
+            },
         )
         assert service.list_feed(db, younger, now=NOW) == []
         with pytest.raises(service.NotFoundError):
@@ -177,9 +179,7 @@ class TestFeedVisibility:
     ):
         friend = add_member(db)
         join(db, group, friend)
-        db.seed(
-            "rsn_close_friends", {"owner_id": host, "friend_id": friend}
-        )
+        db.seed("rsn_close_friends", {"owner_id": host, "friend_id": friend})
         post = make_post(db, host, group, audience_scope="close_friends")
         assert service.list_feed(db, member, now=NOW) == []
         feed = service.list_feed(db, friend, now=NOW)
@@ -262,7 +262,10 @@ class TestComments:
     def test_member_comments_and_counts(self, db, host, group, member):
         post = make_post(db, host, group)
         out = service.create_comment(
-            db, member, post["id"], models.CommentCreate(body="See you there."),
+            db,
+            member,
+            post["id"],
+            models.CommentCreate(body="See you there."),
             now=NOW,
         )
         assert out["status"] == "published"
@@ -283,8 +286,11 @@ class TestComments:
         outsider = add_member(db)
         with pytest.raises(service.NotFoundError):
             service.create_comment(
-                db, outsider, post["id"],
-                models.CommentCreate(body="let me in"), now=NOW,
+                db,
+                outsider,
+                post["id"],
+                models.CommentCreate(body="let me in"),
+                now=NOW,
             )
 
     def test_held_comment_hidden_from_others_tombstone_for_author(
@@ -292,7 +298,10 @@ class TestComments:
     ):
         post = make_post(db, host, group)
         comment = service.create_comment(
-            db, member, post["id"], models.CommentCreate(body="borderline"),
+            db,
+            member,
+            post["id"],
+            models.CommentCreate(body="borderline"),
             now=NOW,
         )
         row = db.rows("rsn_comments")[0]
@@ -365,12 +374,13 @@ class TestFeedReports:
         )
         assert out["triage_queue"] == "staff"
 
-    def test_report_on_comment_resolves_comment_author(
-        self, db, host, group, member
-    ):
+    def test_report_on_comment_resolves_comment_author(self, db, host, group, member):
         post = make_post(db, host, group)
         comment = service.create_comment(
-            db, member, post["id"], models.CommentCreate(body="spam links"),
+            db,
+            member,
+            post["id"],
+            models.CommentCreate(body="spam links"),
             now=NOW,
         )
         out = service.create_report(

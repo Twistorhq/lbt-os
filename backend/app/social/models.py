@@ -385,6 +385,44 @@ class ReportCreate(_Strict):
         return _non_blank(v, "description")
 
 
+POST_TYPES = ("update", "celebration", "event_recap")
+REACTION_KINDS = ("like", "congrats", "celebrate")
+
+
+class PostCreate(_Strict):
+    """A feed post (TW-941). The post carries no age rating of its
+    own: visibility inherits its container's rating (spec Section
+    4). Members create `update` posts; `celebration` and
+    `event_recap` are accepted by the model so the service layer
+    can refuse them as system-generated, never silently downgrade
+    them to an update."""
+
+    group_id: UUID | None = None
+    body: str = Field(min_length=1, max_length=4000)
+    media_refs: list[str] = Field(default_factory=list)
+    post_type: Literal["update", "celebration", "event_recap"] = "update"
+    visibility: Literal["group", "metro", "connections"] = "group"
+    audience_scope: AudienceScope = "group"
+
+    @field_validator("body")
+    @classmethod
+    def _check_body(cls, v: str) -> str:
+        return _non_blank(v, "body")
+
+
+class CommentCreate(_Strict):
+    body: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("body")
+    @classmethod
+    def _check_body(cls, v: str) -> str:
+        return _non_blank(v, "body")
+
+
+class ReactionCreate(_Strict):
+    kind: Literal["like", "congrats", "celebrate"]
+
+
 class TrustEventIn(_Strict):
     user_id: UUID
     event_type: Literal[

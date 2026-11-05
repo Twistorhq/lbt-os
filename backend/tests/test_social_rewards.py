@@ -256,8 +256,11 @@ class TestRewardsService:
         for _ in range(3):
             db.seed(
                 "rsn_vouches",
-                {"voucher_id": str(uuid4()), "vouchee_id": uid,
-                 "event_id": str(uuid4())},
+                {
+                    "voucher_id": str(uuid4()),
+                    "vouchee_id": uid,
+                    "event_id": str(uuid4()),
+                },
             )
         out = service.get_my_rewards(db, uid, now=NOW)
         assert out["tier"] == "fixture"
@@ -270,8 +273,11 @@ class TestRewardsService:
         for _ in range(3):
             db.seed(
                 "rsn_vouches",
-                {"voucher_id": str(uuid4()), "vouchee_id": uid,
-                 "event_id": str(uuid4())},
+                {
+                    "voucher_id": str(uuid4()),
+                    "vouchee_id": uid,
+                    "event_id": str(uuid4()),
+                },
             )
         for _ in range(15):
             _seed_review(db, uid)
