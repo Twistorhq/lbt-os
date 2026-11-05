@@ -260,6 +260,18 @@ def resume_job(
     markers) defeats the B5 gate. A review job resumes ONLY
     through recovery.resume_after_review, which reconciles
     first; this refusal is what makes that gate the only door.
+
+    Rex TW-953 F2c (defense in depth, status-independent): ANY
+    job carrying an interrupted fire is refused here, whatever
+    its status. The reaper moves blocked jobs to review too,
+    but this check does not depend on the reaper having run:
+    a blocked (or paused) job whose fire was parked interrupted
+    without the job transition (pre-fix data, the stale-snapshot
+    race that flips review to blocked) holds the same unknown
+    outcomes, so the plain resume is the same bypass. A blocked
+    job with NO interrupted fire (the normal owner-fixes-the-
+    definition flow) and a job whose fires are all terminal
+    resume here exactly as before.
     """
     job = _require_job(db, org_id, agent_id, job_id)
     if job.get("status") == "review":
@@ -274,6 +286,18 @@ def resume_job(
         # the remove-then-resume bypass chain).
         raise AgentJobError(
             f"job {job_id!r} is archived; an archived job is terminal and cannot resume"
+        )
+    interrupted = [
+        f
+        for f in list_fires_for_job(db, org_id, agent_id, job_id)
+        if f.get("status") == "interrupted"
+    ]
+    if interrupted:
+        raise AgentJobError(
+            f"job {job_id!r} has an interrupted fire "
+            f"({interrupted[0].get('id')!r}); it resumes only via "
+            "resume-after-review, after reconciliation clears its "
+            "interrupted fire"
         )
     return _resume_job(db, org_id, agent_id, job, now=now)
 

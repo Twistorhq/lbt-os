@@ -13,7 +13,12 @@ staleness threshold is parked as 'interrupted' (a conditional
 transition, so a fire that finished in the meantime is never
 touched) and its job is paused for review (status 'review':
 the ticker scans 'active' only, so a job in review NEVER
-auto-resumes and never fires again on its own). Parked fires
+auto-resumes and never fires again on its own). The move into
+review is status-independent (Rex TW-953 F2c): it lands from
+'active', 'paused', AND 'blocked', because a job blocked while
+its fire was still fresh (a tick preflight block, a failed
+trigger preflight) is exactly the job whose stranded fire goes
+stale next. Parked fires
 get exactly one owner alert, keyed to the durable transition:
 reaping twice parks nothing the second time and alerts nobody.
 
@@ -94,7 +99,7 @@ def reap_stranded_fires(
         if updated is None or updated.get("status") != "interrupted":
             continue  # lost the race with a live finish; not ours to park
         job = service.get_job(db, org_id, agent_id, fire.get("job_id"))
-        if job is not None and job.get("status") in ("active", "paused"):
+        if job is not None and job.get("status") in ("active", "paused", "blocked"):
             service._update_job_row(
                 db,
                 org_id,
@@ -171,16 +176,33 @@ def resume_after_review(
     jobs by design (Rex F2), and this gated path is the one
     door it leaves open. The interrupted fire rows stay
     interrupted: they are history, not work to redo.
+
+    Rex TW-953 F2c (the door half of the defense in depth): the
+    gate is keyed to the interrupted fire, not only to the
+    'review' status. A job that carries an interrupted fire but
+    never entered review (blocked at reap time on pre-fix data,
+    or flipped out of review by the stale-snapshot race) resumes
+    through this same reconciliation gate: service.resume_job
+    refuses it, and this door is what remains. An archived job
+    stays terminal even with an interrupted fire, and a job with
+    no interrupted fire keeps the original refusal: ordinary
+    blocked or paused jobs resume via the plain path, not here.
     """
     job = service.get_job(db, org_id, agent_id, job_id)
     if job is None:
         raise AgentJobError(f"job {job_id!r} not found in scope")
-    if job.get("status") != "review":
+    fires = service.list_fires_for_job(db, org_id, agent_id, job_id)
+    has_interrupted = any(f.get("status") == "interrupted" for f in fires)
+    if job.get("status") == "archived":
+        raise AgentJobError(
+            f"job {job_id!r} is archived; an archived job is terminal "
+            "and cannot resume, even through reconciliation"
+        )
+    if job.get("status") != "review" and not has_interrupted:
         raise AgentJobError(
             f"job {job_id!r} is {job.get('status')!r}; "
             "only a job paused for review resumes through reconciliation"
         )
-    fires = service.list_fires_for_job(db, org_id, agent_id, job_id)
     reports = []
     untolled: list[str] = []
     for fire in fires:
