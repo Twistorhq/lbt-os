@@ -174,6 +174,12 @@ def run_steps(
                 source_type="agt_job_fire",
                 source_id=ctx.fire_id,
             )
+    # Re-check the fence AFTER the final step too: the loop only
+    # checks before each step, so a cancel landing inside the
+    # last step would otherwise be missed and the run reported
+    # completed (Rosa MF2 / Rex F2).
+    if outcome.status != "cancelled" and fenced():
+        outcome.status = "cancelled"
     outcome.surfaced_item_ids = surfaced
     return outcome
 

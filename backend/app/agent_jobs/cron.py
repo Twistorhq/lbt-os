@@ -20,7 +20,14 @@ _MAX_SEARCH_DAYS = 366 * 5  # a Feb-29-only schedule still resolves
 
 
 def _parse_field(component: str, lo: int, hi: int) -> set[int]:
-    """Parse one five-field-cron component: *, */n, a-b, a,b, single."""
+    """Parse one five-field-cron component: *, */n, a-b, a,b, single.
+
+    Step semantics are Vixie: a step anchors at the START of its
+    span, not at the field low bound. ``9-17/2`` is
+    {9, 11, 13, 15, 17}; a bare value with a step spans
+    value..hi, so ``5/15`` in minutes is {5, 20, 35, 50};
+    ``*/n`` spans lo..hi anchored at lo.
+    """
     values: set[int] = set()
     for part in component.split(","):
         part = part.strip()
@@ -32,8 +39,15 @@ def _parse_field(component: str, lo: int, hi: int) -> set[int]:
                 step = int(step_s)
                 if step <= 0:
                     raise AgentJobError(f"cron step must be positive in {component!r}")
-                span = range(lo, hi + 1) if base == "*" else _parse_field(base, lo, hi)
-                values.update(v for v in span if (v - lo) % step == 0)
+                if base == "*":
+                    values.update(range(lo, hi + 1, step))
+                elif "-" in base:
+                    a_s, b_s = base.split("-", 1)
+                    a, b = int(a_s), int(b_s)
+                    values.update(range(a, b + 1, step))
+                else:
+                    start = int(base)
+                    values.update(range(start, hi + 1, step))
             elif part == "*":
                 values.update(range(lo, hi + 1))
             elif "-" in part:

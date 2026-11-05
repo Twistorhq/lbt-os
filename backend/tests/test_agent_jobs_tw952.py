@@ -505,7 +505,7 @@ class TestTicker:
                 bad["id"] + ":"
             ):
                 raise RuntimeError(
-                    'duplicate key value violates unique constraint '
+                    "duplicate key value violates unique constraint "
                     '"agt_job_fires_fire_key_key" (SQLSTATE 23505)'
                 )
 

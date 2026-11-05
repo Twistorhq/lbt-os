@@ -323,27 +323,53 @@ def get_fire(db: Any, org_id: str, agent_id: str, fire_id: str) -> dict | None:
 
 
 def update_fire(
-    db: Any, org_id: str, agent_id: str, fire_id: str, **fields: Any
+    db: Any,
+    org_id: str,
+    agent_id: str,
+    fire_id: str,
+    *,
+    from_statuses: tuple[str, ...] | None = None,
+    **fields: Any,
 ) -> dict | None:
     """The one fire writer. summary and error pass through the
     persistence masking pipeline on write (req b), always, so no
-    caller can store a raw identifier on a fire row."""
+    caller can store a raw identifier on a fire row.
+
+    When ``from_statuses`` is given the write is a CONDITIONAL
+    transition: it lands only while the fire is still in one of
+    those statuses (an atomic ``in_`` filter on the real client;
+    a checked fallback on builders without ``in_``). Terminal
+    and cancel writes pass ("pending", "running") so neither can
+    overwrite a fire that already reached a terminal state, in
+    particular a cancelled fire (Rosa MF2 / Rex F2). A refused
+    transition returns the current row unchanged.
+    """
     payload = dict(fields)
     if isinstance(payload.get("summary"), str):
         payload["summary"] = mask_text(payload["summary"])
     if isinstance(payload.get("error"), str):
         payload["error"] = mask_text(payload["error"])
-    updated = (
+    query = (
         db.table("agt_job_fires")
         .update(payload)
         .eq("id", fire_id)
         .eq("org_id", org_id)
         .eq("agent_identity_id", agent_id)
         .eq("workspace_id", workspace_id_for(org_id, agent_id))
-        .execute()
-        .data
     )
-    return updated[0] if updated else None
+    if from_statuses is not None:
+        if hasattr(query, "in_"):
+            query = query.in_("status", list(from_statuses))
+        else:
+            current = get_fire(db, org_id, agent_id, fire_id)
+            if current is None or current.get("status") not in from_statuses:
+                return current
+    updated = query.execute().data
+    if updated:
+        return updated[0]
+    if from_statuses is not None:
+        return get_fire(db, org_id, agent_id, fire_id)
+    return None
 
 
 def cancel_run(
@@ -377,6 +403,7 @@ def cancel_run(
         org_id,
         agent_id,
         fire_id,
+        from_statuses=("pending", "running"),
         status="cancelled",
         finished_at=_iso(_now()),
     )
@@ -415,7 +442,13 @@ def fire_job(
         raise
     fire_id = fire["id"]
     update_fire(
-        db, org_id, agent_id, fire_id, status="running", started_at=_iso(_now())
+        db,
+        org_id,
+        agent_id,
+        fire_id,
+        from_statuses=("pending",),
+        status="running",
+        started_at=_iso(_now()),
     )
     continuity = psvc.get_continuity(db, org_id, agent_id, job_id) or {}
     ctx = build_execution_context(
@@ -444,11 +477,28 @@ def fire_job(
             ctx, steps, toll_sink=toll_sink, db=db, fence_check=fence_check
         )
     except Exception as exc:  # masked at the writer; reported, not hidden
+        # A cancel that landed while the failing step ran wins
+        # over the failure write, same fence rule as the success
+        # path below.
+        if fence_check(fire_id):
+            return {
+                "fire_id": fire_id,
+                "fire_key": fire_key,
+                "job_id": job_id,
+                "status": "cancelled",
+                "summary": "",
+                "error": None,
+                "surfaced_item_ids": [],
+                "task_id": None,
+                "completed_steps": [],
+                "trigger": trigger,
+            }
         update_fire(
             db,
             org_id,
             agent_id,
             fire_id,
+            from_statuses=("pending", "running"),
             status="failed",
             error=str(exc),
             finished_at=_iso(_now()),
@@ -466,17 +516,74 @@ def fire_job(
             "completed_steps": [],
             "trigger": trigger,
         }
+    # Re-check the fence after run_steps, before ANY terminal
+    # write: run_steps checks before each step, so a cancel
+    # landing inside the FINAL step is only visible here (Rosa
+    # MF2 / Rex F2). A fenced fire stays cancelled in the record,
+    # its terminal write is a conditional no-op against the
+    # cancelled row, and continuity is NOT updated from it.
+    if fence_check(fire_id):
+        outcome.status = "cancelled"
+        terminal = update_fire(
+            db,
+            org_id,
+            agent_id,
+            fire_id,
+            from_statuses=("pending", "running"),
+            status="cancelled",
+            summary=outcome.summary,
+            finished_at=_iso(_now()),
+        )
+        # When cancel_run already wrote the row, the conditional
+        # write above returns that cancelled row untouched; when
+        # only the in-process fence was set, it lands cancelled.
+        _ = terminal
+        return {
+            "fire_id": fire_id,
+            "fire_key": fire_key,
+            "job_id": job_id,
+            "status": "cancelled",
+            "summary": outcome.summary,
+            "surfaced_item_ids": outcome.surfaced_item_ids,
+            "task_id": outcome.task_id,
+            "completed_steps": outcome.completed_steps,
+            "trigger": trigger,
+        }
     if outcome.task_id:
-        update_fire(db, org_id, agent_id, fire_id, task_id=outcome.task_id)
-    update_fire(
+        update_fire(
+            db,
+            org_id,
+            agent_id,
+            fire_id,
+            from_statuses=("pending", "running"),
+            task_id=outcome.task_id,
+        )
+    terminal = update_fire(
         db,
         org_id,
         agent_id,
         fire_id,
+        from_statuses=("pending", "running"),
         status=outcome.status,
         summary=outcome.summary,
         finished_at=_iso(_now()),
     )
+    if terminal is not None and terminal.get("status") == "cancelled":
+        # Lost a race with cancel_run between the fence check
+        # and the terminal write: the conditional transition was
+        # refused, the record stays cancelled, and continuity
+        # must not be updated from a cancelled run.
+        return {
+            "fire_id": fire_id,
+            "fire_key": fire_key,
+            "job_id": job_id,
+            "status": "cancelled",
+            "summary": outcome.summary,
+            "surfaced_item_ids": outcome.surfaced_item_ids,
+            "task_id": outcome.task_id,
+            "completed_steps": outcome.completed_steps,
+            "trigger": trigger,
+        }
     psvc.update_continuity(
         db,
         org_id,

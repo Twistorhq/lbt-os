@@ -402,6 +402,25 @@ def list_jobs(db: Any, org_id: str, agent_id: str) -> list[dict]:
     return _scope(db, "agt_jobs", org_id, agent_id).order("created_at").execute().data
 
 
+def _is_unique_violation(exc: Exception) -> bool:
+    """True for a real Postgres UNIQUE violation (Rex F4, TW-952).
+
+    PostgREST surfaces SQLSTATE 23505 on the exception's ``code``
+    attribute and/or in its text as ``duplicate key``; check both
+    (plus the 23505 / unique-constraint spellings the house
+    toll/telemetry layers already match on).
+    """
+    if getattr(exc, "code", None) == "23505":
+        return True
+    text = str(exc).lower()
+    return (
+        "23505" in text
+        or "duplicate key" in text
+        or "unique constraint" in text
+        or "unique violation" in text
+    )
+
+
 def record_fire(
     db: Any,
     org_id: str,
@@ -417,7 +436,9 @@ def record_fire(
     on job_id + scheduled_for for the same-job check. No
     unscoped table scan ever happens here. The migration's
     UNIQUE constraints are the second layer for writers that
-    bypass this service.
+    bypass this service, and a UNIQUE violation from the insert
+    itself (the check-then-insert race) is translated to
+    DuplicateFireError at the insert below.
     """
     ws = _require_scope(org_id, agent_id)
     job = get_job(db, org_id, agent_id, job_id)
@@ -460,7 +481,21 @@ def record_fire(
         "finished_at": None,
         "created_at": _now_iso(),
     }
-    return db.table("agt_job_fires").insert(row).execute().data[0]
+    # The pre-checks above are check-then-insert: two concurrent
+    # writers can both pass them and race the insert. The losing
+    # insert hits the migration UNIQUE as a raw Postgres error;
+    # translate it here so callers see DuplicateFireError (the
+    # already-fired signal), never a generic crash (Rex F4).
+    try:
+        return db.table("agt_job_fires").insert(row).execute().data[0]
+    except DuplicateFireError:
+        raise
+    except Exception as exc:
+        if _is_unique_violation(exc):
+            raise DuplicateFireError(
+                f"fire_key {stmt.fire_key!r} already recorded"
+            ) from exc
+        raise
 
 
 def list_fires(db: Any, org_id: str, agent_id: str, job_id: str) -> list[dict]:
