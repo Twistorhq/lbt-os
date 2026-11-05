@@ -162,8 +162,11 @@ def _canonical_key(entry_key: str) -> str:
     passed through the B1 masking pipeline, so the entries
     table, the staged target key, and every later lookup
     agree byte for byte. A secret-shaped, steering, or
-    non-slug key is refused outright, never silently rewritten
-    into a different key."""
+    non-slug key is refused outright at screening, never
+    redacted into a different key; the masking step after it
+    is the B1 PII layer, so a PII-shaped substring inside a
+    slug (a digit run, say) IS stored masked, and two raw
+    keys that mask to the same value collide as duplicates."""
     raw = entry_key.strip()
     if not raw:
         raise MemoryError("entry_key must be non-empty")

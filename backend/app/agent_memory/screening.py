@@ -21,14 +21,19 @@ imported), layered on the B1 masking pipeline:
   that reads as a standing order to the agent (always-approve
   orders, from-now-on rules, concealment directives aimed at
   the owner, claims of pre-approval). Detection runs on a
-  normalized copy with zero-width characters stripped and
-  whitespace collapsed, so evasion by invisible characters
-  does not work. A memory is future prompt context, so this
-  is the prompt-injection surface of the whole feature.
-  The residual semantic layer is TW-961, not this module.
+  normalized copy with every Unicode format character
+  (category Cf) and the combining grapheme joiner dropped
+  and whitespace collapsed, so evasion by invisible
+  characters does not work. A memory is future prompt
+  context, so this is the prompt-injection surface of the
+  whole feature. The residual semantic layer is TW-961,
+  not this module.
 - entry keys are screened too (F1): screen_key blocks any
   secret, injection, or steering shape in a key outright;
-  keys are never silently redacted.
+  a blocked shape is never redacted into a different key.
+  PII-shaped substrings are a separate layer: after
+  screening, service passes the slug through the B1 masking
+  pipeline, so a digit run inside a key is stored masked.
 - everything else passes to the B1 mask_text pipeline, which
   masks the TW-552 PII categories (emails, phones, SSNs,
   addresses, dates, business identifiers) at staging.
@@ -41,6 +46,7 @@ approval as defense in depth (service.approve_write).
 from __future__ import annotations
 
 import re
+import unicodedata
 
 from .models import REDACTION_MARKER, ScreeningBlocked
 
@@ -208,13 +214,35 @@ _DIRECTIVE_RES: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bevery\s+time\s+(?:a\s+)?(?:customer|caller|client)\b", re.I),
 )
 
-_ZERO_WIDTH_RE = re.compile("[​‌‍﻿]")
+# Characters dropped from the detection copy on top of the
+# category-Cf strip: U+034F COMBINING GRAPHEME JOINER (category
+# Mn, a combining joiner) and U+180E MONGOLIAN VOWEL SEPARATOR
+# (Cf in the Unicode data this runtime ships, Mn in some other
+# versions, so it is named explicitly rather than trusted to
+# the category table).
+_DETECTION_DROP_EXTRA = frozenset({chr(0x034F), chr(0x180E)})
+
+
+def _drop_format_chars(text: str) -> str:
+    """Drop every Unicode format character (category Cf) plus
+    the combining joiners named above. The old strip list named
+    only U+200B, U+200C, U+200D, and U+FEFF; Rex's retest
+    (TW-951) proved U+2060, U+00AD, U+061C, U+200E, U+200F,
+    U+2064, U+180E, and U+034F each defeated directive
+    detection when planted inside a keyword."""
+    return "".join(
+        ch
+        for ch in text
+        if unicodedata.category(ch) != "Cf" and ch not in _DETECTION_DROP_EXTRA
+    )
 
 
 def _normalize_for_detection(text: str) -> str:
-    """The copy block-detection runs on: zero-width characters
-    stripped, all whitespace runs collapsed to single spaces."""
-    return re.sub(r"\s+", " ", _ZERO_WIDTH_RE.sub("", text))
+    """The copy block-detection runs on: format characters
+    dropped, all whitespace runs collapsed to single spaces.
+    This copy is throwaway; stored content is never rewritten
+    by normalization."""
+    return re.sub(r"\s+", " ", _drop_format_chars(text))
 
 
 def _is_base64_block(text: str) -> bool:

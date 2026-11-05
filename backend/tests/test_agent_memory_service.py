@@ -955,8 +955,7 @@ class TestConcurrentApprove:
 # MARK, U+2064 INVISIBLE PLUS, U+180E MONGOLIAN VOWEL SEPARATOR
 # (all category Cf), and U+034F COMBINING GRAPHEME JOINER (Mn).
 FORMAT_CHARS = [
-    chr(cp)
-    for cp in (0x2060, 0x00AD, 0x061C, 0x200E, 0x200F, 0x2064, 0x180E, 0x034F)
+    chr(cp) for cp in (0x2060, 0x00AD, 0x061C, 0x200E, 0x200F, 0x2064, 0x180E, 0x034F)
 ]
 
 # One template per directive family Rex named, with the format
