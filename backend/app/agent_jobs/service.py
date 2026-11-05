@@ -40,6 +40,7 @@ from .models import DEFAULT_CATCH_UP_WINDOW_MINUTES, AgentJobError, JobEdit, Job
 log = logging.getLogger(__name__)
 
 __all__ = [
+    "block_job",
     "cancel_run",
     "create_job",
     "edit_job",
@@ -47,6 +48,7 @@ __all__ = [
     "get_fire",
     "get_job",
     "jobs_enabled",
+    "list_fires_for_job",
     "list_jobs",
     "mint_fire_key",
     "pause_job",
@@ -184,6 +186,10 @@ def create_job(
             "next_fire_at": _iso(_next_fire_for(job_like, now)),
             "catch_up_window_minutes": spec.catch_up_window_minutes,
             "one_shot_at": _iso(spec.one_shot_at),
+            # TW-953 preflight surface, stored with the definition.
+            "credential_refs": list(spec.credential_refs),
+            "action_classes": list(spec.action_classes),
+            "delivery_channel": spec.delivery_channel,
             "updated_at": _iso(now),
         },
     )
@@ -233,7 +239,19 @@ def resume_job(
         org_id,
         agent_id,
         job_id,
-        {"status": "active", "next_fire_at": _iso(nxt), "updated_at": _iso(now)},
+        {
+            "status": "active",
+            "next_fire_at": _iso(nxt),
+            # Leaving blocked/review is an owner action (resume);
+            # the markers clear so the next block alerts fresh.
+            "blocked_reason": None,
+            "blocked_at": None,
+            "blocked_alert_id": None,
+            "blocked_alert_error": None,
+            "review_reason": None,
+            "review_fire_id": None,
+            "updated_at": _iso(now),
+        },
     )
     return updated or _require_job(db, org_id, agent_id, job_id)
 
@@ -267,6 +285,12 @@ def edit_job(
         and patch.catch_up_window_minutes is not None
     ):
         payload["catch_up_window_minutes"] = patch.catch_up_window_minutes
+    if "credential_refs" in fields and patch.credential_refs is not None:
+        payload["credential_refs"] = list(patch.credential_refs)
+    if "action_classes" in fields and patch.action_classes is not None:
+        payload["action_classes"] = list(patch.action_classes)
+    if "delivery_channel" in fields:
+        payload["delivery_channel"] = patch.delivery_channel
     schedule_changed = False
     if "cron_expr" in fields and patch.cron_expr is not None:
         payload["cron_expr"] = patch.cron_expr
@@ -297,6 +321,65 @@ def remove_job(db: Any, org_id: str, agent_id: str, job_id: str) -> dict:
         {"status": "archived", "next_fire_at": None, "updated_at": _iso(_now())},
     )
     return updated or _require_job(db, org_id, agent_id, job_id)
+
+
+def list_fires_for_job(db: Any, org_id: str, agent_id: str, job_id: str) -> list[dict]:
+    return psvc.list_fires(db, org_id, agent_id, job_id)
+
+
+def block_job(
+    db: Any,
+    org_id: str,
+    agent_id: str,
+    job: dict,
+    reason: str,
+    *,
+    alerter: Callable[..., str] | None = None,
+    now: datetime | None = None,
+) -> dict:
+    """TW-953: the preflight failure landing. One blocked record
+    (status 'blocked', masked reason, timestamp) and exactly ONE
+    owner alert. Idempotent: blocking an already-blocked job
+    returns it unchanged and alerts nobody, so a re-tick or a
+    repeated preflight scan can never produce a second alert.
+    The blocked job leaves the ticker's active scan, so it
+    cannot fire (and cannot spend) until an owner fixes it and
+    resumes it. An alerter failure is recorded on the row, never
+    hidden and never retried automatically: exactly-once cuts
+    both ways.
+    """
+    if job.get("status") == "blocked":
+        return job
+    now = now or _now()
+    payload: dict[str, Any] = {
+        "status": "blocked",
+        "blocked_reason": mask_text(reason),
+        "blocked_at": _iso(now),
+        "blocked_alert_id": None,
+        "blocked_alert_error": None,
+        "updated_at": _iso(now),
+    }
+    updated = _update_job_row(db, org_id, agent_id, job["id"], payload)
+    row = updated or _require_job(db, org_id, agent_id, job["id"])
+    if alerter is not None:
+        alert_payload: dict[str, Any] = {}
+        try:
+            alert_payload["blocked_alert_id"] = alerter(db, org_id, row, reason)
+        except Exception as exc:
+            log.error(
+                "agent_jobs: blocked-job alert failed for job %s: %s",
+                job["id"],
+                exc,
+            )
+            alert_payload["blocked_alert_error"] = mask_text(str(exc))
+        alerted = _update_job_row(db, org_id, agent_id, job["id"], alert_payload)
+        if alerted:
+            row = alerted
+    else:
+        log.error(
+            "agent_jobs: job %s BLOCKED (no alerter wired): %s", job["id"], reason
+        )
+    return row
 
 
 # -- fire writer (carried requirements a and b) -----------------------
@@ -424,10 +507,24 @@ def fire_job(
     toll_sink: Callable[..., dict] | None = None,
     control: RunControl | None = None,
     trigger: str = "schedule",
+    delivery: Callable[..., str | None] | None = None,
+    step_journal: Callable[..., None] | None = None,
 ) -> dict:
     """Fire one job once for one slot. The full fire lifecycle:
     durable fire record first, continuity read before the run,
-    masked writes throughout, continuity update after."""
+    masked writes throughout, continuity update after.
+
+    TW-953: steps run under the durable step journal (the DB
+    journal by default; reconciliation reads it), and when a
+    delivery seam is wired the fire completes ONLY on a durable
+    delivery handoff receipt: the seam returns the receipt id,
+    which is stored on the fire row; no receipt (or a delivery
+    failure) fails the fire, because a run whose delivery was
+    never durably handed off is not complete, however its steps
+    went. With no delivery seam wired, completion is the B4
+    behavior (steps done = run done); production wiring passes
+    the Notify-backed seam.
+    """
     job_id = job["id"]
     fire_key = mint_fire_key(job_id, slot)
     try:
@@ -471,10 +568,21 @@ def fire_job(
         row = get_fire(db, org_id, agent_id, fid)
         return bool(row and row.get("status") == "cancelled")
 
+    journal = step_journal
+    if journal is None and db is not None:
+        from .reconciliation import make_db_step_journal
+
+        journal = make_db_step_journal(db, org_id, agent_id, fire_id, fire_key)
+
     try:
         steps = executor_factory(ctx)
         outcome = run_steps(
-            ctx, steps, toll_sink=toll_sink, db=db, fence_check=fence_check
+            ctx,
+            steps,
+            toll_sink=toll_sink,
+            db=db,
+            fence_check=fence_check,
+            step_journal=journal,
         )
     except Exception as exc:  # masked at the writer; reported, not hidden
         # A cancel that landed while the failing step ran wins
@@ -492,6 +600,7 @@ def fire_job(
                 "task_id": None,
                 "completed_steps": [],
                 "trigger": trigger,
+                "delivery_receipt": None,
             }
         update_fire(
             db,
@@ -515,6 +624,7 @@ def fire_job(
             "task_id": None,
             "completed_steps": [],
             "trigger": trigger,
+            "delivery_receipt": None,
         }
     # Re-check the fence after run_steps, before ANY terminal
     # write: run_steps checks before each step, so a cancel
@@ -548,7 +658,47 @@ def fire_job(
             "task_id": outcome.task_id,
             "completed_steps": outcome.completed_steps,
             "trigger": trigger,
+            "delivery_receipt": None,
         }
+    # TW-953 durable delivery handoff: a completed run is not
+    # complete until its delivery is durably handed off and the
+    # receipt is on the fire row. Steps that already executed
+    # stay executed (journaled and tolled); reconciliation owns
+    # their settlement, and the fire reads failed, not complete.
+    delivery_receipt: str | None = None
+    if delivery is not None and outcome.status == "completed":
+        delivery_error: str | None = None
+        try:
+            delivery_receipt = delivery(ctx, outcome)
+        except Exception as exc:
+            delivery_error = f"delivery handoff failed: {exc}"
+        if delivery_error is None and not delivery_receipt:
+            delivery_error = "delivery handoff produced no durable receipt"
+        if delivery_error is not None:
+            update_fire(
+                db,
+                org_id,
+                agent_id,
+                fire_id,
+                from_statuses=("pending", "running"),
+                status="failed",
+                error=delivery_error,
+                finished_at=_iso(_now()),
+            )
+            log.warning("agent_jobs: fire %s %s", fire_key, delivery_error)
+            return {
+                "fire_id": fire_id,
+                "fire_key": fire_key,
+                "job_id": job_id,
+                "status": "failed",
+                "summary": outcome.summary,
+                "error": mask_text(delivery_error),
+                "surfaced_item_ids": outcome.surfaced_item_ids,
+                "task_id": outcome.task_id,
+                "completed_steps": outcome.completed_steps,
+                "trigger": trigger,
+                "delivery_receipt": None,
+            }
     if outcome.task_id:
         update_fire(
             db,
@@ -558,6 +708,10 @@ def fire_job(
             from_statuses=("pending", "running"),
             task_id=outcome.task_id,
         )
+    terminal_fields: dict[str, Any] = {}
+    if delivery_receipt:
+        terminal_fields["delivery_receipt"] = delivery_receipt
+        terminal_fields["delivery_status"] = "handed_off"
     terminal = update_fire(
         db,
         org_id,
@@ -567,6 +721,7 @@ def fire_job(
         status=outcome.status,
         summary=outcome.summary,
         finished_at=_iso(_now()),
+        **terminal_fields,
     )
     if terminal is not None and terminal.get("status") == "cancelled":
         # Lost a race with cancel_run between the fence check
@@ -583,6 +738,7 @@ def fire_job(
             "task_id": outcome.task_id,
             "completed_steps": outcome.completed_steps,
             "trigger": trigger,
+            "delivery_receipt": None,
         }
     psvc.update_continuity(
         db,
@@ -603,6 +759,7 @@ def fire_job(
         "task_id": outcome.task_id,
         "completed_steps": outcome.completed_steps,
         "trigger": trigger,
+        "delivery_receipt": delivery_receipt,
     }
 
 
@@ -617,16 +774,34 @@ def trigger_now(
     control: RunControl | None = None,
     now: datetime | None = None,
     enabled_orgs: set[str] | None = None,
+    preflight: Any = None,
+    alerter: Callable[..., str] | None = None,
 ) -> dict:
     """Fire a job immediately, outside its schedule. An explicit
     owner action: allowed on a paused job, refused when the org
     flag is off, on an archived or blocked job, or twice in the
-    same minute (the durable fire identity refuses the second)."""
+    same minute (the durable fire identity refuses the second).
+
+    TW-953: a manual fire preflights identically to a scheduled
+    one. Definition failures always block; when a preflight
+    checker is wired its external failures block too. Blocking
+    writes the blocked record, sends the one alert, creates no
+    task, and raises so the caller sees the refusal.
+    """
     if not jobs_enabled(org_id, enabled_orgs):
         raise AgentJobError(f"agent jobs are not enabled for org {org_id!r}")
     job = _require_job(db, org_id, agent_id, job_id)
     if job.get("status") in ("archived", "blocked"):
         raise AgentJobError(f"job {job_id!r} is {job.get('status')!r}; cannot fire")
+    from .preflight import validate_definition
+
+    failures = validate_definition(job)
+    if preflight is not None:
+        failures.extend(preflight.check(db, org_id, agent_id, job).failures)
+    if failures:
+        reason = "; ".join(failures)
+        block_job(db, org_id, agent_id, job, reason, alerter=alerter, now=now)
+        raise AgentJobError(f"job {job_id!r} blocked by preflight: {reason}")
     now = now or _now()
     slot = now.astimezone(timezone.utc).replace(second=0, microsecond=0)
     try:

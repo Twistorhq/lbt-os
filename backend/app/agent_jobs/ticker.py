@@ -1,55 +1,144 @@
-"""TW-952 (TW-948-B4): the job ticker.
+"""TW-952 (TW-948-B4) + TW-953 (TW-948-B5): the job ticker.
 
 One tick scans active job definitions across orgs (the flows
 tick pattern), and for each org whose enable flag is ON, fires
 the jobs that are due. Failure posture (Rex's gate): a ticker
 that cannot scan fails LOUD with JobTickerError, never silently
 dead; every other failure is contained PER JOB: the whole
-per-job body (slot parse, catch-up window, next-slot
-computation, fire record, continuity reads/writes) runs inside
-a try/except that logs the failure, records it in the tick
-summary ("errors" and "failed"), and continues to the next
-job. A single poisoned job never wedges the tick for the
-others (Rex F1).
+per-job body runs inside a try/except that logs the failure,
+records it in the tick summary, and continues to the next job.
+A single poisoned job never wedges the tick for the others
+(Rex F1).
 
-Due semantics: the job row's next_fire_at is the slot. A slot
-inside the job's catch-up window fires once; a slot older than
-the window is skipped (counted as missed_skipped) and the
-schedule advances.
+TW-953 additions:
 
-Ordering and duplicate protection (Rex F3/F4): the fire row is
-recorded BEFORE next_fire_at advances (fire-first). A crash
-between the two leaves a durable fire row for the slot, so the
-next tick sees the slot as already fired (counted
-already_fired) and heals the advance instead of stranding the
-slot silently with no trace. The advance itself is a
-compare-and-swap on the slot it was computed from: it lands
-only while next_fire_at still equals the scanned value, so a
-concurrent tick's advance is never overwritten. Fire-first
-plus the per-job namespaced fire_key UNIQUE (whose Postgres
-violation record_fire translates to DuplicateFireError) plus
-the CAS advance together make a second fire for the same slot
-impossible and a stranded slot recoverable; that is why no
-additional locking is needed here.
+- Preflight before any fire: definition validation always runs
+  (bad cron, bad timezone, corrupt next_fire_at, empty prompt
+  are quarantined as BLOCKED with one owner alert, not retried
+  as a fresh failure every tick), and when a PreflightChecker
+  is wired its external checks (credentials, skills, delivery,
+  ledger) block the same way. A blocked job creates no task
+  and spends nothing.
+- The stranded-fire reaper runs first when reap_stale_after is
+  set: fires stranded in 'running' are parked as interrupted
+  and their jobs paused for review (recovery.py). They never
+  auto-resume.
+- Catch-up accounting counts slots, not events (Rex F8): when
+  a catch-up fire collapses several scheduled slots into one
+  run, the collapsed count lands in summary["missed_collapsed"];
+  when a stale slot is skipped, every skipped slot counts in
+  summary["missed_skipped"].
+- Summary accuracy (Rex P14 / Rosa nit): a job whose fire
+  succeeded but whose post-fire advance write failed is listed
+  in "fired" and in "advance_failed" ONLY, never also in
+  "failed"/"errors". The fire is durable; the advance heals on
+  the next tick through the already_fired path.
+- A durable heartbeat records every tick's outcome (and the
+  scan failure's) in agt_job_tick_heartbeats, so a dead
+  scheduler is visible in-system (heartbeat.py, Rex F7 tail).
+
+Due semantics and ordering are B4's: next_fire_at is the slot;
+fire-first ordering with the namespaced fire_key UNIQUE and a
+CAS advance make a second fire for the same slot impossible
+and a stranded slot recoverable.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from ..persistence.models import DuplicateFireError, workspace_id_for
-from . import service
+from . import heartbeat, service
+from . import preflight as preflight_mod
+from .cron import CronSchedule
 from .execution import RunControl
 from .models import AgentJobError
 
 log = logging.getLogger(__name__)
 
+# Slot counting is bounded: a minutely job stale for months
+# would otherwise iterate forever. The cap is far above any
+# catch-up window the definition allows (7 days of minutes is
+# 10080); a count that hits it is reported as the cap.
+_MAX_SLOT_COUNT = 50_000
+
 
 class JobTickerError(RuntimeError):
     """The tick itself failed. Loud by design: a silently dead
     ticker is the failure Section 8.5 calls out by name."""
+
+
+def _count_slots(
+    job: dict, first: datetime, last: datetime, *, include_first: bool
+) -> int:
+    """Scheduled instants t for this job with first </<= t < last.
+
+    One-shot jobs have exactly one instant. Cron iteration jumps
+    by schedule boundaries (CronSchedule.next_at_or_after), and
+    the count is capped at _MAX_SLOT_COUNT.
+    """
+    if not job.get("cron_expr"):
+        return 1 if include_first else 0
+    sched = CronSchedule(job["cron_expr"])
+    tz_name = job.get("timezone") or "UTC"
+    cursor = first if include_first else first + timedelta(minutes=1)
+    count = 0
+    while count < _MAX_SLOT_COUNT:
+        t = sched.next_at_or_after(cursor, tz_name)
+        if t >= last:
+            break
+        count += 1
+        cursor = t + timedelta(minutes=1)
+    return count
+
+
+def _safe_advance(
+    db: Any, job: dict, now: datetime, nxt: datetime | None, summary: dict
+) -> None:
+    """Advance, but never let an advance failure reclassify the
+    job's outcome (Rex P14): the failure is logged and listed
+    under advance_failed, and the next tick heals it."""
+    try:
+        _advance(db, job, now, nxt=nxt)
+    except Exception as exc:
+        log.error(
+            "agent_jobs: advance failed for job %s (heals next tick): %s",
+            job.get("id"),
+            exc,
+        )
+        summary["advance_failed"].append(
+            {"job_id": job.get("id"), "status": "advance_failed", "error": str(exc)}
+        )
+
+
+def _block(
+    db: Any,
+    job: dict,
+    reason: str,
+    *,
+    alerter: Callable[..., str] | None,
+    now: datetime,
+    summary: dict,
+) -> None:
+    """Quarantine one job at preflight: blocked record, one
+    alert, and a summary entry under blocked + errors (never
+    under failed: the job did not run and fail, it was refused).
+    """
+    service.block_job(
+        db,
+        job.get("org_id"),
+        job.get("agent_identity_id"),
+        job,
+        reason,
+        alerter=alerter,
+        now=now,
+    )
+    entry = {"job_id": job.get("id"), "status": "blocked", "error": reason}
+    summary["blocked"].append(entry)
+    summary["errors"].append(entry)
+    log.error("agent_jobs: job %s blocked at preflight: %s", job.get("id"), reason)
 
 
 def tick(
@@ -60,9 +149,14 @@ def tick(
     toll_sink: Callable[..., dict] | None = None,
     control: RunControl | None = None,
     enabled_orgs: set[str] | None = None,
+    preflight: Any = None,
+    alerter: Callable[..., str] | None = None,
+    reap_stale_after: timedelta | None = None,
+    record_heartbeat: bool = True,
 ) -> dict:
     """Fire every due job once. Returns a summary dict with the
-    fired outcomes, failures, and skip counts."""
+    fired outcomes, blocked jobs, failures, reaped fires, and
+    skip/collapse counts."""
     if executor_factory is None:
         raise AgentJobError("ticker requires an executor_factory")
     now = now or datetime.now(timezone.utc)
@@ -70,21 +164,40 @@ def tick(
         now = now.replace(tzinfo=timezone.utc)
     summary: dict[str, Any] = {
         "fired": [],
+        "blocked": [],
         "failed": [],
         "errors": [],
+        "reaped": [],
+        "advance_failed": [],
         "missed_skipped": 0,
+        "missed_collapsed": 0,
         "skipped_flag_off": 0,
         "already_fired": 0,
     }
+    if reap_stale_after is not None:
+        try:
+            from .recovery import reap_stranded_fires
+
+            reaped = reap_stranded_fires(
+                db, now=now, stale_after=reap_stale_after, alerter=alerter
+            )
+            summary["reaped"] = reaped["reaped"]
+        except Exception as exc:
+            log.error("agent_jobs: reaper failed: %s", exc)
+            summary["reaper_error"] = str(exc)
     try:
         query = db.table("agt_jobs").select("*").eq("status", "active")
         if hasattr(query, "order"):
             query = query.order("next_fire_at")
         rows = query.execute().data or []
     except Exception as exc:
-        # Rex F7: the scan failure is logged before it is raised;
-        # a tick caller seeing only a bare 500 was the old gap.
+        # Rex F7: the scan failure is logged before it is raised,
+        # and TW-953 records it durably before raising too.
         log.error("agent_jobs: job scan failed: %s", exc)
+        if record_heartbeat:
+            heartbeat.record_tick_heartbeat(
+                db, now=now, status="scan_failed", error=str(exc)
+            )
         raise JobTickerError(f"job scan failed: {exc}") from exc
     # Deterministic scan order regardless of store return order
     # (Rex F1): earliest slot first, job id breaks ties.
@@ -98,15 +211,48 @@ def tick(
         try:
             org_id = job.get("org_id")
             agent_id = job.get("agent_identity_id")
-            slot = service._parse_dt(job.get("next_fire_at"))
+            try:
+                slot = service._parse_dt(job.get("next_fire_at"))
+            except Exception as exc:
+                _block(
+                    db,
+                    job,
+                    f"corrupt next_fire_at: {exc}",
+                    alerter=alerter,
+                    now=now,
+                    summary=summary,
+                )
+                continue
             if slot is None or slot > now:
                 continue
             if not service.jobs_enabled(org_id, enabled_orgs):
                 summary["skipped_flag_off"] += 1
                 continue
+            # TW-953 preflight: quarantine poisoned definitions
+            # and failed external checks BEFORE any fire, task,
+            # or spend. The job blocks once and leaves the scan.
+            failures = preflight_mod.validate_definition(job)
+            if preflight is not None:
+                failures.extend(preflight.check(db, org_id, agent_id, job).failures)
+            if failures:
+                _block(
+                    db,
+                    job,
+                    "; ".join(failures),
+                    alerter=alerter,
+                    now=now,
+                    summary=summary,
+                )
+                continue
             if now - slot > service.catch_up_window(job):
-                summary["missed_skipped"] += 1
-                _advance(db, job, now)
+                nxt = service.next_fire_after_run(job, now)
+                if nxt is not None:
+                    summary["missed_skipped"] += _count_slots(
+                        job, slot, nxt, include_first=True
+                    )
+                else:
+                    summary["missed_skipped"] += 1
+                _safe_advance(db, job, now, nxt, summary)
                 continue
             # Compute the next slot BEFORE firing (a bad cron or
             # timezone fails here, contained per job, and the job
@@ -129,13 +275,17 @@ def tick(
                 summary["already_fired"] += 1
                 # Heal an advance stranded by an earlier crash:
                 # the fire row exists, so move past the slot.
-                _advance(db, job, now, nxt=nxt)
+                _safe_advance(db, job, now, nxt, summary)
                 continue
             if outcome["status"] == "failed":
                 summary["failed"].append(outcome)
             else:
                 summary["fired"].append(outcome)
-            _advance(db, job, now, nxt=nxt)
+            if nxt is not None:
+                summary["missed_collapsed"] += _count_slots(
+                    job, slot, nxt, include_first=False
+                )
+            _safe_advance(db, job, now, nxt, summary)
         except DuplicateFireError:
             # A duplicate surfacing outside fire_job's own guard
             # (e.g. a translated insert race on a later write) is
@@ -152,6 +302,8 @@ def tick(
             summary["failed"].append(entry)
             summary["errors"].append(entry)
             continue
+    if record_heartbeat:
+        heartbeat.record_tick_heartbeat(db, now=now, status="ok", summary=summary)
     return summary
 
 

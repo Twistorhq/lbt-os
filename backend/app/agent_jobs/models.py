@@ -42,6 +42,31 @@ DEFAULT_CATCH_UP_WINDOW_MINUTES = 60
 MAX_CATCH_UP_WINDOW_MINUTES = 7 * 24 * 60
 
 
+def _validate_preflight_fields(
+    credential_refs: list[str] | None,
+    action_classes: list[str] | None,
+) -> None:
+    """TW-953 (TW-948-B5): the preflight surface of a definition.
+
+    credential_refs names the credentials preflight must resolve
+    through the just-in-time resolver; action_classes names the
+    permission-ledger classes the job's prompt can reach, which
+    preflight checks against the ledger. Unknown classes are
+    construction errors (the TW-768 fail-closed posture), so a
+    typo can never become an unchecked class at fire time.
+    """
+    from ..agentperms.models import ACTION_CLASSES
+
+    for ref in credential_refs or []:
+        if not str(ref).strip():
+            raise AgentJobError("credential_refs entries must be non-empty")
+    for action_class in action_classes or []:
+        if action_class not in ACTION_CLASSES:
+            raise AgentJobError(
+                f"unknown action class {action_class!r}; want one of {ACTION_CLASSES}"
+            )
+
+
 class JobSpec(_StrictBase):
     """A new persistent job definition (management surface input)."""
 
@@ -52,6 +77,10 @@ class JobSpec(_StrictBase):
     one_shot_at: datetime | None = None
     timezone: str = "UTC"
     catch_up_window_minutes: int = DEFAULT_CATCH_UP_WINDOW_MINUTES
+    # TW-953 preflight surface (see _validate_preflight_fields).
+    credential_refs: list[str] = []
+    action_classes: list[str] = []
+    delivery_channel: str | None = None
 
     def model_post_init(self, _ctx: Any) -> None:
         # Local import: cron needs AgentJobError from this module.
@@ -75,6 +104,7 @@ class JobSpec(_StrictBase):
             )
         if self.one_shot_at is not None:
             self.one_shot_at = _as_utc(self.one_shot_at)
+        _validate_preflight_fields(self.credential_refs, self.action_classes)
 
 
 class JobEdit(_StrictBase):
@@ -87,9 +117,14 @@ class JobEdit(_StrictBase):
     one_shot_at: datetime | None = None
     timezone: str | None = None
     catch_up_window_minutes: int | None = None
+    credential_refs: list[str] | None = None
+    action_classes: list[str] | None = None
+    delivery_channel: str | None = None
 
     def model_post_init(self, _ctx: Any) -> None:
         from .cron import CronSchedule, validate_timezone
+
+        _validate_preflight_fields(self.credential_refs, self.action_classes)
 
         if self.name is not None and not self.name.strip():
             raise AgentJobError("job name must be non-empty")

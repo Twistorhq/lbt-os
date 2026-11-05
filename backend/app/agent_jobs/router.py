@@ -17,7 +17,7 @@ run. Management operations need no runtime and always work.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -26,9 +26,11 @@ from supabase import Client
 
 from ..config import settings
 from ..database import get_db
-from . import service, ticker
-from .execution import RuntimeTaskExecutor
+from ..services import toll_service
+from . import heartbeat, reconciliation, recovery, service, ticker
+from .execution import RunControl, RuntimeTaskExecutor
 from .models import AgentJobError, JobEdit, JobSpec
+from .preflight import PreflightChecker, log_alerter
 
 router = APIRouter(prefix="/agent-jobs", tags=["agent-jobs"])
 bearer = HTTPBearer(auto_error=False)
@@ -63,6 +65,45 @@ class CancelIn(BaseModel):
     fire_id: str
 
 
+class ReconcileIn(BaseModel):
+    apply: bool = False
+
+
+def _shared_control(request: Request) -> RunControl:
+    """TW-953 (Rex F5): ONE RunControl per app, shared by the
+    tick, trigger, and cancel endpoints. B4's wiring created no
+    shared control at all, so an HTTP cancel fenced nothing in
+    this process and an HTTP fire's tolls went nowhere. The
+    control lives on app.state, created on first use."""
+    control = getattr(request.app.state, "agent_jobs_run_control", None)
+    if control is None:
+        control = RunControl()
+        request.app.state.agent_jobs_run_control = control
+    return control
+
+
+def _alerter(request: Request):
+    """The blocked/interruption alerter: deployment-wired via
+    app.state.agent_jobs_alerter (a Notify-backed alerter from
+    preflight.make_notify_alerter), falling back to the loud
+    log alerter so a block is never silent."""
+    return getattr(request.app.state, "agent_jobs_alerter", None) or log_alerter
+
+
+def _preflight_checker(request: Request) -> PreflightChecker:
+    """TW-953: the tick/trigger preflight. Delivery and ledger
+    checks use their db-backed defaults (Notify providers, the
+    TW-768 ledger); credential resolution and the skill registry
+    are deployment wiring on app.state, failing closed when a
+    job needs them and they are absent."""
+    state = request.app.state
+    return PreflightChecker(
+        credential_resolver=getattr(state, "agent_credential_resolver", None),
+        skill_checker=getattr(state, "agent_skill_checker", None),
+        phone_hook=getattr(state, "agent_jobs_phone_hook", None),
+    )
+
+
 def _executor_factory(request: Request, db: Client, org_id: str):
     factory = getattr(request.app.state, "agent_runtime_factory", None)
     if factory is None:
@@ -75,7 +116,18 @@ def _executor_factory(request: Request, db: Client, org_id: str):
     def make_steps(ctx):
         from .execution import JobStep
 
-        return [JobStep(name="run_task", handler=lambda _ctx: adapter(_ctx))]
+        # TW-953 (Rex F5): the step carries its toll event, so an
+        # HTTP-path fire tolls agent.task_completed (B3
+        # vocabulary; on a base without B3 the toll sink fails
+        # loud, never silently untolled) with the fire-key-rooted
+        # idempotency key run_steps builds.
+        return [
+            JobStep(
+                name="run_task",
+                handler=lambda _ctx: adapter(_ctx),
+                toll_event="agent.task_completed",
+            )
+        ]
 
     return make_steps
 
@@ -166,7 +218,15 @@ def trigger_job(
     factory = _executor_factory(request, db, org_id)
     return _guard(
         lambda: service.trigger_now(
-            db, org_id, agent_id, job_id, executor_factory=factory
+            db,
+            org_id,
+            agent_id,
+            job_id,
+            executor_factory=factory,
+            toll_sink=toll_service.record_toll_event,
+            control=_shared_control(request),
+            preflight=_preflight_checker(request),
+            alerter=_alerter(request),
         )
     )
 
@@ -176,11 +236,74 @@ def cancel_run(
     job_id: str,
     body: CancelIn,
     agent_id: str,
+    request: Request,
     org_id: str = Depends(_require_org),
     db: Client = Depends(get_db),
 ):
+    # TW-953 (Rex F5): the cancel fences through the SAME
+    # RunControl the tick and trigger paths run under, so an
+    # HTTP cancel actually stops an HTTP-started in-flight run.
     return _guard(
-        lambda: service.cancel_run(db, org_id, agent_id, job_id, body.fire_id)
+        lambda: service.cancel_run(
+            db,
+            org_id,
+            agent_id,
+            job_id,
+            body.fire_id,
+            control=_shared_control(request),
+        )
+    )
+
+
+@router.post("/jobs/{job_id}/fires/{fire_id}/reconcile")
+def reconcile_fire(
+    job_id: str,
+    fire_id: str,
+    body: ReconcileIn,
+    agent_id: str,
+    request: Request,
+    org_id: str = Depends(_require_org),
+    db: Client = Depends(get_db),
+):
+    """TW-953: classify one fire's planned steps against its
+    journal and toll evidence; apply=True posts executed-but-
+    untolled tolls exactly once. Unknown steps are reported,
+    never retried."""
+    factory = _executor_factory(request, db, org_id)
+    return _guard(
+        lambda: reconciliation.reconcile_fire(
+            db,
+            org_id,
+            agent_id,
+            fire_id,
+            executor_factory=factory,
+            toll_sink=toll_service.record_toll_event if body.apply else None,
+            apply=body.apply,
+        )
+    )
+
+
+@router.post("/jobs/{job_id}/resume-after-review")
+def resume_after_review(
+    job_id: str,
+    agent_id: str,
+    request: Request,
+    org_id: str = Depends(_require_org),
+    db: Client = Depends(get_db),
+):
+    """TW-953: the operator resume for a job paused for review.
+    Reconciliation runs first; an unknown step refuses the
+    resume and names itself."""
+    factory = _executor_factory(request, db, org_id)
+    return _guard(
+        lambda: recovery.resume_after_review(
+            db,
+            org_id,
+            agent_id,
+            job_id,
+            executor_factory=factory,
+            toll_sink=toll_service.record_toll_event,
+        )
     )
 
 
@@ -194,8 +317,32 @@ def tick_jobs(
     if not configured or x_tick_key != configured:
         raise HTTPException(status_code=403, detail="tick key required")
     factory = _executor_factory(request, db, "")
+    # TW-953 (Rex F5/F7): the HTTP tick runs the full B5 posture:
+    # the production toll sink, the shared RunControl, preflight
+    # with the one-alert alerter, the stranded-fire reaper, and
+    # the durable heartbeat the tick leaves behind either way.
     return ticker.tick(
         db,
         now=datetime.now(timezone.utc),
         executor_factory=factory,
+        toll_sink=toll_service.record_toll_event,
+        control=_shared_control(request),
+        preflight=_preflight_checker(request),
+        alerter=_alerter(request),
+        reap_stale_after=timedelta(minutes=30),
     )
+
+
+@router.get("/tick-health")
+def tick_health(
+    request: Request,
+    x_tick_key: str | None = Header(default=None),
+    db: Client = Depends(get_db),
+):
+    """TW-953: the durable tick heartbeat, readable in-system so
+    a dead scheduler is visible without calling the tick first.
+    Same tick-key guard as the tick endpoint."""
+    configured = settings.agent_jobs_tick_key
+    if not configured or x_tick_key != configured:
+        raise HTTPException(status_code=403, detail="tick key required")
+    return heartbeat.get_tick_health(db, now=datetime.now(timezone.utc))

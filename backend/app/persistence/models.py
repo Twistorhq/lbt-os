@@ -61,7 +61,16 @@ SESSION_STATUSES: tuple[str, ...] = (
     "failed",
 )
 MESSAGE_ROLES: tuple[str, ...] = ("user", "assistant", "system", "tool")
-JOB_STATUSES: tuple[str, ...] = ("active", "paused", "blocked", "archived")
+JOB_STATUSES: tuple[str, ...] = (
+    "active",
+    "paused",
+    "blocked",
+    "archived",
+    # TW-953 (TW-948-B5): pause-for-review after an interrupted
+    # fire. A job in review never fires; resumption is an
+    # operator action gated on reconciliation.
+    "review",
+)
 FIRE_STATUSES: tuple[str, ...] = (
     "pending",
     "running",
@@ -69,6 +78,10 @@ FIRE_STATUSES: tuple[str, ...] = (
     "failed",
     "cancelled",
     "blocked",
+    # TW-953 (TW-948-B5): a fire stranded in running by a worker
+    # loss, parked by the reaper for operator review. Never
+    # auto-resumed, never re-fired.
+    "interrupted",
 )
 STAGED_KINDS: tuple[str, ...] = ("memory", "skill")
 STAGED_STATUSES: tuple[str, ...] = (

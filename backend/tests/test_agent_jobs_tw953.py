@@ -20,8 +20,14 @@ import pytest
 
 os.environ.setdefault("TWISTOR_PERSISTENCE_HASH_KEY", "tw953-test-key")
 
-from app.agent_jobs import execution, heartbeat, preflight, recovery  # noqa: E402
-from app.agent_jobs import reconciliation, service  # noqa: E402
+from app.agent_jobs import (  # noqa: E402  # noqa: E402
+    execution,
+    heartbeat,
+    preflight,
+    reconciliation,
+    recovery,
+    service,
+)
 from app.agent_jobs import ticker as ticker_mod
 from app.agent_jobs.models import AgentJobError, JobSpec  # noqa: E402
 from app.persistence import models as pmodels  # noqa: E402
@@ -345,9 +351,7 @@ class TestPreflightChecks:
 
     def test_revoked_grant_fails(self, db):
         job = self._rich_job(db)
-        checker = _good_checker(
-            ledger_checker=lambda db, org_id, agent_id, cls: False
-        )
+        checker = _good_checker(ledger_checker=lambda db, org_id, agent_id, cls: False)
         result = checker.check(db, ORG, AGENT, job)
         assert not result.ok
         assert any("email.send" in f for f in result.failures)
@@ -435,9 +439,7 @@ class TestPreflightBlocking:
         assert service.get_job(db, ORG, AGENT, bad["id"])["status"] == "blocked"
         assert len(alerter.calls) == 1
 
-    def test_preflight_scan_blocks_poisoned_job_before_it_is_due(
-        self, db, alerter
-    ):
+    def test_preflight_scan_blocks_poisoned_job_before_it_is_due(self, db, alerter):
         bad = _job(db, dt(2026, 11, 5, 15, 0), name="poisoned-early")
         ok = _job(db, dt(2026, 11, 5, 15, 0), name="healthy")
         for row in db.tables["agt_jobs"]:
@@ -449,9 +451,7 @@ class TestPreflightBlocking:
         assert service.get_job(db, ORG, AGENT, bad["id"])["status"] == "blocked"
         assert service.get_job(db, ORG, AGENT, ok["id"])["status"] == "active"
 
-    def test_trigger_now_preflight_failure_blocks_and_raises(
-        self, db, tolls, alerter
-    ):
+    def test_trigger_now_preflight_failure_blocks_and_raises(self, db, tolls, alerter):
         job = _job(
             db,
             dt(2026, 11, 5, 15, 0),
@@ -600,9 +600,7 @@ class TestReaper:
         now = dt(2026, 11, 5, 18, 0)
         job = _job(db, dt(2026, 11, 5, 15, 0))
         fire = _stranded_fire(db, job, started_minutes_ago=120, now=now)
-        out = _tick(
-            db, now, tolls=tolls, reap_stale_after=timedelta(minutes=30)
-        )
+        out = _tick(db, now, tolls=tolls, reap_stale_after=timedelta(minutes=30))
         assert [r["fire_id"] for r in out["reaped"]] == [fire["id"]]
 
 
@@ -1008,12 +1006,22 @@ class TestRouterWiring:
 
         # Simulate the post-B3 base: the agent toll vocabulary
         # exists in the rate table (B3 merge-order dependency).
-        monkeypatch.dict(toll_service.TOLL_RATES, {"agent.task_completed": 25})
+        monkeypatch.setitem(toll_service.TOLL_RATES, "agent.task_completed", 25)
         monkeypatch.setattr(
             router_mod, "settings", SimpleNamespace(agent_jobs_tick_key="s3cret")
         )
         monkeypatch.setattr(service, "jobs_enabled", lambda org, e=None: True)
-        _job(db, dt(2026, 11, 5, 15, 0))
+        # The tick endpoint uses wall-clock now, so the job is
+        # created relative to it: an every-minute job whose slot
+        # is two minutes old, inside the catch-up window.
+        real_now = datetime.now(UTC)
+        service.create_job(
+            db,
+            ORG,
+            AGENT,
+            _spec(cron_expr="* * * * *", timezone="UTC"),
+            now=real_now - timedelta(minutes=2),
+        )
         request = self._fake_request()
 
         class FakeRuntime:
@@ -1047,7 +1055,9 @@ class TestRouterWiring:
         from app.agent_jobs import router as router_mod
 
         job = _job(db, dt(2026, 11, 5, 15, 0))
-        fire = _stranded_fire(db, job, started_minutes_ago=0, now=dt(2026, 11, 5, 16, 0))
+        fire = _stranded_fire(
+            db, job, started_minutes_ago=0, now=dt(2026, 11, 5, 16, 0)
+        )
         request = self._fake_request()
         result = router_mod.cancel_run(
             job["id"],
