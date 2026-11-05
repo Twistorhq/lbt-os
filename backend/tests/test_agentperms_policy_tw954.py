@@ -293,7 +293,9 @@ def test_fully_permitted_unattended_action_is_allowed():
 
 def test_attended_context_needs_no_policy_but_still_faces_ledger_and_floor():
     db = FakeDb()
-    service.grant_permission(db, ORG, "email.send", actor=OWNER, agent_identity_id=AGENT)
+    service.grant_permission(
+        db, ORG, "email.send", actor=OWNER, agent_identity_id=AGENT
+    )
     decision = evaluate(db, context="attended")
     assert decision.allowed is True and decision.reason == "granted"
     no_grant = policy.evaluate_action(
@@ -305,6 +307,16 @@ def test_attended_context_needs_no_policy_but_still_faces_ledger_and_floor():
         toll_event="agent.email_action",
     )
     assert no_grant.allowed is False and no_grant.reason == "no_grant"
+
+
+def test_explicitly_denied_mandate_is_a_floor_block_not_just_a_denial():
+    """An owner who explicitly denied a class removed its
+    mandate: the floor names that, in any context."""
+    db = FakeDb()
+    service.deny_permission(db, ORG, "email.send", actor=OWNER, agent_identity_id=AGENT)
+    decision = evaluate(db, context="attended")
+    assert decision.allowed is False
+    assert decision.floor_rule == "no_external_send_without_mandate"
 
 
 def test_unknown_context_is_a_construction_error():
@@ -421,9 +433,7 @@ def test_floor_blocked_action_writes_a_masked_audit_event():
         dnc_status="listed",
         detail_note="call +1 303-555-0142 now",
     )
-    blocked = [
-        e for e in service.list_history(db, ORG) if e["kind"] == "floor_blocked"
-    ]
+    blocked = [e for e in service.list_history(db, ORG) if e["kind"] == "floor_blocked"]
     assert len(blocked) == 1
     assert blocked[0]["detail"]["floor_rule"] == "no_dnc_override"
     assert "303-555-0142" not in str(blocked[0]["detail"])
@@ -438,9 +448,7 @@ def test_revocation_denies_unattended_work_on_the_next_evaluation():
     policy.set_policy(db, ORG, AGENT, make_policy(), actor=OWNER)
     grant_email(db, extends=True)
     assert evaluate(db).allowed is True
-    service.revoke(
-        db, ORG, {"strength": "all"}, actor=OWNER, agent_identity_id=AGENT
-    )
+    service.revoke(db, ORG, {"strength": "all"}, actor=OWNER, agent_identity_id=AGENT)
     decision = evaluate(db)
     assert decision.allowed is False
     assert decision.floor_rule == "revocation_supremacy"

@@ -10,7 +10,7 @@ No floor state lives in this file: the floor is code
 from pathlib import Path
 
 MIGRATION = (
-    Path(__file__).resolve().parents[1]
+    Path(__file__).resolve().parents[2]
     / "supabase"
     / "migration_agentperms_policy_tw954.sql"
 )
@@ -29,9 +29,7 @@ def test_policy_table_carries_b1_scope_columns_and_uniqueness():
     assert "CREATE TABLE IF NOT EXISTS agt_unattended_policies" in text
     for column in ("org_id", "agent_identity_id", "workspace_id"):
         assert column in text
-    assert (
-        "UNIQUE (org_id, agent_identity_id, workspace_id)" in text
-    )
+    assert "UNIQUE (org_id, agent_identity_id, workspace_id)" in text
 
 
 def test_policy_table_defaults_to_disabled():

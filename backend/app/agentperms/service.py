@@ -207,6 +207,7 @@ def _set_grant(
     *,
     actor: str,
     agent_identity_id: str | None,
+    extends_unattended: bool = False,
 ) -> dict[str, Any]:
     # The existing row IN THE SAME SCOPE: setting an org-wide grant
     # must not rewrite a per-agent row, and setting a per-agent grant
@@ -225,6 +226,7 @@ def _set_grant(
             "status": statement.status,
             "scope": statement.scope,
             "cap_cents": statement.cap_cents,
+            "extends_unattended": extends_unattended,
             "granted_by": actor,
             "granted_at": now,
             "updated_at": now,
@@ -237,6 +239,7 @@ def _set_grant(
             "status": statement.status,
             "scope": statement.scope,
             "cap_cents": statement.cap_cents,
+            "extends_unattended": extends_unattended,
             "granted_by": actor,
             "granted_at": now,
             "updated_at": now,
@@ -267,6 +270,7 @@ def _set_grant(
             "status": statement.status,
             "cap_cents": statement.cap_cents,
             "scope": statement.scope,
+            "extends_unattended": extends_unattended,
             "grant_id": saved.get("id"),
         },
         agent_identity_id=agent_identity_id or saved.get("agent_identity_id"),
@@ -283,8 +287,17 @@ def grant_permission(
     scope: dict[str, Any] | None = None,
     cap_cents: int | None = None,
     agent_identity_id: str | None = None,
+    extends_unattended: bool = False,
 ) -> dict[str, Any]:
-    """Grant one action class. Money classes require cap_cents."""
+    """Grant one action class. Money classes require cap_cents.
+
+    TW-954 (B7): extends_unattended records, on the grant's own
+    face, whether this grant reaches unattended contexts
+    (scheduled, event, background, delegated). Default FALSE:
+    an attended grant never silently becomes an unattended one;
+    policy.evaluate_action denies unattended work under a grant
+    that does not extend, even when a policy permits the class.
+    """
     statement = GrantStatement(
         action_class=action_class,
         status="granted",
@@ -292,7 +305,12 @@ def grant_permission(
         cap_cents=cap_cents,
     )
     return _set_grant(
-        db, org_id, statement, actor=actor, agent_identity_id=agent_identity_id
+        db,
+        org_id,
+        statement,
+        actor=actor,
+        agent_identity_id=agent_identity_id,
+        extends_unattended=extends_unattended,
     )
 
 

@@ -141,30 +141,21 @@ def test_external_send_without_mandate_is_blocked():
 def test_payment_beyond_mandate_is_blocked():
     for action_class in ("payment.charge", "purchase"):
         no_cap = floor.check_floor(
-            **clean_facts(
-                action_class=action_class, amount_cents=100, cap_cents=None
-            )
+            **clean_facts(action_class=action_class, amount_cents=100, cap_cents=None)
         )
         assert no_cap.allowed is False and no_cap.rule == "no_payment_beyond_mandate"
         no_amount = floor.check_floor(
-            **clean_facts(
-                action_class=action_class, amount_cents=None, cap_cents=500
-            )
+            **clean_facts(action_class=action_class, amount_cents=None, cap_cents=500)
         )
         assert (
-            no_amount.allowed is False
-            and no_amount.rule == "no_payment_beyond_mandate"
+            no_amount.allowed is False and no_amount.rule == "no_payment_beyond_mandate"
         )
         over = floor.check_floor(
-            **clean_facts(
-                action_class=action_class, amount_cents=501, cap_cents=500
-            )
+            **clean_facts(action_class=action_class, amount_cents=501, cap_cents=500)
         )
         assert over.allowed is False and over.rule == "no_payment_beyond_mandate"
         within = floor.check_floor(
-            **clean_facts(
-                action_class=action_class, amount_cents=500, cap_cents=500
-            )
+            **clean_facts(action_class=action_class, amount_cents=500, cap_cents=500)
         )
         assert within.allowed is True, action_class
 
