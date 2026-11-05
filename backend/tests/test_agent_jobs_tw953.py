@@ -1667,6 +1667,419 @@ class TestRexF2bFixRound2:
         assert removed["status"] == "archived"
 
 
+class TestRexF2cFixRound3:
+    """Rex TW-953 F2c (HIGH, fix round 3): the blocked-intermediate
+    reap bypass. reap_stranded_fires moved a job into review only
+    from active/paused, so a job BLOCKED when its stranded fire
+    went stale got the fire parked interrupted but never entered
+    review, and plain resume_job (the normal blocked-resume path)
+    reactivated it with zero reconciliation, while
+    resume_after_review refused the non-review job: no gated path
+    existed at all. The invariant is now status-independent:
+    (a) the reaper moves blocked jobs to review too, and
+    (b) plain resume refuses ANY job carrying an interrupted
+    fire, with resume_after_review as the gated door for it."""
+
+    # -- helpers ---------------------------------------------------
+
+    def _blocked_with_stranded_fire(self, db, block_alerter=None):
+        now = dt(2026, 11, 5, 18, 0)
+        job = _job(db, dt(2026, 11, 5, 15, 0))
+        fire = _stranded_fire(db, job, started_minutes_ago=120, now=now)
+        blocked = service.block_job(
+            db, ORG, AGENT, job, "bad definition", alerter=block_alerter
+        )
+        assert blocked["status"] == "blocked"
+        return job, fire, now
+
+    def _park_fire_interrupted(self, db, fire):
+        service.update_fire(
+            db,
+            ORG,
+            AGENT,
+            fire["id"],
+            from_statuses=("running",),
+            status="interrupted",
+            finished_at=dt(2026, 11, 5, 18, 0).isoformat(),
+        )
+
+    def _blocked_with_interrupted_fire(self, db):
+        """Blocked + interrupted WITHOUT the reaper moving the
+        job (pre-fix data, or the F7 stale-snapshot race landing
+        after the reap): the fire is parked, the job is blocked."""
+        job, fire, now = self._blocked_with_stranded_fire(db)
+        self._park_fire_interrupted(db, fire)
+        row = service.get_job(db, ORG, AGENT, job["id"])
+        assert row["status"] == "blocked"
+        assert service.get_fire(db, ORG, AGENT, fire["id"])["status"] == "interrupted"
+        return job, fire, now
+
+    def _done_step(self, db, tolls, fire):
+        step = execution.JobStep(
+            name="send",
+            handler=lambda _c: {},
+            toll_event="agent.email_action",
+            idempotent=False,
+        )
+        journal = reconciliation.make_db_step_journal(
+            db, ORG, AGENT, fire["id"], fire["fire_key"]
+        )
+        journal("started", step)
+        journal("executed", step)
+        tolls(
+            db,
+            ORG,
+            "agent.email_action",
+            idempotency_key=f"{fire['fire_key']}:step:send",
+            source_type="agt_job_fire",
+            source_id=fire["id"],
+        )
+        return step
+
+    def _unknown_step(self, db, fire):
+        step = execution.JobStep(
+            name="send",
+            handler=lambda _c: {},
+            toll_event="agent.email_action",
+            idempotent=False,
+        )
+        journal = reconciliation.make_db_step_journal(
+            db, ORG, AGENT, fire["id"], fire["fire_key"]
+        )
+        journal("started", step)
+        return step
+
+    # -- (a) the reaper moves blocked jobs to review ---------------
+
+    def test_reaper_moves_blocked_job_to_review_with_markers_and_one_alert(
+        self, db, alerter
+    ):
+        job, fire, now = self._blocked_with_stranded_fire(db)
+        result = recovery.reap_stranded_fires(
+            db, now=now, stale_after=timedelta(minutes=30), alerter=alerter
+        )
+        assert [r["fire_id"] for r in result["reaped"]] == [fire["id"]]
+        assert service.get_fire(db, ORG, AGENT, fire["id"])["status"] == "interrupted"
+        row = service.get_job(db, ORG, AGENT, job["id"])
+        assert row["status"] == "review"
+        assert row["review_fire_id"] == fire["id"]
+        assert fire["id"] in (row["review_reason"] or "")
+        assert len(alerter.calls) == 1
+        # Reaping again parks nothing and alerts nobody.
+        second = recovery.reap_stranded_fires(
+            db, now=now, stale_after=timedelta(minutes=30), alerter=alerter
+        )
+        assert second["reaped"] == []
+        assert len(alerter.calls) == 1
+
+    def test_tick_shape_blocked_at_reap_enters_review_and_plain_resume_refuses(
+        self, db, tolls, alerter
+    ):
+        job = _job(db, dt(2026, 11, 5, 15, 0), name="tick-shape")
+        fire = _stranded_fire(
+            db, job, started_minutes_ago=10, now=dt(2026, 11, 5, 15, 30)
+        )
+        for row in db.tables["agt_jobs"]:
+            if row["id"] == job["id"]:
+                row["cron_expr"] = "not-a-cron"
+        out1 = _tick(
+            db,
+            dt(2026, 11, 5, 15, 30),
+            tolls=tolls,
+            alerter=alerter,
+            reap_stale_after=timedelta(minutes=30),
+        )
+        assert [b["job_id"] for b in out1["blocked"]] == [job["id"]]
+        assert len(alerter.calls) == 1  # the one blocked alert
+        assert service.get_fire(db, ORG, AGENT, fire["id"])["status"] == "running"
+        out2 = _tick(
+            db,
+            dt(2026, 11, 5, 16, 30),
+            tolls=tolls,
+            alerter=alerter,
+            reap_stale_after=timedelta(minutes=30),
+        )
+        assert [r["fire_id"] for r in out2["reaped"]] == [fire["id"]]
+        row = service.get_job(db, ORG, AGENT, job["id"])
+        assert row["status"] == "review"
+        assert row["review_fire_id"] == fire["id"]
+        # The owner fixes the definition; plain resume still
+        # refuses, because the interrupted fire is unreconciled.
+        for job_row in db.tables["agt_jobs"]:
+            if job_row["id"] == job["id"]:
+                job_row["cron_expr"] = "0 9 * * *"
+        with pytest.raises(AgentJobError):
+            service.resume_job(db, ORG, AGENT, job["id"], now=dt(2026, 11, 5, 17, 0))
+        assert service.get_job(db, ORG, AGENT, job["id"])["status"] == "review"
+        assert tolls.rows == {}
+
+    def test_trigger_shape_blocked_at_reap_enters_review(self, db, tolls):
+        block_alerter = FakeAlerter()
+        reap_alerter = FakeAlerter()
+        job = _job(
+            db,
+            dt(2026, 11, 5, 15, 0),
+            name="trigger-shape",
+            credential_refs=["crm-token"],
+            action_classes=["email.send"],
+        )
+        fire = _stranded_fire(
+            db, job, started_minutes_ago=5, now=dt(2026, 11, 5, 15, 30)
+        )
+        checker = _good_checker(credential_resolver=lambda ref: None)
+        with pytest.raises(AgentJobError):
+            service.trigger_now(
+                db,
+                ORG,
+                AGENT,
+                job["id"],
+                executor_factory=_echo_factory(),
+                toll_sink=tolls,
+                preflight=checker,
+                alerter=block_alerter,
+                now=dt(2026, 11, 5, 15, 30),
+                enabled_orgs={ORG},
+            )
+        assert service.get_job(db, ORG, AGENT, job["id"])["status"] == "blocked"
+        assert service.get_fire(db, ORG, AGENT, fire["id"])["status"] == "running"
+        result = recovery.reap_stranded_fires(
+            db,
+            now=dt(2026, 11, 5, 16, 30),
+            stale_after=timedelta(minutes=30),
+            alerter=reap_alerter,
+        )
+        assert [r["fire_id"] for r in result["reaped"]] == [fire["id"]]
+        row = service.get_job(db, ORG, AGENT, job["id"])
+        assert row["status"] == "review"
+        assert row["review_fire_id"] == fire["id"]
+        assert len(reap_alerter.calls) == 1
+        with pytest.raises(AgentJobError):
+            service.resume_job(db, ORG, AGENT, job["id"], now=dt(2026, 11, 5, 17, 0))
+        assert tolls.rows == {}
+
+    # -- (b) plain resume refuses any interrupted fire -------------
+
+    def test_plain_resume_refuses_blocked_job_with_interrupted_fire_without_reap(
+        self, db, tolls
+    ):
+        job, fire, now = self._blocked_with_interrupted_fire(db)
+        before = service.get_job(db, ORG, AGENT, job["id"])
+        with pytest.raises(AgentJobError) as excinfo:
+            service.resume_job(db, ORG, AGENT, job["id"], now=dt(2026, 11, 5, 19, 0))
+        assert "interrupted" in str(excinfo.value)
+        after = service.get_job(db, ORG, AGENT, job["id"])
+        assert after["status"] == "blocked"
+        assert after["blocked_reason"] == before["blocked_reason"]
+        assert after["blocked_at"] == before["blocked_at"]
+        assert tolls.rows == {}
+
+    def test_plain_resume_refuses_paused_job_with_interrupted_fire(self, db, tolls):
+        now = dt(2026, 11, 5, 18, 0)
+        job = _job(db, dt(2026, 11, 5, 15, 0))
+        fire = _stranded_fire(db, job, started_minutes_ago=120, now=now)
+        service.pause_job(db, ORG, AGENT, job["id"])
+        self._park_fire_interrupted(db, fire)
+        with pytest.raises(AgentJobError) as excinfo:
+            service.resume_job(db, ORG, AGENT, job["id"], now=dt(2026, 11, 5, 19, 0))
+        assert "interrupted" in str(excinfo.value)
+        assert service.get_job(db, ORG, AGENT, job["id"])["status"] == "paused"
+        assert tolls.rows == {}
+
+    # -- (c) resume_after_review is the door, and it completes -----
+
+    def test_resume_after_review_completes_for_blocked_sourced_review_job(
+        self, db, tolls
+    ):
+        job, fire, now = self._blocked_with_stranded_fire(db)
+        step = self._done_step(db, tolls, fire)
+        recovery.reap_stranded_fires(db, now=now, stale_after=timedelta(minutes=30))
+        before = service.get_job(db, ORG, AGENT, job["id"])
+        assert before["status"] == "review"
+
+        def factory(ctx):
+            return [step]
+
+        result = recovery.resume_after_review(
+            db,
+            ORG,
+            AGENT,
+            job["id"],
+            executor_factory=factory,
+            toll_sink=tolls,
+            toll_reader=tolls.reader,
+            now=dt(2026, 11, 5, 19, 0),
+        )
+        assert result["job"]["status"] == "active"
+        assert result["reports"][0]["steps"][0]["classification"] == "done"
+        after = service.get_job(db, ORG, AGENT, job["id"])
+        assert after["review_reason"] is None
+        assert after["review_fire_id"] is None
+        # The door is also what clears the blocked markers.
+        assert after["blocked_reason"] is None
+        assert after["blocked_at"] is None
+
+    def test_resume_after_review_refuses_unknown_by_name_for_blocked_sourced_review(
+        self, db, tolls
+    ):
+        job, fire, now = self._blocked_with_stranded_fire(db)
+        step = self._unknown_step(db, fire)
+        recovery.reap_stranded_fires(db, now=now, stale_after=timedelta(minutes=30))
+        assert service.get_job(db, ORG, AGENT, job["id"])["status"] == "review"
+
+        def factory(ctx):
+            return [step]
+
+        with pytest.raises(AgentJobError) as excinfo:
+            recovery.resume_after_review(
+                db,
+                ORG,
+                AGENT,
+                job["id"],
+                executor_factory=factory,
+                toll_sink=tolls,
+                toll_reader=tolls.reader,
+                now=dt(2026, 11, 5, 19, 0),
+            )
+        assert "send" in str(excinfo.value)
+        assert service.get_job(db, ORG, AGENT, job["id"])["status"] == "review"
+
+    def test_resume_after_review_is_the_door_for_blocked_job_not_yet_in_review(
+        self, db, tolls
+    ):
+        job, fire, now = self._blocked_with_interrupted_fire(db)
+        step = self._done_step(db, tolls, fire)
+
+        def factory(ctx):
+            return [step]
+
+        result = recovery.resume_after_review(
+            db,
+            ORG,
+            AGENT,
+            job["id"],
+            executor_factory=factory,
+            toll_sink=tolls,
+            toll_reader=tolls.reader,
+            now=dt(2026, 11, 5, 19, 0),
+        )
+        assert result["job"]["status"] == "active"
+        after = service.get_job(db, ORG, AGENT, job["id"])
+        assert after["blocked_reason"] is None
+        assert after["blocked_at"] is None
+
+    def test_resume_after_review_refuses_unknown_for_blocked_job_not_yet_in_review(
+        self, db, tolls
+    ):
+        job, fire, now = self._blocked_with_interrupted_fire(db)
+        step = self._unknown_step(db, fire)
+
+        def factory(ctx):
+            return [step]
+
+        with pytest.raises(AgentJobError) as excinfo:
+            recovery.resume_after_review(
+                db,
+                ORG,
+                AGENT,
+                job["id"],
+                executor_factory=factory,
+                toll_sink=tolls,
+                toll_reader=tolls.reader,
+                now=dt(2026, 11, 5, 19, 0),
+            )
+        assert "send" in str(excinfo.value)
+        assert service.get_job(db, ORG, AGENT, job["id"])["status"] == "blocked"
+
+    def test_resume_after_review_still_refuses_plain_blocked_job_without_interrupted(
+        self, db, tolls
+    ):
+        job, fire, now = self._blocked_with_stranded_fire(db)
+        # The stranded fire never went stale and is not
+        # interrupted: the gated door does not widen to ordinary
+        # blocked jobs, whose door stays plain resume.
+        with pytest.raises(AgentJobError):
+            recovery.resume_after_review(
+                db,
+                ORG,
+                AGENT,
+                job["id"],
+                executor_factory=_echo_factory(),
+                toll_sink=tolls,
+                toll_reader=tolls.reader,
+                now=dt(2026, 11, 5, 19, 0),
+            )
+        assert service.get_job(db, ORG, AGENT, job["id"])["status"] == "blocked"
+
+    # -- (d) non-regression -----------------------------------------
+
+    def test_blocked_job_with_no_fires_resumes_via_plain_resume(self, db):
+        job = _job(db, dt(2026, 11, 5, 15, 0))
+        fresh = service.get_job(db, ORG, AGENT, job["id"])
+        service.block_job(db, ORG, AGENT, fresh, "bad definition")
+        resumed = service.resume_job(
+            db, ORG, AGENT, job["id"], now=dt(2026, 11, 5, 17, 0)
+        )
+        assert resumed["status"] == "active"
+        assert resumed["blocked_reason"] is None
+
+    def test_blocked_job_with_only_terminal_fires_resumes_via_plain_resume(self, db):
+        now = dt(2026, 11, 5, 18, 0)
+        job = _job(db, dt(2026, 11, 5, 15, 0))
+        done_fire = _stranded_fire(db, job, started_minutes_ago=120, now=now)
+        service.update_fire(
+            db,
+            ORG,
+            AGENT,
+            done_fire["id"],
+            from_statuses=("running",),
+            status="completed",
+            finished_at=now.isoformat(),
+        )
+        slot2 = dt(2026, 11, 5, 17, 0)
+        failed_fire = psvc.record_fire(
+            db,
+            ORG,
+            AGENT,
+            job["id"],
+            pmodels.FireCreate(
+                fire_key=service.mint_fire_key(job["id"], slot2),
+                scheduled_for=slot2.isoformat(),
+            ),
+        )
+        service.update_fire(
+            db,
+            ORG,
+            AGENT,
+            failed_fire["id"],
+            from_statuses=("pending",),
+            status="failed",
+            finished_at=now.isoformat(),
+        )
+        fresh = service.get_job(db, ORG, AGENT, job["id"])
+        service.block_job(db, ORG, AGENT, fresh, "bad definition")
+        resumed = service.resume_job(
+            db, ORG, AGENT, job["id"], now=dt(2026, 11, 5, 19, 0)
+        )
+        assert resumed["status"] == "active"
+
+    def test_reaper_active_and_paused_paths_unchanged(self, db, alerter):
+        now = dt(2026, 11, 5, 18, 0)
+        active_job = _job(db, dt(2026, 11, 5, 15, 0), name="still-active")
+        paused_job = _job(db, dt(2026, 11, 5, 15, 0), name="still-paused")
+        _stranded_fire(db, active_job, started_minutes_ago=120, now=now)
+        _stranded_fire(db, paused_job, started_minutes_ago=120, now=now)
+        service.pause_job(db, ORG, AGENT, paused_job["id"])
+        result = recovery.reap_stranded_fires(
+            db, now=now, stale_after=timedelta(minutes=30), alerter=alerter
+        )
+        assert len(result["reaped"]) == 2
+        for job in (active_job, paused_job):
+            row = service.get_job(db, ORG, AGENT, job["id"])
+            assert row["status"] == "review"
+            assert row["review_fire_id"] is not None
+        assert len(alerter.calls) == 2
+
+
 class TestVocabularyAndMigration:
     def test_interrupted_and_review_statuses_exist(self):
         assert "interrupted" in pmodels.FIRE_STATUSES
