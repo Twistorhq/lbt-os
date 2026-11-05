@@ -30,6 +30,7 @@ map Section 4 B2 acceptance list:
 import base64
 import hashlib
 import os
+import re
 import threading
 import time
 
@@ -1588,3 +1589,252 @@ class TestSpacedIbanParityControls:
         }
         assert by_key["r4-accented"] == accented
         assert by_key["r4-emoji"] == emoji
+
+
+# -- Rex retest fix round 5: normalized-shape laced spaced IBANs (R5) ---
+
+# R5: the round-4 detector matched the exact canonical byte
+# shape (uppercase, literal U+0020 separators, single line) on
+# the format-dropped copy, so three laced variants of the same
+# IBAN stored verbatim on both gate paths and stayed
+# strip-recoverable:
+# R5-1 (HIGH): a lowercase spaced IBAN, laced. The shape regex
+# is uppercase-only and the detection copy never case-folded.
+# R5-2 (HIGH): non-space whitespace separators (a line break
+# replacing one group separator, mixed space and tab
+# separators), laced. The detector required a literal space
+# between every group.
+# R5-3 (MEDIUM): a trailing digit glued to the final group,
+# laced. The despaced length (23 for DE) fails registered
+# length validation, so the detector skipped the span, and
+# the full IBAN stayed recoverable as a substring.
+# The fix builds the detection copy with per-character
+# normalization alongside the index map (ASCII case-fold,
+# any whitespace char mapped to a single space), a 1:1
+# mapping per surviving character, so raw spans stay exact
+# and country length plus mod-97 validation are unchanged.
+# The laced-span condition is unchanged: only a validated
+# span whose raw form carries dropped characters is
+# neutralized, so plain lowercase, tab-separated, and glued
+# forms (no dropped chars) keep exactly today's B1 output.
+# R5-3 decision, pinned here: the WHOLE glued span (the
+# validated IBAN plus its one glued trailing digit) is
+# replaced by the marker, not just the IBAN substring.
+# Parity justification: the plain glued form is destroyed
+# wholesale by B1 (it stores as DE[phone], no digit of it
+# survives, for every glued digit 0-9), so destroying the
+# whole laced span is the exact plain-form outcome;
+# neutralizing only the IBAN substring would leave the
+# glued digit behind as a marker-plus-digit remnant that
+# the plain form never leaves.
+LOWER_DE = "de89 3704 0044 0532 0130 00"
+MIXED_DE = "De89 3704 0044 0532 0130 00"
+LINEBREAK_DE = "DE89 3704\n0044 0532 0130 00"
+MIXED_WS_DE = "DE89 3704\t0044 0532\t0130 00"
+GLUED_DE = "DE89 3704 0044 0532 0130 009"
+
+
+def _recoverable_any(stored, despaced):
+    # The attacker's recovery, generalized: drop the invisible
+    # characters, remove ALL whitespace of any kind, fold case.
+    squashed = re.sub(r"\s+", "", screening._drop_format_chars(stored)).upper()
+    return despaced.upper() in squashed
+
+
+class TestRound5LacedSpacedIbans:
+    def test_lowercase_laced_not_recoverable_at_screen_level(self):
+        _, despaced = SPACED_IBANS["DE"]
+        variants = []
+        for char in (FE0F, WJ):
+            variants.append(_lace_offsets(LOWER_DE, char, (4, 12, 19)))
+            variants.append(_lace_offsets(MIXED_DE, char, (4, 12, 19)))
+        variants.append(_lace_every(LOWER_DE, FE0F, 4))
+        variants.append(_lace_every(LOWER_DE, WJ, 4))
+        for laced in variants:
+            body = f"The account is {laced} for payouts."
+            assert screening.screen(body) == (
+                f"The account is {models.REDACTION_MARKER} for payouts."
+            )
+            out = _pipeline(body)
+            assert models.REDACTION_MARKER in out
+            assert not _recoverable_any(out, despaced)
+
+    def test_lowercase_laced_both_gate_paths(self, db):
+        _, despaced = SPACED_IBANS["DE"]
+        for char in (FE0F, WJ):
+            laced = _lace_offsets(LOWER_DE, char, (4, 12, 19))
+            body = f"The account is {laced} for payouts."
+            relaxed_db = type(db)()
+            service.set_gate_mode(
+                relaxed_db,
+                ORG,
+                AGENT,
+                models.GATE_RELAXED,
+                actor_role="owner",
+                actor_id="o-1",
+            )
+            _add(relaxed_db, "r5-lower-relaxed", body)
+            snap = service.assemble_snapshot(
+                relaxed_db, ORG, AGENT, f"sess-r5-lower-{ord(char)}"
+            )
+            snap_bodies = [e["body"] for e in snap["collections"][FACTS]]
+            assert snap_bodies == [
+                f"The account is {models.REDACTION_MARKER} for payouts."
+            ]
+            assert not _recoverable_any(snap_bodies[0], despaced)
+            gated_db = type(db)()
+            staged = _add(gated_db, "r5-lower-gated", body)
+            _approve(gated_db, staged["id"])
+            entries = service.list_entries(gated_db, ORG, AGENT, FACTS)
+            assert len(entries) == 1
+            assert entries[0]["body"] == (
+                f"The account is {models.REDACTION_MARKER} for payouts."
+            )
+            assert not _recoverable_any(entries[0]["body"], despaced)
+
+    def test_nonspace_separator_laced_not_recoverable_at_screen_level(self):
+        _, despaced = SPACED_IBANS["DE"]
+        for base in (LINEBREAK_DE, MIXED_WS_DE):
+            for char in (FE0F, WJ):
+                laced = _lace_offsets(base, char, (4, 12, 19))
+                body = f"The account is {laced} for payouts."
+                assert screening.screen(body) == (
+                    f"The account is {models.REDACTION_MARKER} for payouts."
+                )
+                out = _pipeline(body)
+                assert models.REDACTION_MARKER in out
+                assert not _recoverable_any(out, despaced)
+
+    def test_nonspace_separator_laced_both_gate_paths(self, db):
+        _, despaced = SPACED_IBANS["DE"]
+        cases = [
+            ("r5-lb", _lace_offsets(LINEBREAK_DE, FE0F, (4, 12, 19))),
+            ("r5-mixws", _lace_offsets(MIXED_WS_DE, WJ, (4, 12, 19))),
+        ]
+        for key, laced in cases:
+            body = f"The account is {laced} for payouts."
+            relaxed_db = type(db)()
+            service.set_gate_mode(
+                relaxed_db,
+                ORG,
+                AGENT,
+                models.GATE_RELAXED,
+                actor_role="owner",
+                actor_id="o-1",
+            )
+            _add(relaxed_db, key, body)
+            snap = service.assemble_snapshot(relaxed_db, ORG, AGENT, f"sess-{key}")
+            snap_bodies = [e["body"] for e in snap["collections"][FACTS]]
+            assert snap_bodies == [
+                f"The account is {models.REDACTION_MARKER} for payouts."
+            ]
+            assert not _recoverable_any(snap_bodies[0], despaced)
+            gated_db = type(db)()
+            staged = _add(gated_db, key, body)
+            _approve(gated_db, staged["id"])
+            entries = service.list_entries(gated_db, ORG, AGENT, FACTS)
+            assert len(entries) == 1
+            assert entries[0]["body"] == (
+                f"The account is {models.REDACTION_MARKER} for payouts."
+            )
+            assert not _recoverable_any(entries[0]["body"], despaced)
+
+    def test_glued_digit_laced_whole_span_neutralized_at_screen_level(self):
+        _, despaced = SPACED_IBANS["DE"]
+        for glued in (GLUED_DE, "DE89 3704 0044 0532 0130 003"):
+            for char in (FE0F, WJ):
+                laced = _lace_offsets(glued, char, (4, 12, 19))
+                body = f"The account is {laced} for payouts."
+                # The pinned R5-3 decision: the whole glued span
+                # is replaced, so no trailing digit survives.
+                assert screening.screen(body) == (
+                    f"The account is {models.REDACTION_MARKER} for payouts."
+                )
+                out = _pipeline(body)
+                assert out == f"The account is {models.REDACTION_MARKER} for payouts."
+                assert not _recoverable_any(out, despaced)
+
+    def test_glued_digit_laced_both_gate_paths(self, db):
+        _, despaced = SPACED_IBANS["DE"]
+        laced = _lace_offsets(GLUED_DE, FE0F, (4, 12, 19))
+        body = f"The account is {laced} for payouts."
+        service.set_gate_mode(
+            db, ORG, AGENT, models.GATE_RELAXED, actor_role="owner", actor_id="o-1"
+        )
+        _add(db, "r5-glued-relaxed", body)
+        snap = service.assemble_snapshot(db, ORG, AGENT, "sess-r5-glued")
+        snap_bodies = [e["body"] for e in snap["collections"][FACTS]]
+        assert snap_bodies == [f"The account is {models.REDACTION_MARKER} for payouts."]
+        assert not _recoverable_any(snap_bodies[0], despaced)
+        gated_db = type(db)()
+        staged = _add(gated_db, "r5-glued-gated", body)
+        _approve(gated_db, staged["id"])
+        entries = service.list_entries(gated_db, ORG, AGENT, FACTS)
+        assert len(entries) == 1
+        assert entries[0]["body"] == (
+            f"The account is {models.REDACTION_MARKER} for payouts."
+        )
+        assert not _recoverable_any(entries[0]["body"], despaced)
+
+
+class TestRound5SpacedIbanParityControls:
+    def test_plain_lowercase_and_mixed_case_byte_identical(self):
+        # Plain forms carry no dropped chars, so the normalized
+        # detection must leave them untouched: the normalization
+        # applies to the detection copy only, never to stored
+        # content. These are exactly today's B1 outputs.
+        assert _pipeline(f"The account is {LOWER_DE} for payouts.") == (
+            "The account is de[phone] for payouts."
+        )
+        assert _pipeline(f"The account is {MIXED_DE} for payouts.") == (
+            "The account is De[phone] for payouts."
+        )
+
+    def test_plain_nonspace_separator_forms_byte_identical(self):
+        # The plain line-break and mixed-separator forms keep
+        # exactly today's partial B1 masking, and the plain
+        # fully tab-separated form keeps today's verbatim store
+        # (the plain tab parity gap is TW-966, out of scope).
+        assert _pipeline(f"The account is {LINEBREAK_DE} for payouts.") == (
+            "The account is DE89 3704\n[phone] for payouts."
+        )
+        assert _pipeline(f"The account is {MIXED_WS_DE} for payouts.") == (
+            "The account is DE89 3704\t[phone]\t0130 00 for payouts."
+        )
+        tabbed = "DE89\t3704\t0044\t0532\t0130\t00"
+        body = f"The account is {tabbed} for payouts."
+        assert _pipeline(body) == body
+
+    def test_plain_glued_digit_byte_identical(self):
+        # The plain glued form is destroyed wholesale by B1 for
+        # every glued digit; that wholesale destruction is the
+        # parity basis for the pinned R5-3 whole-span choice.
+        for digit in "0123456789":
+            glued = f"DE89 3704 0044 0532 0130 00{digit}"
+            assert _pipeline(f"The account is {glued} for payouts.") == (
+                "The account is DE[phone] for payouts."
+            )
+
+    def test_laced_lowercase_failing_mod97_stores_as_today(self):
+        # Normalization must not widen the false-positive
+        # surface: a lowercase IBAN-shaped grouping whose check
+        # digits fail mod-97 is never rewritten, laced or not,
+        # exactly as today.
+        laced = _lace_offsets("de12 3456 7890 1234 5678 90", FE0F, (4, 12, 19))
+        body = f"Reference {laced} was quoted."
+        assert _pipeline(body) == body
+
+    def test_embedded_newline_prose_stores_byte_for_byte(self, db):
+        # Structural pin, unchanged by this round: an entry body
+        # may carry an embedded newline; it is stored, approved,
+        # and snapshotted with the newline intact (no splitting,
+        # no rejection, no rewriting).
+        text = "Line one is open.\nLine two is closed for the day."
+        assert screening.screen(text) == text
+        staged = _add(db, "r5-newline-note", text)
+        _approve(db, staged["id"])
+        entries = service.list_entries(db, ORG, AGENT, FACTS)
+        assert entries[0]["body"] == text
+        snap = service.assemble_snapshot(db, ORG, AGENT, "sess-r5-newline")
+        bodies = [e["body"] for e in snap["collections"][FACTS]]
+        assert bodies == [text]
