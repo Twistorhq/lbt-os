@@ -348,6 +348,75 @@ class TestDisplayContract:
         assert corr["met"] is False
         assert {p["key"] for p in corr["parts"]} == {"streak", "vouches"}
 
+    def test_suspended_next_tier_is_null(self, db):
+        # Rosa TW-941 gate: next_tier is null when suspended, always.
+        uid = add_member(db)
+        for i in range(5):
+            _seed_night(db, uid, when=NOW - timedelta(days=10 - i))
+        db.seed(
+            "rsn_trust_events",
+            {
+                "user_id": uid,
+                "event_type": "identity_strike",
+                "weight": -10,
+                "ref_type": "encounter_confirm",
+                "ref_id": str(uuid4()),
+                "created_at": NOW,
+            },
+        )
+        out = service.get_my_rewards(db, uid, now=NOW)
+        assert out["suspended"] is True
+        assert out["next_tier"] is None
+
+    def test_band_is_always_a_known_value(self, db):
+        uid = add_member(db)
+        out = service.get_my_rewards(db, uid, now=NOW)
+        assert out["band"] in ("trusted", "good_standing", "watch", "restricted")
+
+    def test_keyholder_progress_carries_sustained_show_rate(self, db):
+        # Rosa TW-941 gate: Keyholder progress must include the
+        # sustained 0.90 show-rate condition (catalog Section 1,
+        # chained through Pillar in trust.py).
+        uid = add_member(db)
+        for i in range(40):
+            _seed_night(db, uid, when=NOW - timedelta(days=45 - (i % 40)))
+        for _ in range(3):
+            db.seed(
+                "rsn_vouches",
+                {"voucher_id": str(uuid4()), "vouchee_id": uid,
+                 "event_id": str(uuid4())},
+            )
+        for _ in range(15):
+            _seed_review(db, uid)
+        for i in range(6):
+            _seed_hosted_clean(db, uid, when=NOW - timedelta(days=50 - i))
+        out = service.get_my_rewards(db, uid, now=NOW)
+        assert out["standing_tier"] == "pillar"
+        assert out["next_tier"] == "keyholder"
+        progress = {p["key"]: p for p in out["progress"]}
+        assert progress["showRate"]["target"] == 0.90
+        assert progress["showRate"]["met"] is True
+
+    def test_teen_caps_at_pillar_never_keyholder_next(self, db):
+        # Catalog Section 7: Keyholder does not exist in the teen
+        # tier; a teen Pillar record has no next rung.
+        uid = add_member(db, band="age_16_17")
+        for i in range(40):
+            _seed_night(db, uid, when=NOW - timedelta(days=45 - (i % 40)))
+        for _ in range(3):
+            db.seed(
+                "rsn_vouches",
+                {"voucher_id": str(uuid4()), "vouchee_id": uid,
+                 "event_id": str(uuid4())},
+            )
+        for _ in range(15):
+            _seed_review(db, uid)
+        for i in range(6):
+            _seed_hosted_clean(db, uid, when=NOW - timedelta(days=50 - i))
+        out = service.get_my_rewards(db, uid, now=NOW)
+        assert out["standing_tier"] == "pillar"
+        assert out["next_tier"] is None
+
     def test_suspended_payload_keeps_tier_and_marks_conduct(self, db):
         uid = add_member(db)
         for i in range(5):
