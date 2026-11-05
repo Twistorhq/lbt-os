@@ -37,6 +37,10 @@ same approve path, receipts included. There is deliberately
 no agent-callable path to the setting: a non-owner actor is
 refused for every change, relax or tighten alike, so the
 agent can never remove a tightening the owner put in place.
+Every successful gate change records a
+memory_gate_mode_changed audit event (old mode, new mode,
+actor), so a relax-then-re-tighten cycle leaves a trace in
+the append-only trail even when no write auto-applied.
 
 Snapshots: assemble_snapshot reads the approved entries once,
 freezes copies in a per-session registry, and returns the same
@@ -63,6 +67,7 @@ from .models import (
     AUDIT_EVENTS,
     COLLECTION_LIMITS,
     COLLECTIONS,
+    EVENT_GATE_MODE_CHANGED,
     GATE_GATED,
     GATE_MODES,
     GATE_RELAXED,
@@ -760,6 +765,43 @@ def get_gate_mode(db: Any, org_id: str, agent_id: str) -> str:
     return rows[0].get("gate_mode", GATE_GATED)
 
 
+def _record_gate_audit(
+    db: Any,
+    org_id: str,
+    agent_id: str,
+    *,
+    old_mode: str,
+    new_mode: str,
+    actor_role: str,
+    actor_id: str,
+) -> dict:
+    """Append the gate-change event to the audit trail. Gate
+    events carry no staged write, collection, entry, or
+    receipt; the transition itself (old mode, new mode,
+    actor) is the detail."""
+    if EVENT_GATE_MODE_CHANGED not in AUDIT_EVENTS:
+        raise MemoryError(f"unknown audit event {EVENT_GATE_MODE_CHANGED!r}")
+    row = {
+        "org_id": org_id,
+        "agent_identity_id": agent_id,
+        "workspace_id": workspace_id_for(org_id, agent_id),
+        "event_type": EVENT_GATE_MODE_CHANGED,
+        "staged_write_id": None,
+        "receipt_id": None,
+        "collection": None,
+        "entry_key": None,
+        "detail": {
+            "old_mode": old_mode,
+            "new_mode": new_mode,
+            "actor": actor_id,
+            "actor_id": actor_id,
+            "actor_role": actor_role,
+        },
+        "created_at": _now_iso(),
+    }
+    return db.table("agt_memory_audit_events").insert(row).execute().data[0]
+
+
 def set_gate_mode(
     db: Any,
     org_id: str,
@@ -771,18 +813,21 @@ def set_gate_mode(
 ) -> dict:
     """Change the gate mode. Owner actors only, for every
     change: the agent has no path to this setting, so it can
-    neither relax the gate itself nor remove a tightening."""
+    neither relax the gate itself nor remove a tightening.
+    Every successful change is recorded in the audit trail;
+    a refused attempt changes nothing and records nothing."""
     ws = _require_scope(org_id, agent_id)
     if mode not in GATE_MODES:
         raise MemoryError(f"unknown gate mode {mode!r}; want one of {GATE_MODES}")
     if actor_role != "owner":
         raise GatePermissionError("only the owner may change the memory gate setting")
+    old_mode = get_gate_mode(db, org_id, agent_id)
     now = _now_iso()
     rows = (
         _scope(db, "agt_memory_gate_settings", org_id, agent_id).limit(1).execute().data
     )
     if rows:
-        updated = (
+        result = (
             db.table("agt_memory_gate_settings")
             .update({"gate_mode": mode, "updated_by": actor_id, "updated_at": now})
             .eq("id", rows[0]["id"])
@@ -791,15 +836,25 @@ def set_gate_mode(
             .eq("workspace_id", ws)
             .execute()
             .data
-        )
-        return updated[0]
-    row = {
-        "org_id": org_id,
-        "agent_identity_id": agent_id,
-        "workspace_id": ws,
-        "gate_mode": mode,
-        "updated_by": actor_id,
-        "created_at": now,
-        "updated_at": now,
-    }
-    return db.table("agt_memory_gate_settings").insert(row).execute().data[0]
+        )[0]
+    else:
+        row = {
+            "org_id": org_id,
+            "agent_identity_id": agent_id,
+            "workspace_id": ws,
+            "gate_mode": mode,
+            "updated_by": actor_id,
+            "created_at": now,
+            "updated_at": now,
+        }
+        result = db.table("agt_memory_gate_settings").insert(row).execute().data[0]
+    _record_gate_audit(
+        db,
+        org_id,
+        agent_id,
+        old_mode=old_mode,
+        new_mode=mode,
+        actor_role=actor_role,
+        actor_id=actor_id,
+    )
+    return result

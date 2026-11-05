@@ -112,10 +112,13 @@ GATE_GATED = "gated"
 GATE_RELAXED = "relaxed"
 GATE_MODES: tuple[str, ...] = (GATE_GATED, GATE_RELAXED)
 
+EVENT_GATE_MODE_CHANGED = "memory_gate_mode_changed"
+
 AUDIT_EVENTS: tuple[str, ...] = (
     "memory_write_applied",
     "memory_write_rejected",
     "memory_write_refused_stale",
+    EVENT_GATE_MODE_CHANGED,
 )
 
 # The marker an inline secret is replaced with during screening.

@@ -53,6 +53,12 @@ CREATE INDEX IF NOT EXISTS idx_agt_memory_entries_org_agent
 -- lands here, and an applied write's receipt id is recorded
 -- with the version it produced, so a memory claim can be
 -- verified against the trail (and only against the trail).
+-- Gate-mode changes land here too (memory_gate_mode_changed,
+-- with old mode, new mode, and actor in detail): relaxing the
+-- gate is the most security-sensitive transition in this
+-- feature, so it must never leave the trail blank. Gate events
+-- have no staged write, collection, or entry, so those three
+-- columns are nullable; write events always populate them.
 -- ---------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS agt_memory_audit_events (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -63,13 +69,14 @@ CREATE TABLE IF NOT EXISTS agt_memory_audit_events (
         CHECK (event_type IN (
             'memory_write_applied',
             'memory_write_rejected',
-            'memory_write_refused_stale'
+            'memory_write_refused_stale',
+            'memory_gate_mode_changed'
         )),
-    staged_write_id UUID NOT NULL REFERENCES agt_staged_writes(id),
+    staged_write_id UUID REFERENCES agt_staged_writes(id),
     receipt_id TEXT,
-    collection TEXT NOT NULL
+    collection TEXT
         CHECK (collection IN ('business_facts', 'owner_preferences')),
-    entry_key TEXT NOT NULL,
+    entry_key TEXT,
     detail JSONB NOT NULL DEFAULT '{}',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
