@@ -72,6 +72,14 @@ class TestConstraints:
         assert "receipt_id" in section
         assert "staged_write_id" in section
 
+    def test_audit_event_vocabulary_includes_gate_change(self):
+        section = _section("agt_memory_audit_events")
+        assert "'memory_gate_mode_changed'" in section
+        # Gate events have no staged write, collection, or entry:
+        # those columns must be nullable in the audit table.
+        assert "staged_write_id UUID REFERENCES" in section
+        assert "staged_write_id UUID NOT NULL" not in section
+
 
 class TestRls:
     def test_rls_enabled_and_deny_all(self):

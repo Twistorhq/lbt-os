@@ -576,6 +576,42 @@ class TestGateSetting:
             )
         assert service.get_gate_mode(db, ORG, AGENT) == models.GATE_GATED
 
+    def test_gate_relax_and_retighten_are_audited(self, db):
+        service.set_gate_mode(
+            db, ORG, AGENT, models.GATE_RELAXED, actor_role="owner", actor_id="own-1"
+        )
+        service.set_gate_mode(
+            db, ORG, AGENT, models.GATE_GATED, actor_role="owner", actor_id="own-1"
+        )
+        events = [
+            e
+            for e in service.list_audit_events(db, ORG, AGENT)
+            if e["event_type"] == "memory_gate_mode_changed"
+        ]
+        assert len(events) == 2
+        # Newest first: the re-tighten is listed before the relax.
+        assert events[0]["detail"]["old_mode"] == models.GATE_RELAXED
+        assert events[0]["detail"]["new_mode"] == models.GATE_GATED
+        assert events[1]["detail"]["old_mode"] == models.GATE_GATED
+        assert events[1]["detail"]["new_mode"] == models.GATE_RELAXED
+        for event in events:
+            assert event["detail"]["actor_id"] == "own-1"
+            assert event["detail"]["actor_role"] == "owner"
+            assert event["receipt_id"] is None
+
+    def test_refused_agent_gate_change_writes_no_audit_event(self, db):
+        with pytest.raises(models.GatePermissionError):
+            service.set_gate_mode(
+                db,
+                ORG,
+                AGENT,
+                models.GATE_RELAXED,
+                actor_role="agent",
+                actor_id=AGENT,
+            )
+        assert service.list_audit_events(db, ORG, AGENT) == []
+        assert service.get_gate_mode(db, ORG, AGENT) == models.GATE_GATED
+
     def test_relaxed_gate_is_per_agent(self, db):
         service.set_gate_mode(
             db, ORG, AGENT, models.GATE_RELAXED, actor_role="owner", actor_id="own-1"
