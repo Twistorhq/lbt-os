@@ -20,6 +20,16 @@ imported), layered on the B1 masking pipeline:
   laced with a single invisible character is detected as
   its stripped form and redacted whole, so it is no more
   recoverable from stored content than its plain form.
+  Spaced IBANs are format-drop-aware too (round 4): the
+  plain spaced form is destroyed by the B1 phone masking,
+  but invisibles laced into its digit groups break the B1
+  patterns, so screening detects the spaced-IBAN shape on
+  the format-dropped copy, validates it (registered
+  country length plus the mod-97 check), and replaces a
+  matched span whose raw form carries dropped characters
+  with the marker; plain spaced IBANs are untouched and
+  keep their exact B1 output, and grouped numbers that
+  fail IBAN validation are never rewritten.
 - injection-shaped and steering text is BLOCKED: classic
   instruction-override phrasing, and (F4) directive phrasing
   that reads as a standing order to the agent (always-approve
@@ -286,6 +296,106 @@ def _normalize_for_detection(text: str) -> str:
     return re.sub(r"\s+", " ", _drop_format_chars(text))
 
 
+# -- spaced IBANs laced with invisible characters (R4) -------------
+
+# Registered IBAN total lengths by country code. A spaced
+# candidate whose despaced length disagrees with its country's
+# registered length is not an IBAN, whatever it looks like.
+_IBAN_COUNTRY_LENGTHS: dict[str, int] = {
+    "AD": 24, "AE": 23, "AL": 28, "AT": 20, "AZ": 28, "BA": 20,
+    "BE": 16, "BG": 22, "BH": 22, "BR": 29, "BY": 28, "CH": 21,
+    "CR": 22, "CY": 28, "CZ": 24, "DE": 22, "DK": 18, "DO": 28,
+    "EE": 20, "EG": 29, "ES": 24, "FI": 18, "FO": 18, "FR": 27,
+    "GB": 22, "GE": 22, "GI": 23, "GL": 18, "GR": 27, "GT": 28,
+    "HR": 21, "HU": 28, "IE": 22, "IL": 23, "IR": 26, "IS": 26,
+    "IT": 27, "JO": 30, "KW": 30, "KZ": 20, "LB": 28, "LC": 32,
+    "LI": 21, "LT": 20, "LU": 20, "LV": 21, "LY": 25, "MC": 27,
+    "MD": 24, "ME": 22, "MK": 19, "MR": 27, "MT": 31, "MU": 30,
+    "NL": 18, "NO": 15, "PK": 24, "PL": 28, "PS": 29, "PT": 25,
+    "QA": 29, "RO": 24, "RS": 22, "SA": 24, "SC": 31, "SD": 18,
+    "SE": 24, "SI": 19, "SK": 24, "SM": 27, "ST": 25, "SV": 28,
+    "TL": 23, "TN": 24, "TR": 26, "UA": 29, "VG": 24, "XK": 20,
+}  # fmt: skip
+
+# The canonical printed IBAN form: country and check prefix,
+# then BBAN groups of four separated by single spaces, with a
+# final group of one to four. Matched on the format-dropped
+# copy, where laced groups read exactly as their plain form.
+_SPACED_IBAN_RE = re.compile(
+    r"(?<![A-Z0-9])[A-Z]{2}\d{2}(?: [A-Z0-9]{4}){1,7}(?: [A-Z0-9]{1,4})?"
+    r"(?![A-Z0-9])"
+)
+
+
+def _is_valid_iban(despaced: str) -> bool:
+    """IBAN validity for a despaced candidate: the registered
+    length for its country (or the IBAN-wide 15 to 34 range
+    for an unlisted country) and the mod-97 check, which
+    every real IBAN passes by construction. Grouped numbers
+    that merely look IBAN-shaped (order, tracking, and card
+    groupings, or an IBAN prefix with wrong check digits)
+    fail one of the two and are left alone."""
+    expected = _IBAN_COUNTRY_LENGTHS.get(despaced[:2])
+    if expected is not None:
+        if len(despaced) != expected:
+            return False
+    elif not 15 <= len(despaced) <= 34:
+        return False
+    rearranged = despaced[4:] + despaced[:4]
+    digits = "".join(ch if ch.isdigit() else str(ord(ch) - 55) for ch in rearranged)
+    remainder = 0
+    for i in range(0, len(digits), 7):
+        remainder = int(str(remainder) + digits[i : i + 7]) % 97
+    return remainder == 1
+
+
+def _neutralize_laced_spaced_ibans(text: str) -> str:
+    """Neutralize a spaced IBAN whose raw span carries
+    invisible characters (Rex retest round 4, TW-951).
+
+    The plain spaced IBAN is destroyed downstream by the B1
+    phone masking (it stores as DE[phone]), but format
+    characters laced into the digit groups break the B1
+    patterns, so the laced form stored verbatim and the full
+    IBAN was recoverable by dropping the invisibles and
+    removing the spaces. Detection therefore runs here, in
+    the B2 layer, on the format-dropped copy with an index
+    map back to the raw text: a validated IBAN match whose
+    raw span contains dropped characters has that whole raw
+    span replaced by the redaction marker, the same outcome
+    its contiguous form gets from the inline IBAN redactor,
+    and the write proceeds. A match with no dropped
+    characters in its raw span is the plain form and is left
+    untouched, so plain spaced IBANs keep exactly the B1
+    masking output they have today, and benign grouped
+    numbers that fail IBAN validation are never rewritten."""
+    dropped_chars: list[str] = []
+    index_map: list[int] = []
+    for i, ch in enumerate(text):
+        if not _is_detection_dropped(ch):
+            dropped_chars.append(ch)
+            index_map.append(i)
+    dropped = "".join(dropped_chars)
+    spans: list[tuple[int, int]] = []
+    for match in _SPACED_IBAN_RE.finditer(dropped):
+        if not _is_valid_iban(match.group(0).replace(" ", "")):
+            continue
+        raw_start = index_map[match.start()]
+        raw_end = index_map[match.end() - 1] + 1
+        if any(_is_detection_dropped(ch) for ch in text[raw_start:raw_end]):
+            spans.append((raw_start, raw_end))
+    if not spans:
+        return text
+    out: list[str] = []
+    pos = 0
+    for start, end in spans:
+        out.append(text[pos:start])
+        out.append(REDACTION_MARKER)
+        pos = end
+    out.append(text[pos:])
+    return "".join(out)
+
+
 def _is_base64_block(text: str) -> bool:
     """Two or more lines that are nothing but base64, totalling
     real key material: headerless private-key bodies (F3)."""
@@ -337,7 +447,7 @@ def screen(text: str) -> str:
     mask_text, and approval re-runs both layers.
     """
     _check_blocked(text)
-    screened = text
+    screened = _neutralize_laced_spaced_ibans(text)
     for pattern in _INLINE_SECRET_RES:
         screened = pattern.sub(REDACTION_MARKER, screened)
     screened = _URL_USERINFO_RE.sub(r"\1" + REDACTION_MARKER + "@", screened)
