@@ -64,9 +64,11 @@ class _Query:
         if self._pending_insert is not None:
             row = self._pending_insert
             key = row.get("idempotency_key")
-            if key is not None and any(r.get("idempotency_key") == key for r in self._store):
+            if key is not None and any(
+                r.get("idempotency_key") == key for r in self._store
+            ):
                 raise Exception(
-                    'duplicate key value violates unique constraint '
+                    "duplicate key value violates unique constraint "
                     '"toll_events_idempotency_key_key"'
                 )
             row.setdefault("occurred_at", "2026-11-05T00:00:00+00:00")
@@ -172,7 +174,9 @@ def test_distinct_roots_toll_separately():
 
 def test_booking_recovered_anchor_three_percent():
     db = FakeDB()
-    row = agent_tolls.emit_booking_recovered(db, ORG, "task-akeem-5", recovered_value_cents=10_000)
+    row = agent_tolls.emit_booking_recovered(
+        db, ORG, "task-akeem-5", recovered_value_cents=10_000
+    )
     # 3 percent of $100.00 is $3.00.
     assert row["event_type"] == "booking.recovered"
     assert row["amount_cents"] == 300

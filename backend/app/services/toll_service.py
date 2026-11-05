@@ -14,9 +14,43 @@ import logging
 
 from supabase import Client
 
-from ..config import TOLL_RATES
+from ..config import (
+    BOOKING_RECOVERED_EVENT,
+    BOOKING_RECOVERED_MAX_PERCENT,
+    BOOKING_RECOVERED_MIN_PERCENT,
+    TOLL_RATES,
+)
 
 log = logging.getLogger(__name__)
+
+
+def validate_booking_recovered_band(amount_cents: int, base_value_cents: int) -> None:
+    """Enforce the Section 11 band for booking.recovered (TW-950).
+
+    The emitter-computed amount must sit inside the 2 to 4 percent
+    band of the recovered value (anchor 3 percent). A half-cent
+    tolerance on each edge absorbs rounding to the nearest cent.
+    Raises ValueError for a non-positive base, a non-positive amount,
+    or an amount outside the band.
+    """
+    if base_value_cents <= 0:
+        raise ValueError(
+            "booking.recovered requires a positive recovered value "
+            f"to check the band; got base_value_cents={base_value_cents}"
+        )
+    if amount_cents <= 0:
+        raise ValueError(
+            f"booking.recovered amount must be positive; got {amount_cents} cents"
+        )
+    low = base_value_cents * BOOKING_RECOVERED_MIN_PERCENT / 100
+    high = base_value_cents * BOOKING_RECOVERED_MAX_PERCENT / 100
+    if amount_cents < low - 0.51 or amount_cents > high + 0.51:
+        raise ValueError(
+            "booking.recovered amount outside the 2 to 4 percent band: "
+            f"{amount_cents} cents on a recovered value of "
+            f"{base_value_cents} cents "
+            f"({amount_cents / base_value_cents * 100:.2f} percent)"
+        )
 
 
 def record_toll_event(
@@ -28,6 +62,7 @@ def record_toll_event(
     source_type: str | None = None,
     source_id: str | None = None,
     amount_cents: int | None = None,
+    base_value_cents: int | None = None,
 ) -> dict:
     """
     Record one metered action as a toll.
@@ -36,12 +71,31 @@ def record_toll_event(
     - Percent-of-value events (e.g. booking.recovered): pass amount_cents
       computed by the emitter; unit_rate_cents is recorded as 0 with the
       amount intact.
+    - booking.recovered additionally requires base_value_cents (the
+      recovered value) and validates the amount against the Section 11
+      band of 2 to 4 percent at emission (TW-950); an out-of-band
+      amount raises ValueError and tolls nothing.
     - Unknown event_type raises ValueError — never a silent $0.
     - Duplicate idempotency_key returns the existing row (no double-toll).
     """
-    if event_type in TOLL_RATES:
+    if event_type == BOOKING_RECOVERED_EVENT:
+        if amount_cents is None:
+            raise ValueError(
+                "booking.recovered requires amount_cents computed by the emitter"
+            )
+        if base_value_cents is None:
+            raise ValueError(
+                "booking.recovered requires base_value_cents (the recovered "
+                "value) so the 2 to 4 percent band can be validated"
+            )
+        validate_booking_recovered_band(amount_cents, base_value_cents)
+        unit_rate_cents = 0
+        total = amount_cents
+    elif event_type in TOLL_RATES:
         unit_rate_cents = TOLL_RATES[event_type]
-        total = int(quantity * unit_rate_cents) if amount_cents is None else amount_cents
+        total = (
+            int(quantity * unit_rate_cents) if amount_cents is None else amount_cents
+        )
     elif amount_cents is not None:
         unit_rate_cents = 0
         total = amount_cents
