@@ -1838,3 +1838,343 @@ class TestRound5SpacedIbanParityControls:
         snap = service.assemble_snapshot(db, ORG, AGENT, "sess-r5-newline")
         bodies = [e["body"] for e in snap["collections"][FACTS]]
         assert bodies == [text]
+
+
+# -- Rex retest fix round 6: glued letter/word adjacency (R5-4) --------
+
+# R5-4 (HIGH): the round-5 glued-span rule covered exactly one
+# trailing DIGIT. Glued alphanumeric adjacency at either
+# boundary of a validated spaced IBAN still defeated the
+# detector, while B1 destroys every plain form's IBAN core:
+# (a) a trailing glued letter (DE89 ... 0130 00A, and the
+# lowercase a): _is_glued_valid_iban requires the extra char
+# to be a digit, so the letter candidate failed both
+# validators and the laced form stored verbatim on both gate
+# paths; the plain form stores DE[phone]A.
+# (b) a trailing glued word (IBAN+for, IBAN+ a decomposed
+# e-acute word): the (?![A-Z0-9]) trailing boundary fails, so
+# no candidate matched and the laced form stored verbatim;
+# the plain form stores DE[phone]for (the word survives).
+# (c) a leading glued letter (x+IBAN): the (?<![A-Z0-9])
+# leading boundary fails the same way; the plain form stores
+# xDE[phone].
+# The generalized span rule, pinned here: detection stays
+# anchored on a validated IBAN core (registered country
+# length plus mod-97, glued characters stripped). When the
+# raw span is laced, the neutralized span is the core PLUS
+# any digits glued directly to either boundary (B1 destroys
+# glued digits in the plain form too: a leading glued digit
+# stores as [id], trailing glued digits vanish into
+# DE[phone], and 009A stores as DE[phone]A), and NOTHING
+# more: glued letters and words are left in place, exactly
+# where the plain form leaves them readable (DE[phone]A,
+# DE[phone]for, xDE[phone]). Neutralization still fires only
+# when the raw span carries dropped characters, so every
+# plain glued form keeps byte-for-byte today's output, and a
+# laced candidate whose core fails validation is never
+# rewritten.
+GLUE_TRAIL_A = "DE89 3704 0044 0532 0130 00A"
+GLUE_TRAIL_A_LOWER = "DE89 3704 0044 0532 0130 00a"
+GLUE_TRAIL_FOR = "DE89 3704 0044 0532 0130 00for"
+GLUE_TRAIL_ECLAIR_NFD = "DE89 3704 0044 0532 0130 00e\u0301clair"
+GLUE_TRAIL_ECLAIR_NFC = "DE89 3704 0044 0532 0130 00\u00e9clair"
+GLUE_LEAD_X = "xDE89 3704 0044 0532 0130 00"
+GLUE_LEAD9_TRAIL_A = "9DE89 3704 0044 0532 0130 00A"
+GLUE_LEAD9 = "9DE89 3704 0044 0532 0130 00"
+GLUE_LOWER_TRAIL_A = "de89 3704 0044 0532 0130 00a"
+GLUE_WS_TRAIL_A = "DE89 3704\t0044 0532\t0130 00A"
+GLUE_TRAIL_99 = "DE89 3704 0044 0532 0130 0099"
+GLUE_TRAIL_AB = "DE89 3704 0044 0532 0130 00AB"
+GLUE_TRAIL_9A = "DE89 3704 0044 0532 0130 009A"
+MARKER = models.REDACTION_MARKER
+
+
+def _both_gate_bodies(db, key, body, session):
+    """Store body on both gate paths in fresh databases and
+    return (relaxed snapshot body, gated approved body)."""
+    relaxed_db = type(db)()
+    service.set_gate_mode(
+        relaxed_db, ORG, AGENT, models.GATE_RELAXED, actor_role="owner", actor_id="o-1"
+    )
+    _add(relaxed_db, key, body)
+    snap = service.assemble_snapshot(relaxed_db, ORG, AGENT, session)
+    relaxed = [e["body"] for e in snap["collections"][FACTS]][0]
+    gated_db = type(db)()
+    staged = _add(gated_db, key, body)
+    _approve(gated_db, staged["id"])
+    gated = service.list_entries(gated_db, ORG, AGENT, FACTS)[0]["body"]
+    return relaxed, gated
+
+
+class TestRound6GluedAdjacency:
+    def test_trailing_glued_letter_laced_not_recoverable_at_screen_level(self):
+        _, despaced = SPACED_IBANS["DE"]
+        cases = [
+            (GLUE_TRAIL_A, "A"),
+            (GLUE_TRAIL_A_LOWER, "a"),
+        ]
+        for form, kept in cases:
+            for char in (FE0F, WJ):
+                laced = _lace_offsets(form, char, (4, 12, 19))
+                body = f"The account is {laced} for payouts."
+                # Parity: the plain form keeps the glued letter
+                # (DE[phone]A), so the laced form keeps it too;
+                # only the IBAN core is neutralized.
+                assert screening.screen(body) == (
+                    f"The account is {MARKER}{kept} for payouts."
+                )
+                out = _pipeline(body)
+                assert out == f"The account is {MARKER}{kept} for payouts."
+                assert not _recoverable_any(out, despaced)
+
+    def test_trailing_glued_letter_laced_both_gate_paths(self, db):
+        _, despaced = SPACED_IBANS["DE"]
+        for i, (form, kept) in enumerate(
+            [(GLUE_TRAIL_A, "A"), (GLUE_TRAIL_A_LOWER, "a")]
+        ):
+            laced = _lace_offsets(form, FE0F, (4, 12, 19))
+            body = f"The account is {laced} for payouts."
+            relaxed, gated = _both_gate_bodies(
+                db, f"r6-trail-letter-{i}", body, f"sess-r6-tl-{i}"
+            )
+            want = f"The account is {MARKER}{kept} for payouts."
+            assert relaxed == want
+            assert gated == want
+            assert not _recoverable_any(relaxed, despaced)
+            assert not _recoverable_any(gated, despaced)
+
+    def test_trailing_glued_word_laced_not_recoverable_at_screen_level(self):
+        _, despaced = SPACED_IBANS["DE"]
+        cases = [
+            (_lace_offsets(GLUE_TRAIL_FOR, FE0F, (4, 12, 19)), "for"),
+            (_lace_offsets(GLUE_TRAIL_FOR, WJ, (4, 12, 19)), "for"),
+            (_lace_every(GLUE_TRAIL_FOR, FE0F, 4), "for"),
+            (
+                _lace_offsets(GLUE_TRAIL_ECLAIR_NFD, FE0F, (4, 12, 19)),
+                "e\u0301clair",
+            ),
+            (_lace_every(GLUE_TRAIL_ECLAIR_NFD, FE0F, 4), "e\u0301clair"),
+        ]
+        for laced, kept in cases:
+            body = f"The account is {laced} for payouts."
+            # Parity: the plain form keeps the glued word
+            # readable (DE[phone]for), so the laced form keeps
+            # it too; absorbing the word would destroy more
+            # than the plain form loses.
+            assert screening.screen(body) == (
+                f"The account is {MARKER}{kept} for payouts."
+            )
+            out = _pipeline(body)
+            assert out == f"The account is {MARKER}{kept} for payouts."
+            assert not _recoverable_any(out, despaced)
+
+    def test_trailing_glued_word_laced_both_gate_paths(self, db):
+        _, despaced = SPACED_IBANS["DE"]
+        cases = [
+            ("r6-for", _lace_offsets(GLUE_TRAIL_FOR, FE0F, (4, 12, 19)), "for"),
+            (
+                "r6-eclair",
+                _lace_offsets(GLUE_TRAIL_ECLAIR_NFD, FE0F, (4, 12, 19)),
+                "e\u0301clair",
+            ),
+        ]
+        for key, laced, kept in cases:
+            body = f"The account is {laced} for payouts."
+            relaxed, gated = _both_gate_bodies(db, key, body, f"sess-{key}")
+            want = f"The account is {MARKER}{kept} for payouts."
+            assert relaxed == want
+            assert gated == want
+            assert not _recoverable_any(relaxed, despaced)
+            assert not _recoverable_any(gated, despaced)
+
+    def test_leading_glued_letter_laced_not_recoverable_at_screen_level(self):
+        _, despaced = SPACED_IBANS["DE"]
+        _, core = SPACED_IBANS["DE"]
+        variants = [
+            "x" + _lace_offsets(core, FE0F, (4, 12, 19)),
+            "x" + _lace_offsets(core, WJ, (4, 12, 19)),
+            "x" + _lace_every(core, FE0F, 4),
+        ]
+        for laced in variants:
+            body = f"The account is {laced} for payouts."
+            # Parity: the plain form keeps the leading letter
+            # (xDE[phone]), so the laced form keeps it too.
+            assert screening.screen(body) == f"The account is x{MARKER} for payouts."
+            out = _pipeline(body)
+            assert out == f"The account is x{MARKER} for payouts."
+            assert not _recoverable_any(out, despaced)
+
+    def test_leading_glued_letter_laced_both_gate_paths(self, db):
+        _, despaced = SPACED_IBANS["DE"]
+        _, core = SPACED_IBANS["DE"]
+        laced = "x" + _lace_offsets(core, FE0F, (4, 12, 19))
+        body = f"The account is {laced} for payouts."
+        relaxed, gated = _both_gate_bodies(db, "r6-lead-x", body, "sess-r6-lx")
+        want = f"The account is x{MARKER} for payouts."
+        assert relaxed == want
+        assert gated == want
+        assert not _recoverable_any(relaxed, despaced)
+        assert not _recoverable_any(gated, despaced)
+
+    def test_glued_combinations_laced_not_recoverable_at_screen_level(self):
+        _, despaced = SPACED_IBANS["DE"]
+        cases = [
+            # Leading glued digit + trailing glued letter: B1
+            # destroys the digit in the plain form ([id]) and
+            # keeps the letter, so the span absorbs the digit
+            # and keeps the letter.
+            (_lace_every(GLUE_LEAD9_TRAIL_A, FE0F, 4), f"{MARKER}A"),
+            # Leading glued digit alone: absorbed whole.
+            (_lace_every(GLUE_LEAD9, FE0F, 4), MARKER),
+            # Glued adjacency on a lowercase IBAN.
+            (_lace_offsets(GLUE_LOWER_TRAIL_A, FE0F, (4, 12, 19)), f"{MARKER}a"),
+            # Glued adjacency with non-space separators.
+            (_lace_offsets(GLUE_WS_TRAIL_A, FE0F, (4, 12, 19)), f"{MARKER}A"),
+            # Two glued trailing digits: the plain form
+            # destroys both wholesale (DE[phone]), so the
+            # span absorbs the full digit run.
+            (_lace_every(GLUE_TRAIL_99, FE0F, 4), MARKER),
+            # Two glued trailing letters: both survive plain
+            # (DE[phone]AB), so both are kept.
+            (_lace_offsets(GLUE_TRAIL_AB, FE0F, (4, 12, 19)), f"{MARKER}AB"),
+            # Digit then letter: the digit run is absorbed,
+            # the letter is kept (plain: DE[phone]A).
+            (_lace_every(GLUE_TRAIL_9A, FE0F, 4), f"{MARKER}A"),
+        ]
+        for laced, kept in cases:
+            body = f"The account is {laced} for payouts."
+            assert screening.screen(body) == f"The account is {kept} for payouts."
+            out = _pipeline(body)
+            assert out == f"The account is {kept} for payouts."
+            assert not _recoverable_any(out, despaced)
+
+    def test_glued_combinations_laced_both_gate_paths(self, db):
+        _, despaced = SPACED_IBANS["DE"]
+        cases = [
+            ("r6-combo-9a", _lace_every(GLUE_LEAD9_TRAIL_A, FE0F, 4), f"{MARKER}A"),
+            (
+                "r6-combo-lower",
+                _lace_offsets(GLUE_LOWER_TRAIL_A, FE0F, (4, 12, 19)),
+                f"{MARKER}a",
+            ),
+            ("r6-combo-99", _lace_every(GLUE_TRAIL_99, FE0F, 4), MARKER),
+            (
+                "r6-combo-ws",
+                _lace_offsets(GLUE_WS_TRAIL_A, FE0F, (4, 12, 19)),
+                f"{MARKER}A",
+            ),
+        ]
+        for key, laced, kept in cases:
+            body = f"The account is {laced} for payouts."
+            relaxed, gated = _both_gate_bodies(db, key, body, f"sess-{key}")
+            want = f"The account is {kept} for payouts."
+            assert relaxed == want
+            assert gated == want
+            assert not _recoverable_any(relaxed, despaced)
+            assert not _recoverable_any(gated, despaced)
+
+
+class TestRound6GluedParityControls:
+    def test_plain_glued_forms_byte_identical(self):
+        # Every plain glued form carries no dropped chars, so
+        # the generalized detector must leave it untouched:
+        # these are exactly today's B1 outputs, probed on the
+        # round-5 tip.
+        cases = [
+            (GLUE_TRAIL_A, "The account is DE[phone]A for payouts."),
+            (GLUE_TRAIL_A_LOWER, "The account is DE[phone]a for payouts."),
+            (GLUE_TRAIL_FOR, "The account is DE[phone]for for payouts."),
+            (
+                GLUE_TRAIL_ECLAIR_NFC,
+                "The account is DE[phone]\u00e9clair for payouts.",
+            ),
+            (
+                GLUE_TRAIL_ECLAIR_NFD,
+                "The account is DE[phone]e\u0301clair for payouts.",
+            ),
+            (GLUE_LEAD_X, "The account is xDE[phone] for payouts."),
+            (GLUE_LEAD9_TRAIL_A, "The account is [id] [phone]A for payouts."),
+            (GLUE_LEAD9, "The account is [id] [phone] for payouts."),
+            (GLUE_LOWER_TRAIL_A, "The account is de[phone]a for payouts."),
+            (
+                GLUE_WS_TRAIL_A,
+                "The account is DE89 3704\t[phone]\t0130 00A for payouts.",
+            ),
+            (GLUE_TRAIL_99, "The account is DE[phone] for payouts."),
+            (GLUE_TRAIL_AB, "The account is DE[phone]AB for payouts."),
+            (GLUE_TRAIL_9A, "The account is DE[phone]A for payouts."),
+        ]
+        for form, want in cases:
+            assert _pipeline(f"The account is {form} for payouts.") == want, form
+
+    def test_plain_glued_forms_both_gate_paths(self, db):
+        cases = [
+            ("r6-plain-a", GLUE_TRAIL_A, "The account is DE[phone]A for payouts."),
+            (
+                "r6-plain-for",
+                GLUE_TRAIL_FOR,
+                "The account is DE[phone]for for payouts.",
+            ),
+            ("r6-plain-x", GLUE_LEAD_X, "The account is xDE[phone] for payouts."),
+        ]
+        for key, form, want in cases:
+            body = f"The account is {form} for payouts."
+            relaxed, gated = _both_gate_bodies(db, key, body, f"sess-{key}")
+            assert relaxed == want
+            assert gated == want
+
+    def test_laced_non_iban_glued_forms_store_as_today(self):
+        # The validation anchor keeps false positives at
+        # zero: a laced glued string whose core fails mod-97
+        # or country length is never newly destroyed, and a
+        # laced part-number grouping keeps today's exact B1
+        # output.
+        invalid_word = _lace_offsets(
+            "DE12 3456 7890 1234 5678 90for", FE0F, (4, 12, 19)
+        )
+        body = f"Reference {invalid_word} was quoted."
+        assert _pipeline(body) == body
+        truncated = _lace_offsets("DE89 3704 0044 0532 0130", FE0F, (4, 12))
+        assert _pipeline(f"Reference {truncated} was quoted.") == (
+            f"Reference DE89{FE0F} 3704 00{FE0F}[phone] was quoted."
+        )
+        sku = _lace_offsets("AB12CD 3456 7890 1234", FE0F, (4, 10))
+        assert _pipeline(f"Part {sku} in stock.") == (
+            f"Part AB12{FE0F}CD 345{FE0F}[phone] in stock."
+        )
+
+    def test_composed_eclair_laced_keeps_word_as_today(self):
+        # The precomposed e-acute form is already neutralized
+        # at the core on the round-5 tip (the accented letter
+        # is outside the boundary class, so the core matches
+        # and the word survives, exactly its plain parity).
+        # Pin it so the generalized span does not start
+        # absorbing non-ASCII words.
+        _, despaced = SPACED_IBANS["DE"]
+        laced = _lace_offsets(GLUE_TRAIL_ECLAIR_NFC, FE0F, (4, 12, 19))
+        body = f"The account is {laced} for payouts."
+        assert screening.screen(body) == (
+            f"The account is {MARKER}\u00e9clair for payouts."
+        )
+        assert not _recoverable_any(_pipeline(body), despaced)
+
+    def test_crlf_separator_forms_unchanged(self):
+        # TW-966 scope, untouched by this round: a CRLF
+        # separator normalizes to two spaces, which neither
+        # the canonical detector nor the generalized glued
+        # scan matches across, so CRLF forms (plain, laced,
+        # and glued) keep exactly today's outputs.
+        crlf = "DE89 3704\r\n0044 0532 0130 00"
+        body = f"The account is {crlf} for payouts."
+        assert _pipeline(body) == "The account is DE89 3704\r\n[phone] for payouts."
+        laced = _lace_offsets(crlf, FE0F, (4, 12, 19))
+        assert _pipeline(f"The account is {laced} for payouts.") == (
+            f"The account is DE89{FE0F} 3704\r\n0{FE0F}044 053{FE0F}[phone] "
+            "for payouts."
+        )
+        glued = "DE89 3704\r\n0044 0532 0130 00A"
+        laced_glued = _lace_offsets(glued, FE0F, (4, 12, 19))
+        assert _pipeline(f"The account is {laced_glued} for payouts.") == (
+            f"The account is DE89{FE0F} 3704\r\n0{FE0F}044 053{FE0F}[phone]A "
+            "for payouts."
+        )
