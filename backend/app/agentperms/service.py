@@ -358,6 +358,16 @@ def check_permission(
     it as uncapped. The migration pins the same law as CHECK
     constraints on agt_grants, so the schema and the gate cannot
     drift apart.
+
+    Grant status is an exact-match allowlist (TW-954 fix round,
+    Rex F2): only the three statuses GrantStatement can state —
+    'granted', 'denied', 'revoked' — mean anything at this gate,
+    matched byte-for-byte with no case or whitespace tolerance. A
+    row written past the model layer carrying any other status
+    ('bypass', 'Granted', 'active', '', 'revoked ', a missing
+    status, ...) is a broken grant and denies
+    (unknown_grant_status): an unknown status never reads as
+    granted.
     """
     channel = channel_of(action_class)
     grant = _pick_grant(db, org_id, action_class, agent_identity_id)
@@ -371,10 +381,16 @@ def check_permission(
         "grant_id": grant.get("id"),
         "cap_cents": grant.get("cap_cents"),
     }
-    if grant["status"] == "denied":
+    if grant.get("status") == "denied":
         return PermissionDecision(allowed=False, reason="denied", **base)
-    if grant["status"] == "revoked":
+    if grant.get("status") == "revoked":
         return PermissionDecision(allowed=False, reason="revoked", **base)
+    if grant.get("status") != "granted":
+        # TW-954 fix round (Rex F2): fail closed on any status that
+        # is not the exact known granted status. The round-1 code
+        # fell through to 'granted' for every other string, so a
+        # forged row acted as a full grant.
+        return PermissionDecision(allowed=False, reason="unknown_grant_status", **base)
     if amount_cents is not None and amount_cents < 0:
         # A negative amount is a malformed request, not a transient
         # failure: deny it as a decision, on every class, so the

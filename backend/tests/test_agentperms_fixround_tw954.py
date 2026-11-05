@@ -266,7 +266,9 @@ def test_f1_attended_no_action_class_denied():
     with no ledger check at all on the round-1 code."""
     db = FakeDb()
     grant_email(db)
-    decision = policy.evaluate_action(db, ORG, AGENT, context="attended", action_class=None)
+    decision = policy.evaluate_action(
+        db, ORG, AGENT, context="attended", action_class=None
+    )
     assert decision.allowed is False
     assert decision.reason == "action_class_required"
 
@@ -414,7 +416,15 @@ def test_f1_check_floor_global_facts_need_no_action_class():
 
 # -- F2: unknown grant status fails closed (B1 service.py) -------------------
 
-HOSTILE_STATUSES = ["bypass", "Granted", "GRANTED", "active", "", "revoked ", " granted"]
+HOSTILE_STATUSES = [
+    "bypass",
+    "Granted",
+    "GRANTED",
+    "active",
+    "",
+    "revoked ",
+    " granted",
+]
 
 
 @pytest.mark.parametrize("status", HOSTILE_STATUSES)
@@ -497,18 +507,28 @@ def test_f2_known_statuses_still_read_exactly():
     """The allowlist is exact-match, not a new vocabulary: the
     three statuses GrantStatement can state keep their meanings."""
     db = FakeDb()
-    service.grant_permission(db, ORG, "booking.create", actor=OWNER, agent_identity_id=AGENT)
-    decision = service.check_permission(db, ORG, "booking.create", agent_identity_id=AGENT)
+    service.grant_permission(
+        db, ORG, "booking.create", actor=OWNER, agent_identity_id=AGENT
+    )
+    decision = service.check_permission(
+        db, ORG, "booking.create", agent_identity_id=AGENT
+    )
     assert decision.allowed is True and decision.reason == "granted"
 
     db = FakeDb()
-    service.deny_permission(db, ORG, "booking.create", actor=OWNER, agent_identity_id=AGENT)
-    decision = service.check_permission(db, ORG, "booking.create", agent_identity_id=AGENT)
+    service.deny_permission(
+        db, ORG, "booking.create", actor=OWNER, agent_identity_id=AGENT
+    )
+    decision = service.check_permission(
+        db, ORG, "booking.create", agent_identity_id=AGENT
+    )
     assert decision.allowed is False and decision.reason == "denied"
 
     db = FakeDb()
     raw_grant(db, "booking.create", "revoked")
-    decision = service.check_permission(db, ORG, "booking.create", agent_identity_id=AGENT)
+    decision = service.check_permission(
+        db, ORG, "booking.create", agent_identity_id=AGENT
+    )
     assert decision.allowed is False and decision.reason == "revoked"
 
 
@@ -583,7 +603,11 @@ def test_f4_policy_set_event_masks_email_planted_as_dict_key():
     KEY in the stored policy_set event on the round-1 code."""
     db = FakeDb()
     policy.set_policy(
-        db, ORG, AGENT, make_policy(mandate_scope={"owner@example.com": "x"}), actor=OWNER
+        db,
+        ORG,
+        AGENT,
+        make_policy(mandate_scope={"owner@example.com": "x"}),
+        actor=OWNER,
     )
     event = _policy_set_event(db)
     assert "owner@example.com" not in str(event["detail"])
@@ -594,7 +618,11 @@ def test_f4_policy_set_event_masks_phone_planted_as_int_leaf():
     unmasked on the round-1 code."""
     db = FakeDb()
     policy.set_policy(
-        db, ORG, AGENT, make_policy(mandate_scope={"phone_int": 3035550142}), actor=OWNER
+        db,
+        ORG,
+        AGENT,
+        make_policy(mandate_scope={"phone_int": 3035550142}),
+        actor=OWNER,
     )
     event = _policy_set_event(db)
     assert "3035550142" not in str(event["detail"])

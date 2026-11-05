@@ -143,17 +143,29 @@ def build_stop_signal(
 ) -> ComposedStopSignal:
     """The composed-stop signal for one revocation row (as
     returned by service.revoke). The propagation half delivers
-    this to the jobs/triggers/delegation consumers."""
+    this to the jobs/triggers/delegation consumers.
+
+    The agent is resolved FIRST — the explicit argument when a
+    caller fans a stop out per agent, else the revocation's own
+    agent — and the epoch is counted for THAT scope. TW-954 fix
+    round (Rex F3 / Rosa MF1): the round-1 code counted the epoch
+    against the unresolved parameter, so the default call for a
+    per-agent revocation counted the org scope (zero covering
+    rows, raising 'epoch must be >= 1, got 0'), and with org-wide
+    revocations present it would silently have stamped the wrong
+    scope's epoch.
+    """
     org_id = revocation["org_id"]
+    resolved_agent = (
+        agent_identity_id
+        if agent_identity_id is not None
+        else revocation.get("agent_identity_id")
+    )
     return ComposedStopSignal(
         revocation_id=revocation["id"],
         org_id=org_id,
-        agent_identity_id=(
-            agent_identity_id
-            if agent_identity_id is not None
-            else revocation.get("agent_identity_id")
-        ),
-        epoch=current_epoch(db, org_id, agent_identity_id),
+        agent_identity_id=resolved_agent,
+        epoch=current_epoch(db, org_id, resolved_agent),
         issued_at=revocation.get("revoked_at", ""),
         actor=revocation.get("revoked_by", ""),
     )

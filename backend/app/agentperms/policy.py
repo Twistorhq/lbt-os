@@ -21,6 +21,15 @@ it exactly as before TW-954. There is deliberately no code path
 here that permits an unattended action on the strength of an
 attended grant alone.
 
+Fix round (Rex F1/F4): the floor's global facts (revocation,
+approvals-off, raw PII) evaluate even when the caller names no
+action class, and an absent dimension is a refusal, never a
+vacuous pass — unattended evaluation requires the action, job,
+and tool classes all named, and a class-less evaluation never
+authorizes a concrete action in any context. Audit masking
+covers the whole detail structure: keys and non-string leaves
+as well as string values.
+
 Storage discipline matches B1's _scope rules: every query
 filters on org_id + agent_identity_id + the derived workspace
 key (persistence.models.workspace_id_for), and a caller-supplied
@@ -160,11 +169,16 @@ class PolicyDecision(BaseModel):
 
     reason vocabulary: 'granted' (attended, ledger-allowed),
     'unattended_permitted', a ledger reason passthrough
-    ('no_grant', 'denied', 'revoked', 'cap_exceeded', ...),
+    ('no_grant', 'denied', 'revoked', 'cap_exceeded',
+    'unknown_grant_status', ...),
     'floor:<rule>' when the hard floor blocked the action,
     'grant_not_extended_unattended', 'no_policy',
     'policy_disabled', 'job_class_not_permitted',
-    'tool_class_not_permitted', 'action_class_not_permitted'.
+    'tool_class_not_permitted', 'action_class_not_permitted',
+    and the absent-dimension refusals 'action_class_required',
+    'job_class_required', 'tool_class_required' (TW-954 fix
+    round, Rex F1: an absent dimension is not permitted, never
+    a vacuous pass).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -207,17 +221,40 @@ def _scoped(db: Any, org_id: str, agent_id: str, workspace_id: str | None):
     )
 
 
-def _mask_detail(value: Any) -> Any:
-    """B1 masking pipeline over audit detail, recursively: string
-    leaves pass through mask_text so no raw identifier reaches
-    the append-only history."""
+def _mask_scalar(value: Any) -> Any:
+    """One non-container leaf/key through the masking pipeline.
+
+    Strings pass through mask_text. Numbers are judged by their
+    digit string (TW-954 fix round, Rex F4): a leaf whose digits
+    mask_text would alter — a 10-digit phone planted as an int,
+    a long identifier run — is replaced by its masked string
+    form, while an ordinary small number (a version, a count, a
+    seat total) keeps its type and value. Bools are not numbers
+    for this purpose and pass through untouched, as does None.
+    """
     if isinstance(value, str):
         return mask_text(value)
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, (int, float)):
+        digits = str(value)
+        masked = mask_text(digits)
+        return masked if masked != digits else value
+    return value
+
+
+def _mask_detail(value: Any) -> Any:
+    """B1 masking pipeline over the WHOLE audit detail structure,
+    recursively (TW-954 fix round, Rex F4): dict KEYS are masked
+    as well as values — a raw email planted as a mandate_scope
+    key survived verbatim on the round-1 code — and non-string
+    leaves (ints, nested containers) are masked too, so no raw
+    identifier reaches the append-only history by any route."""
     if isinstance(value, dict):
-        return {k: _mask_detail(v) for k, v in value.items()}
+        return {_mask_scalar(k): _mask_detail(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         return [_mask_detail(v) for v in value]
-    return value
+    return _mask_scalar(value)
 
 
 def _record_policy_event(
@@ -387,11 +424,18 @@ def evaluate_action(
 
     # Layer 1: the hard floor, in code, before anything stored
     # is consulted for permission. A stored row's claims play
-    # no part in these facts.
+    # no part in these facts. The floor's global facts — the
+    # agent stands revoked, an approvals-off claim, raw PII in
+    # a projection — condemn the evaluation whether or not the
+    # caller named an action class (TW-954 fix round, Rex F1:
+    # the round-1 code ran this layer only under
+    # 'if action_class is not None', so a class-less evaluation
+    # skipped revocation supremacy itself).
+    agent_revoked = service.agent_status(db, org_id, agent_id) == "revoked"
     if action_class is not None:
         verdict = floor.check_floor(
             action_class=action_class,
-            revoked=service.agent_status(db, org_id, agent_id) == "revoked",
+            revoked=agent_revoked,
             approvals_off=approvals_off,
             pii_raw_in_projection=pii_raw_in_projection,
             dnc_status=dnc_status,
@@ -406,31 +450,44 @@ def evaluate_action(
             cap_cents=grant_row.get("cap_cents") if grant_row else None,
             toll_event=toll_event,
         )
-        if not verdict.allowed:
-            _record_policy_event(
-                db,
-                org_id,
-                agent_id,
-                "floor_blocked",
-                service.SYSTEM_ACTOR,
-                {
-                    "floor_rule": verdict.rule,
-                    "reason": verdict.reason,
-                    "context": context,
-                    "note": detail_note,
-                },
-                action_class=action_class,
-            )
-            return PolicyDecision(
-                allowed=False,
-                reason=f"floor:{verdict.rule}",
-                floor_rule=verdict.rule,
-                **base,
-            )
+    else:
+        verdict = floor.check_floor_global(
+            revoked=agent_revoked,
+            approvals_off=approvals_off,
+            pii_raw_in_projection=pii_raw_in_projection,
+        )
+    if not verdict.allowed:
+        _record_policy_event(
+            db,
+            org_id,
+            agent_id,
+            "floor_blocked",
+            service.SYSTEM_ACTOR,
+            {
+                "floor_rule": verdict.rule,
+                "reason": verdict.reason,
+                "context": context,
+                "note": detail_note,
+            },
+            action_class=action_class,
+        )
+        return PolicyDecision(
+            allowed=False,
+            reason=f"floor:{verdict.rule}",
+            floor_rule=verdict.rule,
+            **base,
+        )
 
     # Layer 2: the ledger mandate.
     if ledger_decision is not None and not ledger_decision.allowed:
         return PolicyDecision(allowed=False, reason=ledger_decision.reason, **base)
+
+    # No action class named: there is no grant leg to stand on,
+    # in any context. A class-less evaluation is a policy-only
+    # question and must never authorize a concrete action
+    # (TW-954 fix round, Rex F1 / Rosa N2).
+    if action_class is None:
+        return PolicyDecision(allowed=False, reason="action_class_required", **base)
 
     if context == "attended":
         return PolicyDecision(
@@ -439,9 +496,15 @@ def evaluate_action(
             **base,
         )
 
-    # Layer 3: the unattended policy. The grant must extend to
-    # unattended work on its own face, and the policy must
-    # permit every dimension the action names.
+    # Layer 3: the unattended policy. Every dimension the policy
+    # layer checks must be NAMED: an omitted job or tool class
+    # is not permitted, never a vacuous pass (Rex F1). The grant
+    # must extend to unattended work on its own face, and the
+    # policy must permit every named dimension.
+    if job_class is None:
+        return PolicyDecision(allowed=False, reason="job_class_required", **base)
+    if tool_class is None:
+        return PolicyDecision(allowed=False, reason="tool_class_required", **base)
     if grant_row is not None and not grant_row.get("extends_unattended", False):
         return PolicyDecision(
             allowed=False, reason="grant_not_extended_unattended", **base
@@ -452,17 +515,14 @@ def evaluate_action(
     base["policy_id"] = policy_row.get("id")
     if not policy_row.get("enabled", False):
         return PolicyDecision(allowed=False, reason="policy_disabled", **base)
-    if job_class is not None and job_class not in (
-        policy_row.get("permitted_job_classes") or []
-    ):
+    # Presence of all three dimensions is guaranteed here (the
+    # absent-dimension refusals above), so these are plain
+    # membership checks.
+    if job_class not in (policy_row.get("permitted_job_classes") or []):
         return PolicyDecision(allowed=False, reason="job_class_not_permitted", **base)
-    if tool_class is not None and tool_class not in (
-        policy_row.get("permitted_tool_classes") or []
-    ):
+    if tool_class not in (policy_row.get("permitted_tool_classes") or []):
         return PolicyDecision(allowed=False, reason="tool_class_not_permitted", **base)
-    if action_class is not None and action_class not in (
-        policy_row.get("permitted_action_classes") or []
-    ):
+    if action_class not in (policy_row.get("permitted_action_classes") or []):
         return PolicyDecision(
             allowed=False, reason="action_class_not_permitted", **base
         )

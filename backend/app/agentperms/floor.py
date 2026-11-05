@@ -112,6 +112,39 @@ def _blocked(rule: str, reason: str) -> FloorVerdict:
     return FloorVerdict(allowed=False, rule=rule, reason=reason)
 
 
+def check_floor_global(
+    *,
+    revoked: bool = False,
+    approvals_off: bool = False,
+    pii_raw_in_projection: bool = False,
+) -> FloorVerdict:
+    """Rules 1-3, the class-free floor: facts that condemn an
+    agent in EVERY context, whether or not the caller named an
+    action class. TW-954 fix round (Rex F1): these rules used to
+    run only inside check_floor, so an evaluation that named no
+    action class skipped them entirely — a revoked agent with
+    approvals_off claimed and raw PII in the projection passed
+    through B7's own evaluation surface. Any surface that cannot
+    (or does not) name a class still owes the floor these facts.
+    """
+    if revoked:
+        return _blocked(
+            "revocation_supremacy",
+            "the agent stands revoked; revocation outranks every grant and policy",
+        )
+    if approvals_off:
+        return _blocked(
+            "no_approvals_off",
+            "customer Toris have no approvals-off mode (spec 8.1)",
+        )
+    if pii_raw_in_projection:
+        return _blocked(
+            "pii_bronze_only",
+            "raw PII lives in the bronze layer only; projections are masked",
+        )
+    return _PASS
+
+
 def check_floor(
     *,
     action_class: str,
@@ -134,21 +167,13 @@ def check_floor(
     toll event it will meter under. The floor decides what no
     configuration may change.
     """
-    if revoked:
-        return _blocked(
-            "revocation_supremacy",
-            "the agent stands revoked; revocation outranks every grant and policy",
-        )
-    if approvals_off:
-        return _blocked(
-            "no_approvals_off",
-            "customer Toris have no approvals-off mode (spec 8.1)",
-        )
-    if pii_raw_in_projection:
-        return _blocked(
-            "pii_bronze_only",
-            "raw PII lives in the bronze layer only; projections are masked",
-        )
+    global_verdict = check_floor_global(
+        revoked=revoked,
+        approvals_off=approvals_off,
+        pii_raw_in_projection=pii_raw_in_projection,
+    )
+    if not global_verdict.allowed:
+        return global_verdict
     if action_class in CONTACT_CLASSES and dnc_status != "verified_clean":
         return _blocked(
             "no_dnc_override",
