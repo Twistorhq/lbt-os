@@ -15,16 +15,31 @@ Write path, in order, with no step skippable:
    with the current entries and the exact overflow; nothing
    is staged and nothing is written.
 2. Each surviving op is staged through the B1 staging table
-   (persistence.stage_write, kind 'memory'), pinning the full
-   target entry content by its keyed hash (for an add, the pin
-   is the hash of the absent-entry marker).
-3. approve_write re-checks the pin against the live entry and
-   refuses stale (the staged row is marked refused_stale),
-   re-runs screening and the B1 masking pipeline as defense
-   in depth, re-checks the bound against live state, applies
-   the write, records an audit event, and returns a receipt.
-   The receipt id is a keyed digest over the staged write, so
-   the agent path cannot forge one (B1 hash key discipline).
+   (persistence.stage_write, kind 'memory'), pinning the FULL
+   target entry (collection, entry key, body, version) by its
+   keyed hash (for an add, the pin binds the absent-entry
+   marker to that collection and key, so a staged add cannot
+   be retargeted). Entry keys are screened and slug-checked
+   (screening.screen_key), and the body handed to staging is
+   already masked, so the stored proposed_body_hash binds
+   exactly the stored proposed_body_masked.
+3. approve_write atomically claims the staged row (a
+   conditional pending-to-applying update that must affect
+   exactly one row, taken under a process lock) and re-checks
+   the pin inside that claim, refuses stale (the staged row
+   is marked refused_stale), verifies the staged body still
+   recomputes to its stored hash, re-runs screening and the
+   B1 masking pipeline as defense in depth, re-checks the
+   bound against live state, applies the write, records an
+   audit event, and returns a receipt. The receipt id is a
+   keyed digest over the staged write, the collection and
+   entry key, the hash of the body actually applied, and the
+   applied version, so the agent path cannot forge one and
+   the receipt binds the applied content (B1 hash key
+   discipline). An actor labelled agent is refused on
+   approve and reject alike (parity with set_gate_mode);
+   authenticated-actor enforcement at runtime wiring is
+   TW-960.
 4. claim_saved_memory is the runtime-facing claim path: a
    claim of saved memory verifies only against a receipt id
    that recomputes from the audit trail inside the caller's
@@ -52,6 +67,8 @@ visible to the next session's.
 from __future__ import annotations
 
 import logging
+import re
+import threading
 from datetime import datetime, timezone
 from typing import Any
 
@@ -90,6 +107,30 @@ log = logging.getLogger(__name__)
 _ABSENT_MARKER = "\x00agt-memory-absent\x00"
 _APPLY_ORDER = {OP_REMOVE: 0, OP_UPDATE: 1, OP_ADD: 2}
 
+# Approve and reject claim a staged row before deciding it;
+# the claim is a conditional DB update (see _transition_staged)
+# and this lock serializes the claim-decide-apply section
+# inside one process, so a check/apply window cannot be raced
+# by two threads of the same backend (F2).
+_DECISION_LOCK = threading.RLock()
+
+# Actor roles that may decide a staged write (F6 parity with
+# set_gate_mode). A caller that passes no role keeps the
+# legacy decided_by-only calling convention; a caller labelled
+# agent (or anything not listed here) is refused.
+_DECISION_ROLES = ("owner", "gate-relaxed")
+
+_KEY_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._-]*$")
+_KEY_MAX_CHARS = 120
+
+
+def _require_decision_role(actor_role: str | None) -> None:
+    if actor_role is not None and actor_role not in _DECISION_ROLES:
+        raise GatePermissionError(
+            "only the owner may approve or reject a memory write; "
+            f"actor role {actor_role!r} may not decide one"
+        )
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -117,12 +158,25 @@ def _one(db: Any, table: str, org_id: str, agent_id: str, row_id: str) -> dict |
 
 
 def _canonical_key(entry_key: str) -> str:
-    """The stored entry key: the caller's key after the B1
-    masking pipeline, so the entries table, the staged target
-    key, and every later lookup agree byte for byte."""
-    if ":" in entry_key:
+    """The stored entry key: screened (F1), slug-shaped, then
+    passed through the B1 masking pipeline, so the entries
+    table, the staged target key, and every later lookup
+    agree byte for byte. A secret-shaped, steering, or
+    non-slug key is refused outright, never silently rewritten
+    into a different key."""
+    raw = entry_key.strip()
+    if not raw:
+        raise MemoryError("entry_key must be non-empty")
+    if ":" in raw:
         raise MemoryError("entry_key must not contain ':'")
-    key = mask_text(entry_key.strip())
+    if len(raw) > _KEY_MAX_CHARS:
+        raise MemoryError(f"entry_key must be at most {_KEY_MAX_CHARS} characters")
+    screening.screen_key(raw)
+    if not _KEY_SLUG_RE.match(raw):
+        raise MemoryError(
+            "entry_key must be a slug: letters, digits, spaces, '.', '_' or '-'"
+        )
+    key = mask_text(raw)
     if not key:
         raise MemoryError("entry_key must be non-empty")
     return key
@@ -141,19 +195,55 @@ def _parse_target(staged: dict) -> tuple[str, str]:
     return collection, entry_key
 
 
-def _pin_for(entry: dict | None, org_id: str, agent_id: str) -> str:
-    """The pin over the full target entry content (or its
-    absence), keyed and scope-separated by the B1 hash."""
-    if entry is None:
-        return hash_body(_ABSENT_MARKER, org_id=org_id, agent_id=agent_id)
-    return hash_body(entry["body"], org_id=org_id, agent_id=agent_id)
+def _pin_for(entry: dict, org_id: str, agent_id: str) -> str:
+    """The pin over the FULL target entry (F8): collection,
+    entry key, body, and version, taken from the entry
+    projection itself. Keyed and scope-separated by the
+    B1 hash."""
+    canonical = "\x00".join(
+        [
+            "agt-memory-entry-v2",
+            str(entry["collection"]),
+            str(entry["entry_key"]),
+            entry["body"],
+            str(entry["version"]),
+        ]
+    )
+    return hash_body(canonical, org_id=org_id, agent_id=agent_id)
+
+
+def _pin_for_absent(org_id: str, agent_id: str, collection: str, entry_key: str) -> str:
+    """The pin for an add: the absent marker bound to the
+    collection and entry key, so retargeting a staged add to
+    another absent key breaks the pin (F5)."""
+    canonical = f"{_ABSENT_MARKER}\x00{collection}\x00{entry_key}"
+    return hash_body(canonical, org_id=org_id, agent_id=agent_id)
+
+
+def _target_pin(
+    live: dict | None, org_id: str, agent_id: str, collection: str, entry_key: str
+) -> str:
+    if live is None:
+        return _pin_for_absent(org_id, agent_id, collection, entry_key)
+    return _pin_for(live, org_id, agent_id)
 
 
 def _receipt_id(
-    org_id: str, agent_id: str, staged_id: str, body_hash: str, version: int
+    org_id: str,
+    agent_id: str,
+    staged_id: str,
+    collection: str,
+    entry_key: str,
+    body_hash: str,
+    version: int,
 ) -> str:
+    """The receipt over the staged write, the collection and
+    entry key it landed on, the hash of the body actually
+    applied, and the applied version (F5): tampering with any
+    of them after the fact breaks verification."""
     digest = hash_body(
-        f"agt-memory-receipt-v1\x00{staged_id}\x00{body_hash}\x00{version}",
+        f"agt-memory-receipt-v2\x00{staged_id}\x00{collection}\x00"
+        f"{entry_key}\x00{body_hash}\x00{version}",
         org_id=org_id,
         agent_id=agent_id,
     )
@@ -304,7 +394,10 @@ def propose_batch(
             screened_bodies.append("")
         else:
             # ScreeningBlocked raises here, before any staging.
-            screened_bodies.append(screening.screen(op.body))
+            # The body handed to staging is masked NOW (F5), so
+            # the stored proposed_body_hash that B1 computes over
+            # its input binds exactly the stored masked body.
+            screened_bodies.append(mask_text(screening.screen(op.body)))
     current = list_entries(db, org_id, agent_id, collection)
     result = _apply_ops_to_state(
         current,
@@ -334,7 +427,7 @@ def propose_batch(
                 target_key=_target_key(collection, key),
                 target_ref=collection,
                 proposed_body=body,
-                pinned_target_hash=_pin_for(live, org_id, agent_id),
+                pinned_target_hash=_target_pin(live, org_id, agent_id, collection, key),
             ),
             staged_by=staged_by,
         )
@@ -344,7 +437,12 @@ def propose_batch(
         ordered = sorted(staged_rows, key=lambda pair: _APPLY_ORDER[pair[0].op])
         receipts = {
             row["id"]: approve_write(
-                db, org_id, agent_id, row["id"], decided_by="gate-relaxed"
+                db,
+                org_id,
+                agent_id,
+                row["id"],
+                decided_by="gate-relaxed",
+                actor_role="gate-relaxed",
             )
             for _, row in ordered
         }
@@ -395,6 +493,7 @@ def _record_audit(
     entry_key: str,
     version: int | None,
     decided_by: str,
+    body_hash: str | None = None,
 ) -> dict:
     if event_type not in AUDIT_EVENTS:
         raise MemoryError(f"unknown audit event {event_type!r}")
@@ -407,24 +506,62 @@ def _record_audit(
         "receipt_id": receipt_id,
         "collection": collection,
         "entry_key": entry_key,
-        "detail": {"version": version, "decided_by": decided_by},
+        "detail": {
+            "version": version,
+            "decided_by": decided_by,
+            "body_hash": body_hash,
+        },
         "created_at": _now_iso(),
     }
     return db.table("agt_memory_audit_events").insert(row).execute().data[0]
 
 
-def _mark_staged(
-    db: Any, org_id: str, agent_id: str, staged: dict, payload: dict
-) -> None:
+def _transition_staged(
+    db: Any,
+    org_id: str,
+    agent_id: str,
+    staged_id: str,
+    from_status: str,
+    payload: dict,
+) -> bool:
+    """Move a staged row out of from_status, conditionally:
+    the update only lands while the row is still in that
+    status. Returns True exactly when this caller performed
+    the transition (one affected row); False when a concurrent
+    decider already moved the row (F2)."""
     payload = {**payload, "updated_at": _now_iso()}
-    (
+    rows = (
         db.table("agt_staged_writes")
         .update(payload)
-        .eq("id", staged["id"])
+        .eq("id", staged_id)
         .eq("org_id", org_id)
         .eq("agent_identity_id", agent_id)
         .eq("workspace_id", workspace_id_for(org_id, agent_id))
+        .eq("status", from_status)
         .execute()
+        .data
+    )
+    return len(rows) == 1
+
+
+def _claim_staged(db: Any, org_id: str, agent_id: str, staged: dict) -> None:
+    """Atomically claim a pending staged row for a decision.
+    Exactly one decider wins the claim; everyone else is
+    refused here, before any pin check or apply can race."""
+    if not _transition_staged(
+        db, org_id, agent_id, staged["id"], "pending", {"status": "applying"}
+    ):
+        raise MemoryError(
+            f"staged write {staged['id']!r} is not pending (already claimed)"
+        )
+
+
+def _release_claim(db: Any, org_id: str, agent_id: str, staged: dict) -> None:
+    """Hand a claimed row back to pending after a failed
+    decision that applied nothing, so it can be decided again
+    (for example a screening block on a tampered body)."""
+    _transition_staged(
+        db, org_id, agent_id, staged["id"], "applying", {"status": "pending"}
     )
 
 
@@ -443,30 +580,241 @@ def _pending_memory_write(db: Any, org_id: str, agent_id: str, staged_id: str) -
 
 
 def approve_write(
-    db: Any, org_id: str, agent_id: str, staged_id: str, *, decided_by: str
+    db: Any,
+    org_id: str,
+    agent_id: str,
+    staged_id: str,
+    *,
+    decided_by: str,
+    actor_role: str | None = None,
 ) -> dict:
     """Apply one staged memory write and return its receipt.
 
-    Refuses when the live entry no longer matches the pin
-    (the staged row is marked refused_stale and the refusal
-    is audited), when the re-run screening blocks the body,
-    or when applying would break the collection bound against
-    live state. On success the staged row is marked applied
+    An actor labelled agent is refused (F6 parity). The staged
+    row is claimed atomically (F2) and the pin is re-checked
+    inside the claim; refuses stale when the live entry no
+    longer matches the pin (the staged row is marked
+    refused_stale and the refusal is audited), refuses when
+    the staged body no longer recomputes to its stored hash
+    (F5), when the re-run screening blocks the body, or when
+    applying would break the collection bound against live
+    state. A refusal that applied nothing hands the row back
+    to pending. On success the staged row is marked applied
     with the receipt id and an audit event is recorded.
     """
+    _require_scope(org_id, agent_id)
+    _require_decision_role(actor_role)
+    with _DECISION_LOCK:
+        return _approve_write_claimed(db, org_id, agent_id, staged_id, decided_by)
+
+
+def _approve_write_claimed(
+    db: Any, org_id: str, agent_id: str, staged_id: str, decided_by: str
+) -> dict:
     ws = _require_scope(org_id, agent_id)
     staged = _pending_memory_write(db, org_id, agent_id, staged_id)
-    collection, entry_key = _parse_target(staged)
-    live = _get_entry(db, org_id, agent_id, collection, entry_key)
-    current_pin = _pin_for(live, org_id, agent_id)
-    if staged.get("pinned_target_hash") != current_pin:
-        _mark_staged(
+    _claim_staged(db, org_id, agent_id, staged)
+    entry_applied = False
+    try:
+        collection, entry_key = _parse_target(staged)
+        target_ref = staged.get("target_ref") or ""
+        if target_ref != collection:
+            raise MemoryError("staged target_ref does not match the target collection")
+        live = _get_entry(db, org_id, agent_id, collection, entry_key)
+        current_pin = _target_pin(live, org_id, agent_id, collection, entry_key)
+        if staged.get("pinned_target_hash") != current_pin:
+            _transition_staged(
+                db,
+                org_id,
+                agent_id,
+                staged["id"],
+                "applying",
+                {
+                    "status": "refused_stale",
+                    "decided_by": decided_by,
+                    "decided_at": _now_iso(),
+                },
+            )
+            _record_audit(
+                db,
+                org_id,
+                agent_id,
+                event_type="memory_write_refused_stale",
+                staged=staged,
+                receipt_id=None,
+                collection=collection,
+                entry_key=entry_key,
+                version=None,
+                decided_by=decided_by,
+            )
+            raise StaleTargetError(
+                f"entry {entry_key!r} changed since this write was staged; "
+                "approval refused"
+            )
+        stored_body = staged.get("proposed_body_masked") or ""
+        if hash_body(stored_body, org_id=org_id, agent_id=agent_id) != staged.get(
+            "proposed_body_hash"
+        ):
+            raise MemoryError(
+                "staged body does not recompute to its stored hash; approval refused"
+            )
+        now = _now_iso()
+        if live is None:
+            op = OP_ADD
+        elif not stored_body:
+            op = OP_REMOVE
+        else:
+            op = OP_UPDATE
+        if live is None and not stored_body:
+            raise MemoryError("staged write has no body and no live entry to remove")
+        body = ""
+        if op in (OP_ADD, OP_UPDATE):
+            # Defense in depth (B1 fix round, Rex F5): screening and
+            # masking run again at approval, so a staged body that
+            # reached the table by any other path is never applied
+            # raw.
+            screened = screening.screen(stored_body)
+            body = mask_text(screened)
+            current = list_entries(db, org_id, agent_id, collection)
+            state = {e["entry_key"]: e["body"] for e in current}
+            state[entry_key] = body
+            _check_bounds(
+                collection, current, state, [] if live is not None else [entry_key]
+            )
+        version = (live["version"] if live else 0) + 1
+        applied_body_hash = hash_body(body, org_id=org_id, agent_id=agent_id)
+        receipt_id = _receipt_id(
+            org_id,
+            agent_id,
+            staged["id"],
+            collection,
+            entry_key,
+            applied_body_hash,
+            version,
+        )
+        if op == OP_REMOVE:
+            (
+                db.table("agt_memory_entries")
+                .delete()
+                .eq("id", live["id"])
+                .eq("org_id", org_id)
+                .eq("agent_identity_id", agent_id)
+                .eq("workspace_id", ws)
+                .execute()
+            )
+        elif live is None:
+            db.table("agt_memory_entries").insert(
+                {
+                    "org_id": org_id,
+                    "agent_identity_id": agent_id,
+                    "workspace_id": ws,
+                    "collection": collection,
+                    "entry_key": entry_key,
+                    "body_masked": body,
+                    "body_hash": applied_body_hash,
+                    "version": version,
+                    "staged_write_id": staged["id"],
+                    "receipt_id": receipt_id,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            ).execute()
+        else:
+            (
+                db.table("agt_memory_entries")
+                .update(
+                    {
+                        "body_masked": body,
+                        "body_hash": applied_body_hash,
+                        "version": version,
+                        "staged_write_id": staged["id"],
+                        "receipt_id": receipt_id,
+                        "updated_at": now,
+                    }
+                )
+                .eq("id", live["id"])
+                .eq("org_id", org_id)
+                .eq("agent_identity_id", agent_id)
+                .eq("workspace_id", ws)
+                .execute()
+            )
+        entry_applied = True
+        if not _transition_staged(
             db,
             org_id,
             agent_id,
-            staged,
+            staged["id"],
+            "applying",
             {
-                "status": "refused_stale",
+                "status": "applied",
+                "decided_by": decided_by,
+                "decided_at": now,
+                "receipt_id": receipt_id,
+            },
+        ):
+            raise MemoryError(
+                f"staged write {staged['id']!r} lost its claim during apply"
+            )
+        _record_audit(
+            db,
+            org_id,
+            agent_id,
+            event_type="memory_write_applied",
+            staged=staged,
+            receipt_id=receipt_id,
+            collection=collection,
+            entry_key=entry_key,
+            version=version,
+            decided_by=decided_by,
+            body_hash=applied_body_hash,
+        )
+        return {
+            "receipt_id": receipt_id,
+            "staged_write_id": staged["id"],
+            "collection": collection,
+            "entry_key": entry_key,
+            "op": op,
+            "version": version,
+        }
+    except StaleTargetError:
+        raise
+    except Exception:
+        if not entry_applied:
+            _release_claim(db, org_id, agent_id, staged)
+        raise
+
+
+def reject_write(
+    db: Any,
+    org_id: str,
+    agent_id: str,
+    staged_id: str,
+    *,
+    decided_by: str,
+    actor_role: str | None = None,
+) -> dict:
+    """Reject one staged memory write. Nothing is applied and
+    no receipt is issued; the decision is audited. An actor
+    labelled agent is refused (F6 parity), and the row is
+    claimed atomically before it is marked (F2)."""
+    _require_scope(org_id, agent_id)
+    _require_decision_role(actor_role)
+    with _DECISION_LOCK:
+        staged = _pending_memory_write(db, org_id, agent_id, staged_id)
+        _claim_staged(db, org_id, agent_id, staged)
+        try:
+            collection, entry_key = _parse_target(staged)
+        except Exception:
+            _release_claim(db, org_id, agent_id, staged)
+            raise
+        _transition_staged(
+            db,
+            org_id,
+            agent_id,
+            staged["id"],
+            "applying",
+            {
+                "status": "rejected",
                 "decided_by": decided_by,
                 "decided_at": _now_iso(),
             },
@@ -475,7 +823,7 @@ def approve_write(
             db,
             org_id,
             agent_id,
-            event_type="memory_write_refused_stale",
+            event_type="memory_write_rejected",
             staged=staged,
             receipt_id=None,
             collection=collection,
@@ -483,155 +831,7 @@ def approve_write(
             version=None,
             decided_by=decided_by,
         )
-        raise StaleTargetError(
-            f"entry {entry_key!r} changed since this write was staged; approval refused"
-        )
-    target_ref = staged.get("target_ref") or ""
-    if target_ref != collection:
-        raise MemoryError("staged target_ref does not match the target collection")
-    now = _now_iso()
-    if live is None:
-        op = OP_ADD
-    elif not (staged.get("proposed_body_masked") or ""):
-        op = OP_REMOVE
-    else:
-        op = OP_UPDATE
-    if live is None and not (staged.get("proposed_body_masked") or ""):
-        raise MemoryError("staged write has no body and no live entry to remove")
-    body = ""
-    if op in (OP_ADD, OP_UPDATE):
-        # Defense in depth (B1 fix round, Rex F5): screening and
-        # masking run again at approval, so a staged body that
-        # reached the table by any other path is never applied
-        # raw.
-        screened = screening.screen(staged.get("proposed_body_masked") or "")
-        body = mask_text(screened)
-        current = list_entries(db, org_id, agent_id, collection)
-        state = {e["entry_key"]: e["body"] for e in current}
-        state[entry_key] = body
-        _check_bounds(
-            collection, current, state, [] if live is not None else [entry_key]
-        )
-    version = (live["version"] if live else 0) + 1
-    receipt_id = _receipt_id(
-        org_id,
-        agent_id,
-        staged["id"],
-        staged.get("proposed_body_hash") or "",
-        version,
-    )
-    if op == OP_REMOVE:
-        (
-            db.table("agt_memory_entries")
-            .delete()
-            .eq("id", live["id"])
-            .eq("org_id", org_id)
-            .eq("agent_identity_id", agent_id)
-            .eq("workspace_id", ws)
-            .execute()
-        )
-    elif live is None:
-        db.table("agt_memory_entries").insert(
-            {
-                "org_id": org_id,
-                "agent_identity_id": agent_id,
-                "workspace_id": ws,
-                "collection": collection,
-                "entry_key": entry_key,
-                "body_masked": body,
-                "body_hash": hash_body(body, org_id=org_id, agent_id=agent_id),
-                "version": version,
-                "staged_write_id": staged["id"],
-                "receipt_id": receipt_id,
-                "created_at": now,
-                "updated_at": now,
-            }
-        ).execute()
-    else:
-        (
-            db.table("agt_memory_entries")
-            .update(
-                {
-                    "body_masked": body,
-                    "body_hash": hash_body(body, org_id=org_id, agent_id=agent_id),
-                    "version": version,
-                    "staged_write_id": staged["id"],
-                    "receipt_id": receipt_id,
-                    "updated_at": now,
-                }
-            )
-            .eq("id", live["id"])
-            .eq("org_id", org_id)
-            .eq("agent_identity_id", agent_id)
-            .eq("workspace_id", ws)
-            .execute()
-        )
-    _mark_staged(
-        db,
-        org_id,
-        agent_id,
-        staged,
-        {
-            "status": "applied",
-            "decided_by": decided_by,
-            "decided_at": now,
-            "receipt_id": receipt_id,
-        },
-    )
-    _record_audit(
-        db,
-        org_id,
-        agent_id,
-        event_type="memory_write_applied",
-        staged=staged,
-        receipt_id=receipt_id,
-        collection=collection,
-        entry_key=entry_key,
-        version=version,
-        decided_by=decided_by,
-    )
-    return {
-        "receipt_id": receipt_id,
-        "staged_write_id": staged["id"],
-        "collection": collection,
-        "entry_key": entry_key,
-        "op": op,
-        "version": version,
-    }
-
-
-def reject_write(
-    db: Any, org_id: str, agent_id: str, staged_id: str, *, decided_by: str
-) -> dict:
-    """Reject one staged memory write. Nothing is applied and
-    no receipt is issued; the decision is audited."""
-    _require_scope(org_id, agent_id)
-    staged = _pending_memory_write(db, org_id, agent_id, staged_id)
-    collection, entry_key = _parse_target(staged)
-    _mark_staged(
-        db,
-        org_id,
-        agent_id,
-        staged,
-        {
-            "status": "rejected",
-            "decided_by": decided_by,
-            "decided_at": _now_iso(),
-        },
-    )
-    _record_audit(
-        db,
-        org_id,
-        agent_id,
-        event_type="memory_write_rejected",
-        staged=staged,
-        receipt_id=None,
-        collection=collection,
-        entry_key=entry_key,
-        version=None,
-        decided_by=decided_by,
-    )
-    return {"staged_write_id": staged["id"], "status": "rejected"}
+        return {"staged_write_id": staged["id"], "status": "rejected"}
 
 
 # -- audit and claims --------------------------------------------------
@@ -683,12 +883,22 @@ def claim_saved_memory(
         raise MemoryClaimError("receipt does not match its staged write")
     if staged.get("status") != "applied":
         raise MemoryClaimError("the write behind this receipt was never applied")
-    version = (event.get("detail") or {}).get("version")
+    if hash_body(
+        staged.get("proposed_body_masked") or "", org_id=org_id, agent_id=agent_id
+    ) != staged.get("proposed_body_hash"):
+        raise MemoryClaimError("the staged write fails its stored-hash check")
+    detail = event.get("detail") or {}
+    version = detail.get("version")
+    body_hash = detail.get("body_hash")
+    if not body_hash:
+        raise MemoryClaimError("the audit event does not bind an applied body")
     expected = _receipt_id(
         org_id,
         agent_id,
         staged["id"],
-        staged.get("proposed_body_hash") or "",
+        event.get("collection") or "",
+        event.get("entry_key") or "",
+        body_hash,
         version,
     )
     if expected != receipt_id:

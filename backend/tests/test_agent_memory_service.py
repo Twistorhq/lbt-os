@@ -381,17 +381,20 @@ class TestApproval:
         with pytest.raises(models.StaleTargetError):
             _approve(db, staged["id"])
 
-    def test_approve_remasks_as_defense_in_depth(self, db):
+    def test_approve_refuses_a_tampered_staged_body(self, db):
+        # Rex F5 supersedes the B1-era remask expectation: a staged
+        # body tampered with directly in the table no longer
+        # recomputes to its stored hash, so approval refuses it
+        # outright instead of applying a never-reviewed body
+        # masked. Re-screening and re-masking still run at
+        # approval for every body whose hash does bind.
         staged = _add(db, "contact", "Owner reachable for approvals.")
-        # A writer that bypassed screening tampers with the staged
-        # body directly in the table; approval must not apply raw.
         for row in db.tables["agt_staged_writes"]:
             if row["id"] == staged["id"]:
                 row["proposed_body_masked"] = "Reach sam@example.com any time."
-        _approve(db, staged["id"])
-        entry = service.list_entries(db, ORG, AGENT, FACTS)[0]
-        assert "sam@example.com" not in entry["body"]
-        assert "[email]" in entry["body"]
+        with pytest.raises(models.MemoryError):
+            _approve(db, staged["id"])
+        assert service.list_entries(db, ORG, AGENT, FACTS) == []
 
     def test_reject_writes_nothing_and_issues_no_receipt(self, db):
         staged = _add(db, "hours", "Open nine to five.")
@@ -685,8 +688,7 @@ class TestScreeningSecretForms:
 
     def test_bare_hex_token_in_sentence_redacted(self):
         out = screening.screen(
-            "Rotation token: a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2 "
-            "is current."
+            "Rotation token: a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2 is current."
         )
         assert "a1b2c3d4e5f6" not in out
 
@@ -699,7 +701,9 @@ class TestScreeningSecretForms:
             screening.screen(body)
 
     def test_split_pem_header_blocked(self):
-        body = "-----BEGIN PRIVATE\nKEY-----\nMIIEvQIBADANBgkq\n-----END PRIVATE\nKEY-----"
+        body = (
+            "-----BEGIN PRIVATE\nKEY-----\nMIIEvQIBADANBgkq\n-----END PRIVATE\nKEY-----"
+        )
         with pytest.raises(models.ScreeningBlocked):
             screening.screen(body)
 
@@ -910,11 +914,9 @@ class TestConcurrentApprove:
         )
         real_pin = service._pin_for
 
-        def slow_pin(entry, org_id, agent_id, collection=None, entry_key=None):
+        def slow_pin(entry, org_id, agent_id):
             time.sleep(0.25)
-            return real_pin(
-                entry, org_id, agent_id, collection=collection, entry_key=entry_key
-            )
+            return real_pin(entry, org_id, agent_id)
 
         monkeypatch.setattr(service, "_pin_for", slow_pin)
         results = self._run_pair(db, one["id"], two["id"])
