@@ -210,7 +210,29 @@ def list_jobs(
 
 
 def pause_job(db: Any, org_id: str, agent_id: str, job_id: str) -> dict:
-    _require_job(db, org_id, agent_id, job_id)
+    """Pause a job.
+
+    Rex TW-953 F2b: pausing a 'review' job is refused. Pause
+    moved a review job to 'paused' unconditionally, and the
+    plain resume then reactivated it with its review markers
+    cleared and no reconciliation: a status-flip bypass of the
+    resume gate. A review job leaves 'review' ONLY through
+    recovery.resume_after_review. An archived job is refused
+    too: archive is terminal, and pause-then-resume must not
+    resurrect it.
+    """
+    job = _require_job(db, org_id, agent_id, job_id)
+    if job.get("status") == "review":
+        raise AgentJobError(
+            f"job {job_id!r} is paused for review; it cannot be paused "
+            "out of review and resumes only via resume-after-review, "
+            "after reconciliation clears its interrupted fire"
+        )
+    if job.get("status") == "archived":
+        raise AgentJobError(
+            f"job {job_id!r} is archived; an archived job is terminal "
+            "and cannot be paused"
+        )
     updated = _update_job_row(
         db,
         org_id,
@@ -245,6 +267,13 @@ def resume_job(
             f"job {job_id!r} is paused for review; it resumes only via "
             "resume-after-review, after reconciliation clears its "
             "interrupted fire"
+        )
+    if job.get("status") == "archived":
+        # Rex TW-953 F2b: archive is terminal. The plain resume
+        # used to reactivate an archived job (the second half of
+        # the remove-then-resume bypass chain).
+        raise AgentJobError(
+            f"job {job_id!r} is archived; an archived job is terminal and cannot resume"
         )
     return _resume_job(db, org_id, agent_id, job, now=now)
 
@@ -343,8 +372,21 @@ def edit_job(
 
 def remove_job(db: Any, org_id: str, agent_id: str, job_id: str) -> dict:
     """Archive the definition. History (fires, continuity) stays
-    as data; an archived job never fires."""
-    _require_job(db, org_id, agent_id, job_id)
+    as data; an archived job never fires.
+
+    Rex TW-953 F2b: archiving a 'review' job is refused. Remove
+    moved a review job to 'archived' unconditionally, and the
+    plain resume then reactivated it past the review gate. A
+    review job leaves 'review' ONLY through
+    recovery.resume_after_review.
+    """
+    job = _require_job(db, org_id, agent_id, job_id)
+    if job.get("status") == "review":
+        raise AgentJobError(
+            f"job {job_id!r} is paused for review; it cannot be removed "
+            "out of review and resumes only via resume-after-review, "
+            "after reconciliation clears its interrupted fire"
+        )
     updated = _update_job_row(
         db,
         org_id,
@@ -379,7 +421,28 @@ def block_job(
     resumes it. An alerter failure is recorded on the row, never
     hidden and never retried automatically: exactly-once cuts
     both ways.
+
+    Rex TW-953 F2b: blocking a 'review' job is refused, with its
+    review markers untouched and no alert sent. Block moved a
+    review job to 'blocked' unconditionally, and the plain
+    resume then reactivated it past the review gate. Blocking
+    an archived job is refused too: archive is terminal. The
+    production callers (ticker, preflight scan, trigger) only
+    ever pass active or paused jobs, so this guard changes no
+    legitimate block.
     """
+    if job.get("status") == "review":
+        raise AgentJobError(
+            f"job {job['id']!r} is paused for review; it cannot be "
+            "blocked out of review and resumes only via "
+            "resume-after-review, after reconciliation clears its "
+            "interrupted fire"
+        )
+    if job.get("status") == "archived":
+        raise AgentJobError(
+            f"job {job['id']!r} is archived; an archived job is "
+            "terminal and cannot be blocked"
+        )
     if job.get("status") == "blocked":
         return job
     now = now or _now()
