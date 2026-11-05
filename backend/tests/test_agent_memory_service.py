@@ -187,7 +187,8 @@ class TestBounds:
 
     def test_char_overflow_reports_exact_excess(self, db):
         max_chars = models.COLLECTION_LIMITS[PREFS]["max_chars"]
-        big = "x" * (max_chars - 10)
+        big = "word " * ((max_chars - 10) // 5)
+        assert len(big) == max_chars - 10
         _seed_entry(db, "pref-1", big, collection=PREFS)
         with pytest.raises(models.OverflowRefused) as excinfo:
             service.propose_write(
@@ -197,7 +198,7 @@ class TestBounds:
                 PREFS,
                 models.OP_ADD,
                 "pref-2",
-                "y" * 25,
+                "fills the preference now.",
                 staged_by="agent",
             )
         refusal = excinfo.value.refusal
@@ -205,9 +206,7 @@ class TestBounds:
         assert service.list_entries(db, ORG, AGENT, PREFS)[0]["entry_key"] == "pref-1"
         assert (
             len(
-                persistence_service.list_staged_writes(
-                    db, ORG, AGENT, status="pending"
-                )
+                persistence_service.list_staged_writes(db, ORG, AGENT, status="pending")
             )
             == 0
         )
