@@ -1075,6 +1075,242 @@ class TestRouterWiring:
 # -- status vocabulary + migration shape -------------------------------
 
 
+class TestRexRetestFixRound:
+    """Rex TW-953 retest FAIL (P1/P3/P4/P8/P9): the gates around
+    the crash-recovery core. Each test here failed on tip 78a6e08
+    before the fix round."""
+
+    # F1: the null pipe is not a configured delivery target.
+    def _provider_row(self, db, name, *, enabled=True, channel="email"):
+        db.table("ntf_providers").insert(
+            {
+                "org_id": ORG,
+                "provider_name": name,
+                "channel": channel,
+                "is_enabled": enabled,
+                "config": {},
+            }
+        ).execute()
+
+    def test_null_provider_alone_is_not_configured_delivery(self, db):
+        self._provider_row(db, "null")
+        assert preflight.notify_delivery_configured(db, ORG) is False
+
+    def test_null_enabled_with_only_real_provider_disabled_is_not_configured(
+        self, db
+    ):
+        self._provider_row(db, "null", enabled=True)
+        self._provider_row(db, "resend", enabled=False)
+        assert preflight.notify_delivery_configured(db, ORG) is False
+
+    def test_unknown_provider_row_is_not_configured_delivery(self, db):
+        self._provider_row(db, "bogus-provider")
+        assert preflight.notify_delivery_configured(db, ORG) is False
+
+    def test_real_enabled_provider_is_configured_delivery(self, db):
+        self._provider_row(db, "resend", enabled=True)
+        assert preflight.notify_delivery_configured(db, ORG) is True
+
+    def test_disabled_real_provider_alone_is_not_configured(self, db):
+        self._provider_row(db, "twilio_sms", enabled=False, channel="sms")
+        assert preflight.notify_delivery_configured(db, ORG) is False
+
+    # F2: a job in review resumes ONLY through resume_after_review.
+    def _review_job(self, db):
+        job = _job(db, dt(2026, 11, 5, 15, 0))
+        for row in db.tables["agt_jobs"]:
+            if row["id"] == job["id"]:
+                row["status"] = "review"
+                row["review_reason"] = "fire interrupted mid-run"
+                row["review_fire_id"] = "fire-x"
+        return service.get_job(db, ORG, AGENT, job["id"])
+
+    def test_resume_job_refuses_a_review_job(self, db):
+        job = self._review_job(db)
+        with pytest.raises(AgentJobError):
+            service.resume_job(db, ORG, AGENT, job["id"])
+        after = service.get_job(db, ORG, AGENT, job["id"])
+        assert after["status"] == "review"
+        assert after["review_reason"] == "fire interrupted mid-run"
+        assert after["review_fire_id"] == "fire-x"
+
+    def test_trigger_now_refuses_a_review_job(self, db, tolls):
+        job = self._review_job(db)
+        with pytest.raises(AgentJobError):
+            service.trigger_now(
+                db,
+                ORG,
+                AGENT,
+                job["id"],
+                executor_factory=_echo_factory(),
+                toll_sink=tolls,
+                now=dt(2026, 11, 5, 15, 30),
+                enabled_orgs={ORG},
+            )
+        assert db.tables.get("agt_job_fires", []) == []
+        assert service.get_job(db, ORG, AGENT, job["id"])["status"] == "review"
+
+    # F3: resume_after_review holds while tolls are still unposted.
+    def test_resume_after_review_refused_while_executed_untolled(self, db):
+        now = dt(2026, 11, 5, 18, 0)
+        job = _job(db, dt(2026, 11, 5, 15, 0))
+        fire = _stranded_fire(db, job, started_minutes_ago=120, now=now)
+        journal = reconciliation.make_db_step_journal(
+            db, ORG, AGENT, fire["id"], fire["fire_key"]
+        )
+        step = execution.JobStep(
+            name="chase",
+            handler=lambda _c: {},
+            toll_event="agent.email_action",
+            idempotent=False,
+        )
+        journal("started", step)
+        journal("executed", step)
+        recovery.reap_stranded_fires(db, now=now, stale_after=timedelta(minutes=30))
+        key = f"{fire['fire_key']}:step:chase"
+        down_sink = FakeTollSink(fail_keys={key})
+
+        def factory(ctx):
+            return [step]
+
+        with pytest.raises(AgentJobError) as excinfo:
+            recovery.resume_after_review(
+                db,
+                ORG,
+                AGENT,
+                job["id"],
+                executor_factory=factory,
+                toll_sink=down_sink,
+                toll_reader=down_sink.reader,
+                now=dt(2026, 11, 5, 19, 0),
+            )
+        assert "chase" in str(excinfo.value)
+        assert service.get_job(db, ORG, AGENT, job["id"])["status"] == "review"
+        assert down_sink.rows == {}  # nothing tolled, nothing lost
+
+    # F4: journal steps dropped from the plan still classify.
+    def _journal_only_setup(self, db):
+        now = dt(2026, 11, 5, 18, 0)
+        job = _job(db, dt(2026, 11, 5, 15, 0))
+        fire = _stranded_fire(db, job, started_minutes_ago=120, now=now)
+        journal = reconciliation.make_db_step_journal(
+            db, ORG, AGENT, fire["id"], fire["fire_key"]
+        )
+        return job, fire, journal
+
+    def test_reconcile_classifies_journal_only_started_step_unknown(self, db, tolls):
+        job, fire, journal = self._journal_only_setup(db)
+        ghost = execution.JobStep(
+            name="ghost",
+            handler=lambda _c: {},
+            toll_event="agent.email_action",
+            idempotent=False,
+        )
+        journal("started", ghost)
+
+        def factory(ctx):
+            return [execution.JobStep(name="work", handler=lambda _c: {})]
+
+        report = reconciliation.reconcile_fire(
+            db,
+            ORG,
+            AGENT,
+            fire["id"],
+            executor_factory=factory,
+            toll_sink=tolls,
+            toll_reader=tolls.reader,
+        )
+        by_name = {s["name"]: s["classification"] for s in report["steps"]}
+        assert by_name["ghost"] == "unknown"
+        assert report["unknown_steps"] == ["ghost"]
+        assert by_name["work"] == "not_done"
+
+    def test_reconcile_classifies_journal_only_executed_step_untolled(
+        self, db, tolls
+    ):
+        job, fire, journal = self._journal_only_setup(db)
+        ghost = execution.JobStep(
+            name="ghost_exec",
+            handler=lambda _c: {},
+            toll_event="agent.email_action",
+            idempotent=False,
+        )
+        journal("started", ghost)
+        journal("executed", ghost)
+
+        def factory(ctx):
+            return [execution.JobStep(name="work", handler=lambda _c: {})]
+
+        report = reconciliation.reconcile_fire(
+            db,
+            ORG,
+            AGENT,
+            fire["id"],
+            executor_factory=factory,
+            toll_sink=tolls,
+            toll_reader=tolls.reader,
+        )
+        by_name = {s["name"]: s["classification"] for s in report["steps"]}
+        assert by_name["ghost_exec"] == "executed_untolled"
+        assert report["executed_untolled"] == ["ghost_exec"]
+
+    def test_resume_after_review_refused_on_journal_only_unknown(self, db, tolls):
+        now = dt(2026, 11, 5, 18, 0)
+        job, fire, journal = self._journal_only_setup(db)
+        ghost = execution.JobStep(
+            name="ghost",
+            handler=lambda _c: {},
+            toll_event="agent.email_action",
+            idempotent=False,
+        )
+        journal("started", ghost)
+        recovery.reap_stranded_fires(db, now=now, stale_after=timedelta(minutes=30))
+
+        def factory(ctx):
+            return [execution.JobStep(name="work", handler=lambda _c: {})]
+
+        with pytest.raises(AgentJobError) as excinfo:
+            recovery.resume_after_review(
+                db,
+                ORG,
+                AGENT,
+                job["id"],
+                executor_factory=factory,
+                toll_sink=tolls,
+                toll_reader=tolls.reader,
+                now=dt(2026, 11, 5, 19, 0),
+            )
+        assert "ghost" in str(excinfo.value)
+        assert service.get_job(db, ORG, AGENT, job["id"])["status"] == "review"
+
+    # F5: the production run_task step is non-idempotent.
+    def test_router_run_task_step_is_non_idempotent(self):
+        from app.agent_jobs import router as router_mod
+
+        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
+
+        class FakeRuntime:
+            def enqueue(self, task):
+                return {"task_id": task.id}
+
+        request.app.state.agent_runtime_factory = lambda db, org_id: FakeRuntime()
+        factory = router_mod._executor_factory(request, FakeDb(), ORG)
+        ctx = execution.build_execution_context(
+            org_id=ORG,
+            agent_id=AGENT,
+            job_id="job-1",
+            fire_id="fire-1",
+            fire_key="job-1:slot",
+            prompt="x",
+            skill_keys=[],
+            scheduled_for=dt(2026, 11, 5, 16, 0),
+            timezone_name="UTC",
+        )
+        steps = factory(ctx)
+        assert steps[0].name == "run_task"
+        assert steps[0].idempotent is False
+
+
 class TestVocabularyAndMigration:
     def test_interrupted_and_review_statuses_exist(self):
         assert "interrupted" in pmodels.FIRE_STATUSES
