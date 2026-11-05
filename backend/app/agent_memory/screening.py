@@ -15,7 +15,11 @@ imported), layered on the B1 masking pipeline:
   'is', credential-bearing URLs and connection strings,
   bare hex and generic high-entropy tokens in a sentence,
   headerless private-key base64 (blocked as a block), PEM
-  headers split across lines (blocked), and IBANs.
+  headers split across lines (blocked), and IBANs. Generic
+  token detection is format-drop-aware (round 3): a token
+  laced with a single invisible character is detected as
+  its stripped form and redacted whole, so it is no more
+  recoverable from stored content than its plain form.
 - injection-shaped and steering text is BLOCKED: classic
   instruction-override phrasing, and (F4) directive phrasing
   that reads as a standing order to the agent (always-approve
@@ -110,6 +114,7 @@ _INLINE_SECRET_RES: tuple[re.Pattern[str], ...] = (
 _URL_USERINFO_RE = re.compile(r"(?i)([a-z][a-z0-9+.-]*://)[^\s/@:]+:[^\s/@]+@")
 
 _HEX_TOKEN_RE = re.compile(r"^[0-9a-fA-F]{32,}$")
+_IBAN_TOKEN_RE = re.compile(r"^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$")
 _TOKEN_CHARSET_RE = re.compile(r"^[A-Za-z0-9+/=_-]+$")
 _TOKEN_STRIP_CHARS = ",.;:!?()\"'"
 
@@ -129,26 +134,39 @@ def _token_classes(token: str) -> int:
 
 def _redact_generic_tokens(text: str) -> str:
     """Redact bare high-entropy tokens sitting inside prose:
-    long hex strings, and base64-shaped tokens whose character
-    mix no ordinary word has. Ordinary words, however long,
-    are single-class and pass through."""
+    long hex strings, IBAN-shaped tokens, and base64-shaped
+    tokens whose character mix no ordinary word has. Ordinary
+    words, however long, are single-class and pass through.
+
+    Detection runs on the format-dropped copy of the token
+    (Rex re-probe round 3, TW-951): a single variation
+    selector or format character laced inside a token breaks
+    its raw charset, and on raw text alone the token passed
+    screening unredacted and stayed strip-recoverable from
+    stored content. The dropped copy is throwaway and only
+    decides; on a hit the WHOLE raw token, lacing included,
+    is replaced by the marker, exactly the treatment its
+    plain form gets, so nothing recoverable is stored and
+    benign content is never rewritten by the drop."""
 
     def _fix(match: re.Match[str]) -> str:
         token = match.group(0)
         core = token.strip(_TOKEN_STRIP_CHARS)
         if not core:
             return token
+        dropped = _drop_format_chars(core)
         suspicious = (
-            bool(_HEX_TOKEN_RE.match(core))
+            bool(_HEX_TOKEN_RE.match(dropped))
+            or bool(_IBAN_TOKEN_RE.match(dropped))
             or (
-                len(core) >= 20
-                and bool(_TOKEN_CHARSET_RE.match(core))
-                and _token_classes(core) >= 3
+                len(dropped) >= 20
+                and bool(_TOKEN_CHARSET_RE.match(dropped))
+                and _token_classes(dropped) >= 3
             )
             or (
-                len(core) >= 40
-                and bool(_TOKEN_CHARSET_RE.match(core))
-                and _token_classes(core) >= 2
+                len(dropped) >= 40
+                and bool(_TOKEN_CHARSET_RE.match(dropped))
+                and _token_classes(dropped) >= 2
             )
         )
         if not suspicious:
