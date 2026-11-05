@@ -52,7 +52,11 @@ class _Query:
         self._limit = None
 
     def eq(self, col, value):
-        self._filters.append((col, value))
+        self._filters.append((col, value, "eq"))
+        return self
+
+    def in_(self, col, values):
+        self._filters.append((col, list(values), "in"))
         return self
 
     def order(self, col, desc=False):
@@ -65,13 +69,24 @@ class _Query:
 
     def _matching(self):
         rows = self._db.tables.get(self._table, [])
-        return [
-            r for r in rows if all(r.get(col) == value for col, value in self._filters)
-        ]
+
+        def _ok(row):
+            for col, value, op in self._filters:
+                if op == "in":
+                    if row.get(col) not in value:
+                        return False
+                elif row.get(col) != value:
+                    return False
+            return True
+
+        return [r for r in rows if _ok(r)]
 
     def execute(self):
         if self._mode == "insert":
             row = dict(self._payload)
+            hook = getattr(self._db, "insert_hook", None)
+            if hook is not None:
+                hook(self._table, row)
             row.setdefault("id", self._db.next_id(self._table))
             self._db.tables.setdefault(self._table, []).append(row)
             return _Result([dict(row)])
@@ -240,6 +255,24 @@ class TestCron:
         nxt2 = sched.next_at_or_after(dt(2026, 11, 5, 16, 1), "America/Denver")
         assert nxt2 == dt(2026, 11, 6, 16, 0)
 
+    def test_range_step_anchors_at_range_start(self):
+        # Rosa MF1: Vixie steps anchor at the range start, not lo.
+        sched = cron_mod.CronSchedule("0 9-17/2 * * *")
+        assert sched.hours == {9, 11, 13, 15, 17}
+        sched2 = cron_mod.CronSchedule("10-50/10 * * * *")
+        assert sched2.minutes == {10, 20, 30, 40, 50}
+
+    def test_single_value_step_spans_value_to_hi(self):
+        # Rosa MF1: a bare value with a step spans value..hi.
+        sched = cron_mod.CronSchedule("5/15 * * * *")
+        assert sched.minutes == {5, 20, 35, 50}
+        sched2 = cron_mod.CronSchedule("0 5/6 * * *")
+        assert sched2.hours == {5, 11, 17, 23}
+
+    def test_star_step_still_anchors_at_lo(self):
+        sched = cron_mod.CronSchedule("*/15 * * * *")
+        assert sched.minutes == {0, 15, 30, 45}
+
 
 # -- definitions and management ---------------------------------
 
@@ -377,6 +410,111 @@ class TestTicker:
                 enabled_orgs={ORG},
             )
 
+    # -- Rex F1: per-job containment ----------------------------
+
+    def test_bad_cron_does_not_stop_other_jobs(self, db, tolls):
+        bad = _job(db, dt(2026, 11, 5, 15, 0), name="bad-cron")
+        _job(db, dt(2026, 11, 5, 15, 0), name="good")
+        for row in db.tables["agt_jobs"]:
+            if row["id"] == bad["id"]:
+                row["cron_expr"] = "not-a-cron"
+        out = _tick(db, dt(2026, 11, 5, 16, 0), tolls=tolls)
+        assert len(out["fired"]) == 1
+        assert out["fired"][0]["job_id"] != bad["id"]
+        assert out.get("errors") or out["failed"]
+
+    def test_corrupt_next_fire_at_does_not_stop_other_jobs(self, db, tolls):
+        bad = _job(db, dt(2026, 11, 5, 15, 0), name="corrupt-slot")
+        _job(db, dt(2026, 11, 5, 15, 0), name="good")
+        for row in db.tables["agt_jobs"]:
+            if row["id"] == bad["id"]:
+                row["next_fire_at"] = "not-a-date"
+        out = _tick(db, dt(2026, 11, 5, 16, 0), tolls=tolls)
+        assert len(out["fired"]) == 1
+        assert out["fired"][0]["job_id"] != bad["id"]
+        assert out.get("errors") or out["failed"]
+
+    def test_bad_timezone_does_not_stop_other_jobs(self, db, tolls):
+        bad = _job(db, dt(2026, 11, 5, 15, 0), name="bad-tz")
+        _job(db, dt(2026, 11, 5, 15, 0), name="good")
+        for row in db.tables["agt_jobs"]:
+            if row["id"] == bad["id"]:
+                row["timezone"] = "Mars/Olympus"
+        out = _tick(db, dt(2026, 11, 5, 16, 0), tolls=tolls)
+        assert len(out["fired"]) == 1
+        assert out["fired"][0]["job_id"] != bad["id"]
+        assert out.get("errors") or out["failed"]
+
+    def test_continuity_read_failure_does_not_stop_other_jobs(
+        self, db, tolls, monkeypatch
+    ):
+        bad = _job(db, dt(2026, 11, 5, 15, 0), name="bad-continuity")
+        _job(db, dt(2026, 11, 5, 15, 0), name="good")
+        from app.persistence import service as psvc
+
+        orig = psvc.get_continuity
+
+        def flaky(db_, org_id, agent_id, job_id):
+            if job_id == bad["id"]:
+                raise RuntimeError("continuity store down")
+            return orig(db_, org_id, agent_id, job_id)
+
+        monkeypatch.setattr(psvc, "get_continuity", flaky)
+        out = _tick(db, dt(2026, 11, 5, 16, 0), tolls=tolls)
+        assert len(out["fired"]) == 1
+        assert out["fired"][0]["job_id"] != bad["id"]
+        assert out.get("errors") or out["failed"]
+
+    # -- Rex F3: fire-first ordering ----------------------------
+
+    def test_pre_recorded_fire_recovers_stranded_slot(self, db, tolls):
+        # A crash after record_fire but before advance leaves a
+        # fire row and an old slot. The next tick must count it
+        # already_fired (not refire, not strand silently) and
+        # advance past the slot.
+        job = _job(db, dt(2026, 11, 5, 15, 0))
+        slot = dt(2026, 11, 5, 16, 0)
+        from app.persistence import models as pmodels
+        from app.persistence import service as psvc
+
+        psvc.record_fire(
+            db,
+            ORG,
+            AGENT,
+            job["id"],
+            pmodels.FireCreate(
+                fire_key=service.mint_fire_key(job["id"], slot),
+                scheduled_for=slot.isoformat(),
+            ),
+        )
+        out = _tick(db, dt(2026, 11, 5, 16, 0), tolls=tolls)
+        assert out["fired"] == []
+        assert out["already_fired"] == 1
+        assert len(db.tables["agt_job_fires"]) == 1
+        refreshed = service.get_job(db, ORG, AGENT, job["id"])
+        assert refreshed["next_fire_at"] == dt(2026, 11, 6, 16, 0).isoformat()
+
+    # -- Rex F4: concurrent duplicate at insert ----------------
+
+    def test_insert_unique_violation_counts_already_fired(self, db, tolls):
+        bad = _job(db, dt(2026, 11, 5, 15, 0), name="raced")
+        _job(db, dt(2026, 11, 5, 15, 0), name="good")
+
+        def hook(table, row):
+            if table == "agt_job_fires" and row.get("fire_key", "").startswith(
+                bad["id"] + ":"
+            ):
+                raise RuntimeError(
+                    'duplicate key value violates unique constraint '
+                    '"agt_job_fires_fire_key_key" (SQLSTATE 23505)'
+                )
+
+        db.insert_hook = hook
+        out = _tick(db, dt(2026, 11, 5, 16, 0), tolls=tolls)
+        assert out["already_fired"] == 1
+        assert len(out["fired"]) == 1
+        assert out["fired"][0]["job_id"] != bad["id"]
+
 
 # -- execution: continuity, masking, tolls, cancel ---------------
 
@@ -497,6 +635,35 @@ class TestExecution:
         execution.run_steps(ctx, retry_steps, toll_sink=tolls, db=db)
         assert len(tolls.rows) == 2
 
+    def test_cancel_inside_last_step_leaves_fire_cancelled(self, db, tolls):
+        # Rosa MF2 / Rex F2: cancel during the FINAL step must not
+        # be overwritten to completed, and continuity must not be
+        # updated from a cancelled run.
+        job = _job(db, dt(2026, 11, 5, 15, 0))
+        control = execution.RunControl()
+
+        def factory(ctx):
+            def only(_ctx):
+                service.cancel_run(
+                    db, ORG, AGENT, job["id"], ctx.fire_id, control=control
+                )
+                return {"summary": "last step ran", "surfaced_item_ids": ["x-1"]}
+
+            return [
+                execution.JobStep(
+                    name="only", handler=only, toll_event="agent.task_completed"
+                )
+            ]
+
+        out = _tick(
+            db, dt(2026, 11, 5, 16, 0), factory=factory, tolls=tolls, control=control
+        )
+        assert out["fired"][0]["status"] == "cancelled"
+        fire = db.tables["agt_job_fires"][0]
+        assert fire["status"] == "cancelled"
+        # No continuity row was created from the cancelled run.
+        assert db.tables.get("agt_job_continuity", []) == []
+
     def test_no_job_creates_job_by_construction(self, db, tolls):
         seen = {}
 
@@ -596,6 +763,63 @@ class TestMigrationFile:
         assert "ADD COLUMN IF NOT EXISTS one_shot_at" in sql
         assert "NEVER applied by this ticket" in sql
         assert "DROP TABLE" not in sql
+
+
+# -- persistence record_fire translation (Rex F4) ----------------
+
+
+class TestRecordFireTranslation:
+    def test_postgres_unique_violation_becomes_duplicate_fire(self, db):
+        job = _job(db, dt(2026, 11, 5, 15, 0))
+        from app.persistence import models as pmodels
+        from app.persistence import service as psvc
+        from app.persistence.models import DuplicateFireError
+
+        def hook(table, row):
+            if table == "agt_job_fires":
+                raise RuntimeError(
+                    "duplicate key value violates unique constraint "
+                    '"agt_job_fires_fire_key_key"'
+                )
+
+        db.insert_hook = hook
+        with pytest.raises(DuplicateFireError):
+            psvc.record_fire(
+                db,
+                ORG,
+                AGENT,
+                job["id"],
+                pmodels.FireCreate(
+                    fire_key=service.mint_fire_key(job["id"], dt(2026, 11, 5, 16, 0)),
+                    scheduled_for=dt(2026, 11, 5, 16, 0).isoformat(),
+                ),
+            )
+
+    def test_postgres_23505_code_becomes_duplicate_fire(self, db):
+        job = _job(db, dt(2026, 11, 5, 15, 0))
+        from app.persistence import models as pmodels
+        from app.persistence import service as psvc
+        from app.persistence.models import DuplicateFireError
+
+        class PgError(RuntimeError):
+            code = "23505"
+
+        def hook(table, row):
+            if table == "agt_job_fires":
+                raise PgError("unique violation")
+
+        db.insert_hook = hook
+        with pytest.raises(DuplicateFireError):
+            psvc.record_fire(
+                db,
+                ORG,
+                AGENT,
+                job["id"],
+                pmodels.FireCreate(
+                    fire_key=service.mint_fire_key(job["id"], dt(2026, 11, 5, 16, 0)),
+                    scheduled_for=dt(2026, 11, 5, 16, 0).isoformat(),
+                ),
+            )
 
 
 # -- runtime adapter ----------------------------------------------
