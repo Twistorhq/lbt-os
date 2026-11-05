@@ -1948,12 +1948,19 @@ class TestRound6GluedAdjacency:
         cases = [
             (_lace_offsets(GLUE_TRAIL_FOR, FE0F, (4, 12, 19)), "for"),
             (_lace_offsets(GLUE_TRAIL_FOR, WJ, (4, 12, 19)), "for"),
-            (_lace_every(GLUE_TRAIL_FOR, FE0F, 4), "for"),
+            # Every-4 lacing also lands inside the kept word:
+            # content outside the neutralized span is never
+            # rewritten, so that invisible stays as benign
+            # residue in the surviving word.
+            (_lace_every(GLUE_TRAIL_FOR, FE0F, 4), f"f{FE0F}or"),
             (
                 _lace_offsets(GLUE_TRAIL_ECLAIR_NFD, FE0F, (4, 12, 19)),
                 "e\u0301clair",
             ),
-            (_lace_every(GLUE_TRAIL_ECLAIR_NFD, FE0F, 4), "e\u0301clair"),
+            (
+                _lace_every(GLUE_TRAIL_ECLAIR_NFD, FE0F, 4),
+                f"e{FE0F}\u0301cla{FE0F}ir",
+            ),
         ]
         for laced, kept in cases:
             body = f"The account is {laced} for payouts."
@@ -1988,12 +1995,11 @@ class TestRound6GluedAdjacency:
             assert not _recoverable_any(gated, despaced)
 
     def test_leading_glued_letter_laced_not_recoverable_at_screen_level(self):
-        _, despaced = SPACED_IBANS["DE"]
-        _, core = SPACED_IBANS["DE"]
+        spaced, despaced = SPACED_IBANS["DE"]
         variants = [
-            "x" + _lace_offsets(core, FE0F, (4, 12, 19)),
-            "x" + _lace_offsets(core, WJ, (4, 12, 19)),
-            "x" + _lace_every(core, FE0F, 4),
+            "x" + _lace_offsets(spaced, FE0F, (4, 12, 19)),
+            "x" + _lace_offsets(spaced, WJ, (4, 12, 19)),
+            "x" + _lace_every(spaced, FE0F, 4),
         ]
         for laced in variants:
             body = f"The account is {laced} for payouts."
@@ -2005,9 +2011,8 @@ class TestRound6GluedAdjacency:
             assert not _recoverable_any(out, despaced)
 
     def test_leading_glued_letter_laced_both_gate_paths(self, db):
-        _, despaced = SPACED_IBANS["DE"]
-        _, core = SPACED_IBANS["DE"]
-        laced = "x" + _lace_offsets(core, FE0F, (4, 12, 19))
+        spaced, despaced = SPACED_IBANS["DE"]
+        laced = "x" + _lace_offsets(spaced, FE0F, (4, 12, 19))
         body = f"The account is {laced} for payouts."
         relaxed, gated = _both_gate_bodies(db, "r6-lead-x", body, "sess-r6-lx")
         want = f"The account is x{MARKER} for payouts."
@@ -2022,8 +2027,10 @@ class TestRound6GluedAdjacency:
             # Leading glued digit + trailing glued letter: B1
             # destroys the digit in the plain form ([id]) and
             # keeps the letter, so the span absorbs the digit
-            # and keeps the letter.
-            (_lace_every(GLUE_LEAD9_TRAIL_A, FE0F, 4), f"{MARKER}A"),
+            # and keeps the letter. The every-4 invisible that
+            # lands between the absorbed digit run and the
+            # kept letter is outside the span and stays.
+            (_lace_every(GLUE_LEAD9_TRAIL_A, FE0F, 4), f"{MARKER}{FE0F}A"),
             # Leading glued digit alone: absorbed whole.
             (_lace_every(GLUE_LEAD9, FE0F, 4), MARKER),
             # Glued adjacency on a lowercase IBAN.
@@ -2038,8 +2045,10 @@ class TestRound6GluedAdjacency:
             # (DE[phone]AB), so both are kept.
             (_lace_offsets(GLUE_TRAIL_AB, FE0F, (4, 12, 19)), f"{MARKER}AB"),
             # Digit then letter: the digit run is absorbed,
-            # the letter is kept (plain: DE[phone]A).
-            (_lace_every(GLUE_TRAIL_9A, FE0F, 4), f"{MARKER}A"),
+            # the letter is kept (plain: DE[phone]A); the
+            # every-4 invisible between them is outside the
+            # span and stays, as in the lead-9 case above.
+            (_lace_every(GLUE_TRAIL_9A, FE0F, 4), f"{MARKER}{FE0F}A"),
         ]
         for laced, kept in cases:
             body = f"The account is {laced} for payouts."
@@ -2051,7 +2060,11 @@ class TestRound6GluedAdjacency:
     def test_glued_combinations_laced_both_gate_paths(self, db):
         _, despaced = SPACED_IBANS["DE"]
         cases = [
-            ("r6-combo-9a", _lace_every(GLUE_LEAD9_TRAIL_A, FE0F, 4), f"{MARKER}A"),
+            (
+                "r6-combo-9a",
+                _lace_every(GLUE_LEAD9_TRAIL_A, FE0F, 4),
+                f"{MARKER}{FE0F}A",
+            ),
             (
                 "r6-combo-lower",
                 _lace_offsets(GLUE_LOWER_TRAIL_A, FE0F, (4, 12, 19)),

@@ -40,7 +40,12 @@ imported), layered on the B1 masking pipeline:
   still keep their exact output. A validated IBAN with
   one digit glued to its final group is neutralized as
   the whole glued span when laced, the same wholesale
-  destruction B1 gives its plain form.
+  destruction B1 gives its plain form. Glued adjacency
+  generalizes in round 6: a validated IBAN core with
+  letters or a word glued to either boundary is
+  neutralized when laced as the core plus any boundary
+  digits, with glued letters left where B1 leaves them
+  in the plain form.
 - injection-shaped and steering text is BLOCKED: classic
   instruction-override phrasing, and (F4) directive phrasing
   that reads as a standing order to the agent (always-approve
@@ -339,6 +344,20 @@ _SPACED_IBAN_RE = re.compile(
     r"(?![A-Z0-9])"
 )
 
+# The same canonical shape without boundary lookarounds, for
+# fullmatch validation of a candidate core substring located
+# by the glued-adjacency scan (round 6, see
+# _glued_iban_core_spans).
+_SPACED_IBAN_CORE_RE = re.compile(
+    r"[A-Z]{2}\d{2}(?: [A-Z0-9]{4}){1,7}(?: [A-Z0-9]{1,4})?"
+)
+
+# A maximal run of alphanumeric groups separated by single
+# spaces in the normalized copy: the territory the
+# glued-adjacency scan searches for a validated IBAN core
+# with characters glued to either boundary group.
+_SPACED_RUN_RE = re.compile(r"[A-Z0-9]+(?: [A-Z0-9]+)*")
+
 
 def _normalize_detection_char(ch: str) -> str:
     """Per-character shape normalization for the spaced-IBAN
@@ -379,6 +398,97 @@ def _is_glued_valid_iban(despaced: str) -> bool:
     if not despaced[-1].isdigit():
         return False
     return _is_valid_iban(despaced[:-1])
+
+
+def _glued_iban_core_spans(normalized: str) -> list[tuple[int, int]]:
+    """Glued-adjacency spans in the normalized copy (round 6,
+    Rex R5-4): spans to neutralize when laced, as (start, end)
+    offsets into the normalized copy.
+
+    The round-5 detector anchored on the canonical shape with
+    alphanumeric boundary lookarounds, so any character glued
+    to either boundary of a spaced IBAN defeated it: a
+    trailing glued letter or word (the final group grows past
+    four, or the trailing lookahead fails) and a leading glued
+    letter (the leading lookahead fails) all stored verbatim
+    when laced, while B1 destroys every plain form's core.
+
+    This scan searches each maximal spaced alphanumeric run
+    for a VALIDATED IBAN core with glued adjacency: a core
+    start inside its first group (leading glue) or a core end
+    inside its last group (trailing glue), where the core
+    itself fullmatches the canonical spaced shape and passes
+    the unchanged country-length plus mod-97 validation with
+    the glued characters stripped. The validation is the
+    anchor: a glued string whose stripped core fails mod-97
+    or country length yields no span and is never rewritten.
+
+    The returned span is the core plus the digits glued
+    directly to either boundary, and nothing more. Parity,
+    per shape, against the plain form's B1 outcome: B1
+    destroys glued digits along with the core (a leading
+    glued digit stores as [id], trailing glued digits vanish
+    wholesale, and a glued 9 before a glued A still vanishes),
+    so the digit runs are absorbed into the neutralized span;
+    B1 leaves glued letters and words readable (DE[phone]A,
+    DE[phone]for, xDE[phone]), so they stay outside the span,
+    exactly where the plain form leaves them. Absorbing a
+    whole glued word would destroy more than the plain form
+    loses; absorbing only the core would leave glued digits
+    behind as remnants the plain form never leaves."""
+    spans: list[tuple[int, int]] = []
+    for run in _SPACED_RUN_RE.finditer(normalized):
+        groups = run.group(0).split(" ")
+        # Per despaced character: its offset in the normalized
+        # copy, and the despaced range [start, end) of the
+        # group it belongs to.
+        char_pos: list[int] = []
+        group_ranges: list[tuple[int, int]] = []
+        d_index = 0
+        offset = run.start()
+        for group in groups:
+            group_ranges.append((d_index, d_index + len(group)))
+            char_pos.extend(range(offset, offset + len(group)))
+            d_index += len(group)
+            offset += len(group) + 1
+        despaced = "".join(groups)
+        group_of: list[int] = []
+        for gi, (gs, ge) in enumerate(group_ranges):
+            group_of.extend([gi] * (ge - gs))
+        for s in range(len(despaced)):
+            if not (
+                s + 4 <= len(despaced)
+                and despaced[s : s + 2].isalpha()
+                and despaced[s + 2 : s + 4].isdigit()
+            ):
+                continue
+            expected = _IBAN_COUNTRY_LENGTHS.get(despaced[s : s + 2])
+            lengths = (expected,) if expected is not None else range(15, 35)
+            for length in lengths:
+                e = s + length
+                if e > len(despaced):
+                    break
+                core = despaced[s:e]
+                if not _is_valid_iban(core):
+                    continue
+                core_text = normalized[char_pos[s] : char_pos[e - 1] + 1]
+                if not _SPACED_IBAN_CORE_RE.fullmatch(core_text):
+                    continue
+                lead_gs, _ = group_ranges[group_of[s]]
+                _, trail_ge = group_ranges[group_of[e - 1]]
+                if s == lead_gs and e == trail_ge:
+                    # No glued adjacency: the canonical scan
+                    # owns this candidate.
+                    continue
+                start = s
+                while start > lead_gs and despaced[start - 1].isdigit():
+                    start -= 1
+                end = e
+                while end < trail_ge and despaced[end].isdigit():
+                    end += 1
+                spans.append((char_pos[start], char_pos[end - 1] + 1))
+                break
+    return spans
 
 
 def _is_valid_iban(despaced: str) -> bool:
@@ -450,7 +560,20 @@ def _neutralize_laced_spaced_ibans(text: str) -> str:
     form wholesale (DE[phone], no digit survives), so the
     laced form gets that same wholesale outcome; replacing
     only the IBAN substring would leave the glued digit
-    behind as a remnant the plain form never leaves."""
+    behind as a remnant the plain form never leaves.
+
+    Round 6 (R5-4): the glued-span rule generalizes from
+    exactly one trailing digit to glued alphanumeric
+    adjacency at either boundary (_glued_iban_core_spans):
+    a validated core with a glued letter or word at either
+    end is neutralized when laced, as the core plus any
+    digits glued directly to a boundary. Glued letters and
+    words stay in place, exactly where B1 leaves them in
+    the plain form (DE[phone]A, DE[phone]for, xDE[phone]);
+    glued digits are absorbed because B1 destroys them
+    with the core. Validation is unchanged, so a laced
+    glued string whose stripped core fails country length
+    or mod-97 is never rewritten."""
     normalized_chars: list[str] = []
     index_map: list[int] = []
     for i, ch in enumerate(text):
@@ -467,8 +590,27 @@ def _neutralize_laced_spaced_ibans(text: str) -> str:
         raw_end = index_map[match.end() - 1] + 1
         if any(_is_detection_dropped(ch) for ch in text[raw_start:raw_end]):
             spans.append((raw_start, raw_end))
+    # Round 6 (R5-4): validated cores with glued alphanumeric
+    # adjacency at either boundary, which the canonical
+    # shape's lookarounds cannot match. The laced-span
+    # condition is the same: only a span whose raw form
+    # carries dropped characters is neutralized, so plain
+    # glued forms keep exactly their current B1 output.
+    for norm_start, norm_end in _glued_iban_core_spans(normalized):
+        raw_start = index_map[norm_start]
+        raw_end = index_map[norm_end - 1] + 1
+        if any(_is_detection_dropped(ch) for ch in text[raw_start:raw_end]):
+            spans.append((raw_start, raw_end))
     if not spans:
         return text
+    spans.sort()
+    merged: list[tuple[int, int]] = []
+    for start, end in spans:
+        if merged and start < merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    spans = merged
     out: list[str] = []
     pos = 0
     for start, end in spans:
