@@ -39,7 +39,7 @@ os.environ.setdefault("TWISTOR_PERSISTENCE_HASH_KEY", "tw951-test-key")
 
 from app.agent_memory import models, screening, service  # noqa: E402
 from app.persistence import service as persistence_service  # noqa: E402
-from app.persistence.models import hash_body  # noqa: E402
+from app.persistence.models import hash_body, mask_text  # noqa: E402
 
 ORG = "org-1"
 OTHER_ORG = "org-2"
@@ -1341,3 +1341,250 @@ class TestLacedGenericTokenControls:
         out = screening.screen(f"The password is {laced_value} ok.")
         assert models.REDACTION_MARKER in out
         assert not _recoverable(out, "correcthorsebatterystaple1")
+
+
+# -- Rex retest fix round 4: laced spaced IBANs (R4) ----------------
+
+# R4: a spaced IBAN (the canonical printed form, digit groups
+# separated by spaces) is destroyed by B1 phone masking in its
+# plain form, but invisible characters laced into the groups
+# break the B1 _PHONE_RE / _LONG_DIGITS_RE patterns, so the
+# laced form stored verbatim on both gate paths and the full
+# IBAN was recoverable by dropping the invisibles and removing
+# the spaces. Rex proved 3 insertions at offsets 4, 12, 19 and
+# regular lacing every-2 through every-7 end to end; 1 and 2
+# insertions did not leak. The fix detects spaced-IBAN shapes
+# (country and check prefix plus grouped BBAN, validated by
+# country length and the mod-97 check) on the format-dropped
+# and despaced copy in the B2 screening layer and neutralizes
+# a matched span whose raw form carries dropped characters,
+# so the laced form ends up exactly as non-recoverable as its
+# plain form and the write still proceeds.
+SPACED_IBANS = {
+    "DE": ("DE89 3704 0044 0532 0130 00", "DE89370400440532013000"),
+    "GB": ("GB29 NWBK 6016 1331 9268 19", "GB29NWBK60161331926819"),
+    "FR": (
+        "FR14 2004 1010 0505 0001 3M02 606",
+        "FR1420041010050500013M02606",
+    ),
+}
+FE0F = chr(0xFE0F)
+WJ = chr(0x2060)
+
+
+def _lace_offsets(text, char, offsets):
+    out = text
+    for off in sorted(offsets, reverse=True):
+        out = out[:off] + char + out[off:]
+    return out
+
+
+def _lace_every(text, char, step):
+    out = []
+    for i, ch in enumerate(text):
+        out.append(ch)
+        if (i + 1) % step == 0 and i + 1 < len(text):
+            out.append(char)
+    return "".join(out)
+
+
+def _iban_recoverable(stored, despaced):
+    return despaced in screening._drop_format_chars(stored).replace(" ", "")
+
+
+def _pipeline(text):
+    return mask_text(screening.screen(text))
+
+
+class TestLacedSpacedIbans:
+    def test_rex_repro_three_insertions_not_recoverable_at_screen_level(self):
+        spaced, despaced = SPACED_IBANS["DE"]
+        for char in (FE0F, WJ):
+            laced = _lace_offsets(spaced, char, (4, 12, 19))
+            out = _pipeline(f"The account is {laced} for payouts.")
+            assert models.REDACTION_MARKER in out
+            assert not _iban_recoverable(out, despaced)
+
+    def test_rex_repro_three_insertions_both_gate_paths(self, db):
+        spaced, despaced = SPACED_IBANS["DE"]
+        for char in (FE0F, WJ):
+            laced = _lace_offsets(spaced, char, (4, 12, 19))
+            body = f"The account is {laced} for payouts."
+            # Relaxed gate: propose auto-applies into the snapshot.
+            relaxed_db = type(db)()
+            service.set_gate_mode(
+                relaxed_db,
+                ORG,
+                AGENT,
+                models.GATE_RELAXED,
+                actor_role="owner",
+                actor_id="o-1",
+            )
+            _add(relaxed_db, "iban-relaxed", body)
+            snap = service.assemble_snapshot(
+                relaxed_db, ORG, AGENT, f"sess-r4-{ord(char)}"
+            )
+            snap_bodies = [e["body"] for e in snap["collections"][FACTS]]
+            assert len(snap_bodies) == 1
+            assert models.REDACTION_MARKER in snap_bodies[0]
+            assert not _iban_recoverable(snap_bodies[0], despaced)
+            # Gated gate: propose, approve, read the live entry.
+            gated_db = type(db)()
+            staged = _add(gated_db, "iban-gated", body)
+            _approve(gated_db, staged["id"])
+            entries = service.list_entries(gated_db, ORG, AGENT, FACTS)
+            assert len(entries) == 1
+            assert models.REDACTION_MARKER in entries[0]["body"]
+            assert not _iban_recoverable(entries[0]["body"], despaced)
+
+    def test_regular_lacing_every_2_through_7_not_recoverable(self):
+        spaced, despaced = SPACED_IBANS["DE"]
+        for step in (2, 3, 4, 5, 6, 7):
+            for char in (FE0F, WJ):
+                laced = _lace_every(spaced, char, step)
+                out = _pipeline(f"The account is {laced} for payouts.")
+                assert models.REDACTION_MARKER in out, (step, char)
+                assert not _iban_recoverable(out, despaced), (step, char)
+
+    def test_regular_lacing_relaxed_chain_not_recoverable(self, db):
+        spaced, despaced = SPACED_IBANS["DE"]
+        service.set_gate_mode(
+            db, ORG, AGENT, models.GATE_RELAXED, actor_role="owner", actor_id="o-1"
+        )
+        laced = _lace_every(spaced, FE0F, 4)
+        _add(db, "iban-every4", f"The account is {laced} for payouts.")
+        snap = service.assemble_snapshot(db, ORG, AGENT, "sess-r4-every4")
+        snap_bodies = [e["body"] for e in snap["collections"][FACTS]]
+        assert len(snap_bodies) == 1
+        assert models.REDACTION_MARKER in snap_bodies[0]
+        assert not _iban_recoverable(snap_bodies[0], despaced)
+
+    def test_non_de_spaced_ibans_laced_not_recoverable(self, db):
+        service.set_gate_mode(
+            db, ORG, AGENT, models.GATE_RELAXED, actor_role="owner", actor_id="o-1"
+        )
+        for country in ("GB", "FR"):
+            spaced, despaced = SPACED_IBANS[country]
+            variants = [
+                _lace_offsets(spaced, FE0F, (4, 12, 19)),
+                _lace_offsets(spaced, WJ, (4, 12, 19)),
+                _lace_every(spaced, FE0F, 4),
+            ]
+            for i, laced in enumerate(variants):
+                out = _pipeline(f"The account is {laced} for payouts.")
+                assert models.REDACTION_MARKER in out, (country, i)
+                assert not _iban_recoverable(out, despaced), (country, i)
+                _add(db, f"iban-{country}-{i}", f"The account is {laced} for payouts.")
+        entries = service.list_entries(db, ORG, AGENT, FACTS)
+        assert len(entries) == 6
+        for entry in entries:
+            country = entry["entry_key"].split("-")[1]
+            assert models.REDACTION_MARKER in entry["body"]
+            assert not _iban_recoverable(entry["body"], SPACED_IBANS[country][1])
+
+    def test_one_and_two_insertions_still_not_recoverable(self, db):
+        spaced, despaced = SPACED_IBANS["DE"]
+        service.set_gate_mode(
+            db, ORG, AGENT, models.GATE_RELAXED, actor_role="owner", actor_id="o-1"
+        )
+        cases = [(4,), (19,), (4, 12), (0, 26)]
+        for i, offsets in enumerate(cases):
+            for char in (FE0F, WJ):
+                laced = _lace_offsets(spaced, char, offsets)
+                out = _pipeline(f"The account is {laced} for payouts.")
+                assert not _iban_recoverable(out, despaced), (offsets, char)
+            few = _lace_offsets(spaced, FE0F, offsets)
+            _add(db, f"iban-few-{i}", f"The account is {few} for payouts.")
+        entries = service.list_entries(db, ORG, AGENT, FACTS)
+        assert len(entries) == len(cases)
+        for entry in entries:
+            assert not _iban_recoverable(entry["body"], despaced)
+
+
+class TestSpacedIbanParityControls:
+    def test_plain_spaced_ibans_byte_identical_to_today(self, db):
+        expected = {
+            "DE": "The account is DE[phone] for payouts.",
+            "GB": "The account is GB29 NWBK [phone] for payouts.",
+            "FR": "The account is FR[phone]M02 606 for payouts.",
+        }
+        for country, want in expected.items():
+            spaced = SPACED_IBANS[country][0]
+            assert _pipeline(f"The account is {spaced} for payouts.") == want
+        staged = _add(
+            db, "iban-plain", f"The account is {SPACED_IBANS['DE'][0]} for payouts."
+        )
+        _approve(db, staged["id"])
+        entries = service.list_entries(db, ORG, AGENT, FACTS)
+        assert entries[0]["body"] == expected["DE"]
+
+    def test_benign_grouped_numbers_store_exactly_as_today(self):
+        cases = [
+            (
+                "Call the shop at 720 810 8226 for hours.",
+                "Call the shop at [phone] for hours.",
+            ),
+            (
+                f"Call the shop at 720{FE0F} 810 8226 for hours.",
+                f"Call the shop at 720{FE0F} [phone] for hours.",
+            ),
+            (
+                "Order AB12 3456 7890 1234 shipped on Tuesday.",
+                "Order AB[phone] shipped on Tuesday.",
+            ),
+            (
+                f"Order AB12 3456{FE0F} 7890 1234 shipped on Tuesday.",
+                f"Order AB12 3456{FE0F} [phone] shipped on Tuesday.",
+            ),
+            (
+                "Tracking 1Z98 7654 3210 9876 54 arrives on Friday.",
+                "Tracking 1Z[phone] arrives on Friday.",
+            ),
+            (
+                f"Tracking 1Z98 7654{FE0F} 3210 9876 54 arrives on Friday.",
+                f"Tracking 1Z98 7654{FE0F} [phone] arrives on Friday.",
+            ),
+            (
+                "The lease runs 2026 11 05 through 2027 01 15 in Denver.",
+                "The lease runs [phone] through [phone] in Denver.",
+            ),
+            (
+                f"The lease runs 2026 11{FE0F} 05 through 2027 01 15 in Denver.",
+                f"The lease runs 2026 11{FE0F} 05 through [phone] in Denver.",
+            ),
+            (
+                "The card reads 4111 2222 3333 4444 at the counter.",
+                "The card reads [phone] at the counter.",
+            ),
+            (
+                "Reference DE12 3456 7890 1234 5678 90 was quoted.",
+                "Reference DE[phone] was quoted.",
+            ),
+            (
+                f"Reference DE12 3456{FE0F} 7890 1234{FE0F} 5678 90 was quoted.",
+                f"Reference DE12 3456{FE0F} [phone]{FE0F} 5678 90 was quoted.",
+            ),
+        ]
+        for text, want in cases:
+            assert _pipeline(text) == want, text
+
+    def test_accented_and_emoji_prose_store_byte_for_byte(self, db):
+        accented = "Ren\u00e9e met Jos\u00e9 at the caf\u00e9 on Pe\u00f1a Street."
+        emoji = (
+            "Open today "
+            + chr(0x2600)
+            + FE0F
+            + " for the neighborhood crew, nine to five."
+        )
+        for text in (accented, emoji):
+            assert screening.screen(text) == text
+        staged_a = _add(db, "r4-accented", accented)
+        _approve(db, staged_a["id"])
+        staged_e = _add(db, "r4-emoji", emoji)
+        _approve(db, staged_e["id"])
+        by_key = {
+            e["entry_key"]: e["body"]
+            for e in service.list_entries(db, ORG, AGENT, FACTS)
+        }
+        assert by_key["r4-accented"] == accented
+        assert by_key["r4-emoji"] == emoji
