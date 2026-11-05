@@ -282,3 +282,145 @@
   flex-wrap: wrap;
   margin: 0 0 12px;
 }
+
+/* Standing display (TW-941, pattern 06). Ledger Gold is the currency
+   metal: it appears here and on the collectible shelf, nowhere else.
+   Gold fill is a mark only; tier text uses the standing text token,
+   which carries AA contrast in both schemes. */
+.soc-standing__head {
+  margin: 0 0 8px;
+}
+
+.soc-standing__tier {
+  font-family: var(--soc-font-display);
+  font-size: var(--soc-text-display);
+  font-weight: 600;
+  line-height: 1.15;
+  color: var(--soc-standing);
+  margin: 12px 0 4px;
+}
+
+.soc-standing__meaning {
+  font-size: var(--soc-text-lede);
+  margin: 0 0 8px;
+}
+
+.soc-standing__showrate {
+  font-weight: 700;
+  margin: 0;
+}
+
+/* The ladder is a list, not a grid of cards: each rung carries its
+   own state word, and the gold mark fills only for earned and
+   current rungs. The future-phase rung (Verified) never fills. */
+.soc-ladder {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.soc-rung {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--soc-line);
+}
+
+.soc-rung:last-child {
+  border-bottom: none;
+}
+
+.soc-rung__mark {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-top: 5px;
+  border-radius: 50%;
+  border: 2px solid var(--soc-standing-fill);
+  box-sizing: border-box;
+}
+
+.soc-rung[data-state='earned'] .soc-rung__mark,
+.soc-rung[data-state='current'] .soc-rung__mark {
+  background: var(--soc-standing-fill);
+}
+
+.soc-rung__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.soc-rung__name {
+  font-weight: 700;
+}
+
+.soc-rung[data-state='current'] .soc-rung__name {
+  color: var(--soc-standing);
+}
+
+.soc-rung__state {
+  color: var(--soc-ink-dim);
+  font-size: var(--soc-text-caption);
+  font-weight: 600;
+}
+
+.soc-rung__note {
+  color: var(--soc-ink-dim);
+}
+
+/* Progress conditions: one fact per row (pattern 06). There is no
+   bar anywhere in this pattern; the words carry the progress. */
+.soc-conds,
+.soc-detail {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.soc-cond {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  align-items: baseline;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--soc-line);
+}
+
+.soc-cond:last-child {
+  border-bottom: none;
+}
+
+.soc-cond__label {
+  font-weight: 700;
+  flex: 1 1 10rem;
+}
+
+.soc-cond__status {
+  font-weight: 700;
+  color: var(--soc-standing);
+}
+
+.soc-detail li {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--soc-line);
+}
+
+.soc-detail li:last-child {
+  border-bottom: none;
+}
+
+/* Desktop layer: Social is mobile first, and the standing surface
+   widens its fact rows on larger viewports without changing order
+   or content (the SocScreen column cap still governs reading width
+   for the header; the ladder and record use the extra room). */
+@media (min-width: 768px) {
+  .soc-cond {
+    flex-wrap: nowrap;
+  }
+
+  .soc-cond__fact {
+    flex: 1 1 auto;
+  }
+}
