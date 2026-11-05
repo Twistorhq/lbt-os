@@ -155,7 +155,29 @@ drives `service.revoke` and renders `composed_stop_status`.
 
 ## 6. Test runs
 
-(Filled with the run output at the GREEN commit; see the ticket comment.)
+- **B7 suites: 42/42 passed** (`test_agentperms_floor_tw954.py` 12,
+  `test_agentperms_policy_tw954.py` 23, `test_agentperms_policy_migration_tw954.py` 7).
+- **Neighboring suites** (agentperms service/models/fencing/multiagent/
+  migrations, persistence service + migration, agent identity
+  models/service/multiagent/migrations): **280 passed, 1 failed** — the one
+  failure (`test_agent_identity_router.py::test_no_token_is_401`) fails
+  identically on the pristine B1 base tip, verified directly; not a
+  regression. Two router test files (`test_agentperms_router.py`,
+  `test_agent_identity_rolegate.py`) fail collection on a missing `argon2`
+  module — identical on the base, part of the pre-existing env baseline.
+- **Full backend suite, same invocation on both trees**
+  (`pytest tests --continue-on-collection-errors`, venv python):
+  this branch **2610 passed, 23 failed, 76 skipped, 18 collection errors**;
+  B1 base `7df0bfb` **2568 passed, 23 failed, 76 skipped, 18 collection
+  errors**. The FAILED test-name sets and the ERROR file sets are
+  byte-identical between the two runs (diffed); the passed delta is
+  exactly the 42 new B7 tests. **Zero regressions.** Absolute baseline
+  numbers vary by invocation/environment (the B1 evidence records
+  21 failures + 9 collection errors under its invocation); the
+  same-invocation diff is the controlling comparison.
+- **Ruff**: `ruff check` clean and `ruff format --check` clean on all 7
+  authored/edited Python files (floor.py, policy.py, composed.py,
+  service.py, the three test files).
 
 ## 7. Known limits, stated plainly
 
