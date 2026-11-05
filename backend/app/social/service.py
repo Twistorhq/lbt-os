@@ -2998,6 +2998,27 @@ def get_my_rewards(db, user_id: UUID, *, now=None) -> dict:
     now = _resolve_now(now)
     stats, dormant_days, _ledger = _project_member_stats(db, ctx.user_id, now)
     out = rewards.progress(stats, dormant_days=dormant_days)
+    # Rosa's TW-941 gate semantics on the display fields:
+    # standing_tier is the member's tier with the teen cap applied
+    # (catalog Section 7: Keyholder does not exist in the teen
+    # tier, the top is Pillar); next_tier is always the immediate
+    # successor of that tier, and null at the top tier or while
+    # suspended. The canonical earned_tier keeps the raw record.
+    display_tier = out["earned_tier"]
+    if (
+        ctx.band == "age_16_17"
+        and STANDING_RANK[display_tier] > STANDING_RANK["pillar"]
+    ):
+        display_tier = "pillar"
+    if out["suspended"] or display_tier == "keyholder":
+        display_next = None
+    elif ctx.band == "age_16_17" and display_tier == "pillar":
+        display_next = None
+    else:
+        display_next = trust.TIER_ORDER[STANDING_RANK[display_tier] + 1]
+    display_requirements = (
+        rewards.rung_requirements(stats)[display_next] if display_next else []
+    )
     decided = stats.completed_nights + stats.no_shows
     # Which force last moved the standing (Section 7.5's owed
     # explanation): conduct when the band suspends the tier,
@@ -3010,8 +3031,8 @@ def get_my_rewards(db, user_id: UUID, *, now=None) -> dict:
         last_movement = None
     return {
         "user_id": ctx.user_id,
-        "tier": out["tier"],
-        "standing_tier": out["earned_tier"],
+        "tier": None if out["suspended"] else display_tier,
+        "standing_tier": display_tier,
         "earned_tier": out["earned_tier"],
         "band": out["band"],
         "suspended": out["suspended"],
@@ -3045,12 +3066,12 @@ def get_my_rewards(db, user_id: UUID, *, now=None) -> dict:
             "tenure_days": stats.tenure_days,
             "dormant_days": dormant_days,
         },
-        "next_tier": out["next_tier"],
+        "next_tier": display_next,
         "progress": (
-            None if out["suspended"] else _display_progress(out["next_requirements"])
+            None if out["suspended"] else _display_progress(display_requirements)
         ),
         "last_movement": last_movement,
-        "next_requirements": out["next_requirements"],
+        "next_requirements": display_requirements,
         "ladder": out["ladder"],
     }
 

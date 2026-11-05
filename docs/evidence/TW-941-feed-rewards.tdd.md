@@ -96,7 +96,41 @@ accepted the payload and mapped activityTier=regular,
 nextTier=fixture, with the corroboration either/or parts intact
 ("SOFIA NORMALIZER ACCEPTS BACKEND PAYLOAD").
 
-### Sofia's contract: GET /api/v1/social/me/standing
+### Rosa-confirmed contract: GET /api/v1/social/me/standing
+
+Rosa's gate on the display half confirmed this exact shape and
+tightened semantics, and the backend holds to them (gate tests in
+TestDisplayContract, RED 57a4370 then GREEN):
+
+```
+{ standing_tier, band, suspended, age_band,
+  stats { completed_nights, decided_rsvps, show_rate,
+          reviews_received, would_meet_again_rate, hosted_clean,
+          best_series_streak, distinct_vouches, tenure_days },
+  next_tier, progress [ {key, current, target, met} ] | null,
+  last_movement }
+```
+
+- band is always one of trusted / good_standing / watch /
+  restricted (trust.compute_band's closed vocabulary), never null.
+- next_tier is always the immediate successor of standing_tier,
+  null at the top tier or while suspended (gate test:
+  test_suspended_next_tier_is_null).
+- Teen accounts (band age_16_17) cap at Pillar: standing_tier is
+  clamped at Pillar and next_tier is never Keyholder for a teen
+  (catalog Section 7; gate test:
+  test_teen_caps_at_pillar_never_keyholder_next).
+- Keyholder progress includes the sustained show-rate condition
+  at target 0.90 (catalog Section 1, chained through Pillar in
+  trust.py; gate test:
+  test_keyholder_progress_carries_sustained_show_rate).
+- stats projects decided_rsvps (= completed nights + no-shows)
+  and show_rate explicitly; show_rate_display (canonical extra)
+  carries the 5+ decided honesty gate.
+- standing_tier "verified" is the base state only; the ladder's
+  Verified rung is never marked earned (future_verification).
+
+### Display contract detail
 
 The display half consumes these fields (fail-closed normalizer;
 extra fields are ignored): standing_tier (the member's tier,
@@ -194,7 +228,8 @@ Commands actually run (backend/):
 RED: 29 failed + 1 collection error. GREEN: 41 passed.
 Full Social set (12 files, listed in the ticket comment): 405 passed
 at GREEN, 407 passed after the display-contract reconciliation
-(2 added contract tests). Baseline on main before the change: 363
+(2 added contract tests), 411 passed after Rosa's gate alignment
+(4 added gate tests). Baseline on main before the change: 363
 passed on the same set minus the two new files and the updated
 router test. Cross-contract check: node running Sofia's
 normalizeStanding against a real backend payload, accepted (see
