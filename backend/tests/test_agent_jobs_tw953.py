@@ -1413,6 +1413,260 @@ class TestRosaGateFixRound:
         assert service.get_job(db, ORG, AGENT, job["id"])["status"] == "review"
 
 
+class TestRexF2bFixRound2:
+    """Rex TW-953 F2b (HIGH, fix round 2): the status-flip bypass.
+    pause_job, remove_job, and block_job each moved a 'review'
+    job OUT of review unconditionally, and plain resume_job then
+    reactivated it, clearing the review markers with no
+    reconciliation. Each chain reached ACTIVE on a review job
+    carrying an unknown step. The gate must hold on EVERY
+    transition: resume_after_review is the only door out of
+    review, and archive is terminal."""
+
+    def _review_job_with_unknown(self, db, tolls):
+        """A review job whose interrupted fire holds a step with
+        an unknown outcome (journal started, never executed,
+        non-idempotent), built through the real reaper path."""
+        now = dt(2026, 11, 5, 18, 0)
+        job = _job(db, dt(2026, 11, 5, 15, 0))
+        fire = _stranded_fire(db, job, started_minutes_ago=120, now=now)
+        journal = reconciliation.make_db_step_journal(
+            db, ORG, AGENT, fire["id"], fire["fire_key"]
+        )
+        step = execution.JobStep(
+            name="send",
+            handler=lambda _c: {},
+            toll_event="agent.email_action",
+            idempotent=False,
+        )
+        journal("started", step)
+        recovery.reap_stranded_fires(db, now=now, stale_after=timedelta(minutes=30))
+        row = service.get_job(db, ORG, AGENT, job["id"])
+        assert row["status"] == "review"
+        assert row["review_fire_id"] == fire["id"]
+        assert row["review_reason"]
+        return job, row
+
+    def _assert_still_in_review(self, db, job_id, before):
+        after = service.get_job(db, ORG, AGENT, job_id)
+        assert after["status"] == "review"
+        assert after["review_reason"] == before["review_reason"]
+        assert after["review_fire_id"] == before["review_fire_id"]
+        return after
+
+    # -- the three chains, service level -------------------------
+
+    def test_pause_job_refuses_a_review_job(self, db, tolls):
+        job, before = self._review_job_with_unknown(db, tolls)
+        with pytest.raises(AgentJobError):
+            service.pause_job(db, ORG, AGENT, job["id"])
+        self._assert_still_in_review(db, job["id"], before)
+
+    def test_pause_then_resume_chain_cannot_escape_review(self, db, tolls):
+        job, before = self._review_job_with_unknown(db, tolls)
+        with pytest.raises(AgentJobError):
+            service.pause_job(db, ORG, AGENT, job["id"])
+        with pytest.raises(AgentJobError):
+            service.resume_job(db, ORG, AGENT, job["id"])
+        self._assert_still_in_review(db, job["id"], before)
+        assert tolls.rows == {}  # no reconciliation, no tolls posted
+
+    def test_remove_job_refuses_a_review_job(self, db, tolls):
+        job, before = self._review_job_with_unknown(db, tolls)
+        with pytest.raises(AgentJobError):
+            service.remove_job(db, ORG, AGENT, job["id"])
+        after = self._assert_still_in_review(db, job["id"], before)
+        assert after["status"] != "archived"
+        # Still listed: only archived jobs leave the default list.
+        assert [j["id"] for j in service.list_jobs(db, ORG, AGENT)] == [job["id"]]
+
+    def test_remove_then_resume_chain_cannot_escape_review(self, db, tolls):
+        job, before = self._review_job_with_unknown(db, tolls)
+        with pytest.raises(AgentJobError):
+            service.remove_job(db, ORG, AGENT, job["id"])
+        with pytest.raises(AgentJobError):
+            service.resume_job(db, ORG, AGENT, job["id"])
+        self._assert_still_in_review(db, job["id"], before)
+        assert tolls.rows == {}
+
+    def test_block_job_refuses_a_review_job(self, db, tolls, alerter):
+        job, before = self._review_job_with_unknown(db, tolls)
+        fresh = service.get_job(db, ORG, AGENT, job["id"])
+        with pytest.raises(AgentJobError):
+            service.block_job(db, ORG, AGENT, fresh, "probe block", alerter=alerter)
+        after = self._assert_still_in_review(db, job["id"], before)
+        assert after.get("blocked_reason") is None
+        assert after.get("blocked_at") is None
+        assert alerter.calls == []  # a refused block alerts nobody
+
+    def test_block_then_resume_chain_cannot_escape_review(self, db, tolls, alerter):
+        job, before = self._review_job_with_unknown(db, tolls)
+        fresh = service.get_job(db, ORG, AGENT, job["id"])
+        with pytest.raises(AgentJobError):
+            service.block_job(db, ORG, AGENT, fresh, "probe block", alerter=alerter)
+        with pytest.raises(AgentJobError):
+            service.resume_job(db, ORG, AGENT, job["id"])
+        self._assert_still_in_review(db, job["id"], before)
+        assert tolls.rows == {}
+
+    # -- the three chains, router level (HTTP-reachable) ---------
+
+    def test_router_pause_then_resume_chain_refuses_review_job(self, db, tolls):
+        from fastapi import HTTPException
+
+        from app.agent_jobs import router as router_mod
+
+        job, before = self._review_job_with_unknown(db, tolls)
+        with pytest.raises(HTTPException) as pause_exc:
+            router_mod.pause_job(job["id"], agent_id=AGENT, org_id=ORG, db=db)
+        assert pause_exc.value.status_code == 400
+        with pytest.raises(HTTPException) as resume_exc:
+            router_mod.resume_job(job["id"], agent_id=AGENT, org_id=ORG, db=db)
+        assert resume_exc.value.status_code == 400
+        self._assert_still_in_review(db, job["id"], before)
+
+    def test_router_remove_then_resume_chain_refuses_review_job(self, db, tolls):
+        from fastapi import HTTPException
+
+        from app.agent_jobs import router as router_mod
+
+        job, before = self._review_job_with_unknown(db, tolls)
+        with pytest.raises(HTTPException) as remove_exc:
+            router_mod.remove_job(job["id"], agent_id=AGENT, org_id=ORG, db=db)
+        assert remove_exc.value.status_code == 400
+        with pytest.raises(HTTPException) as resume_exc:
+            router_mod.resume_job(job["id"], agent_id=AGENT, org_id=ORG, db=db)
+        assert resume_exc.value.status_code == 400
+        self._assert_still_in_review(db, job["id"], before)
+
+    # -- archive is terminal --------------------------------------
+
+    def test_resume_job_refuses_an_archived_job(self, db):
+        job = _job(db, dt(2026, 11, 5, 15, 0))
+        service.remove_job(db, ORG, AGENT, job["id"])
+        with pytest.raises(AgentJobError):
+            service.resume_job(db, ORG, AGENT, job["id"])
+        assert service.get_job(db, ORG, AGENT, job["id"])["status"] == "archived"
+
+    def test_pause_job_refuses_an_archived_job(self, db):
+        job = _job(db, dt(2026, 11, 5, 15, 0))
+        service.remove_job(db, ORG, AGENT, job["id"])
+        with pytest.raises(AgentJobError):
+            service.pause_job(db, ORG, AGENT, job["id"])
+        assert service.get_job(db, ORG, AGENT, job["id"])["status"] == "archived"
+
+    def test_block_job_refuses_an_archived_job(self, db, alerter):
+        job = _job(db, dt(2026, 11, 5, 15, 0))
+        service.remove_job(db, ORG, AGENT, job["id"])
+        fresh = service.get_job(db, ORG, AGENT, job["id"])
+        with pytest.raises(AgentJobError):
+            service.block_job(db, ORG, AGENT, fresh, "probe", alerter=alerter)
+        assert service.get_job(db, ORG, AGENT, job["id"])["status"] == "archived"
+        assert alerter.calls == []
+
+    def test_router_resume_refuses_an_archived_job(self, db):
+        from fastapi import HTTPException
+
+        from app.agent_jobs import router as router_mod
+
+        job = _job(db, dt(2026, 11, 5, 15, 0))
+        service.remove_job(db, ORG, AGENT, job["id"])
+        with pytest.raises(HTTPException) as excinfo:
+            router_mod.resume_job(job["id"], agent_id=AGENT, org_id=ORG, db=db)
+        assert excinfo.value.status_code == 400
+        assert service.get_job(db, ORG, AGENT, job["id"])["status"] == "archived"
+
+    # -- audit pins: the remaining transitions --------------------
+
+    def test_edit_job_preserves_review_status_and_markers(self, db, tolls):
+        from app.agent_jobs.models import JobEdit
+
+        job, before = self._review_job_with_unknown(db, tolls)
+        edited = service.edit_job(
+            db,
+            ORG,
+            AGENT,
+            job["id"],
+            JobEdit(prompt="Edited while in review."),
+            now=dt(2026, 11, 5, 19, 0),
+        )
+        assert edited["prompt"] == "Edited while in review."
+        self._assert_still_in_review(db, job["id"], before)
+
+    def test_resume_after_review_remains_the_only_door(self, db, tolls):
+        """Positive control: a review job whose steps all classify
+        done still resumes through resume_after_review exactly as
+        before, and the door is what clears the markers."""
+        now = dt(2026, 11, 5, 18, 0)
+        job = _job(db, dt(2026, 11, 5, 15, 0))
+        fire = _stranded_fire(db, job, started_minutes_ago=120, now=now)
+        journal = reconciliation.make_db_step_journal(
+            db, ORG, AGENT, fire["id"], fire["fire_key"]
+        )
+        step = execution.JobStep(
+            name="send",
+            handler=lambda _c: {},
+            toll_event="agent.email_action",
+            idempotent=False,
+        )
+        journal("started", step)
+        journal("executed", step)
+        tolls(
+            db,
+            ORG,
+            "agent.email_action",
+            idempotency_key=f"{fire['fire_key']}:step:send",
+            source_type="agt_job_fire",
+            source_id=fire["id"],
+        )
+        recovery.reap_stranded_fires(db, now=now, stale_after=timedelta(minutes=30))
+        before = service.get_job(db, ORG, AGENT, job["id"])
+        assert before["status"] == "review"
+        assert before["review_fire_id"] == fire["id"]
+
+        def factory(ctx):
+            return [step]
+
+        result = recovery.resume_after_review(
+            db,
+            ORG,
+            AGENT,
+            job["id"],
+            executor_factory=factory,
+            toll_sink=tolls,
+            toll_reader=tolls.reader,
+            now=dt(2026, 11, 5, 19, 0),
+        )
+        assert result["job"]["status"] == "active"
+        after = service.get_job(db, ORG, AGENT, job["id"])
+        assert after["status"] == "active"
+        assert after["review_reason"] is None
+        assert after["review_fire_id"] is None
+
+    # -- non-regression: normal jobs behave exactly as before -----
+
+    def test_normal_job_pause_resume_block_remove_unchanged(self, db, alerter):
+        job = _job(db, dt(2026, 11, 5, 15, 0))
+        paused = service.pause_job(db, ORG, AGENT, job["id"])
+        assert paused["status"] == "paused"
+        resumed = service.resume_job(
+            db, ORG, AGENT, job["id"], now=dt(2026, 11, 5, 17, 0)
+        )
+        assert resumed["status"] == "active"
+        fresh = service.get_job(db, ORG, AGENT, job["id"])
+        blocked = service.block_job(
+            db, ORG, AGENT, fresh, "bad definition", alerter=alerter
+        )
+        assert blocked["status"] == "blocked"
+        assert len(alerter.calls) == 1
+        unblocked = service.resume_job(
+            db, ORG, AGENT, job["id"], now=dt(2026, 11, 5, 18, 0)
+        )
+        assert unblocked["status"] == "active"
+        removed = service.remove_job(db, ORG, AGENT, job["id"])
+        assert removed["status"] == "archived"
+
+
 class TestVocabularyAndMigration:
     def test_interrupted_and_review_statuses_exist(self):
         assert "interrupted" in pmodels.FIRE_STATUSES
