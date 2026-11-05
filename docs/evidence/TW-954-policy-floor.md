@@ -188,7 +188,8 @@ all reproduced live with probe scripts) and Rosa REQUEST CHANGES
 (one must-fix, MF1, identical to Rex's F3). Round: RED `cb515b6`,
 GREEN `7a5f5f7`. One new test file,
 `backend/tests/test_agentperms_fixround_tw954.py` — 42 tests
-(24 functions, parametrized): RED run 37 failed / 5 passed (the 5
+(26 test functions, parametrized to 42 cases: F1 15, F2 19,
+F3 3, F4 5): RED run 37 failed / 5 passed (the 5
 are regression pins for behavior that already held: layer order,
 attended job/tool omission, known grant statuses, explicit-arg
 stop signal, value masking); GREEN 42/42.
