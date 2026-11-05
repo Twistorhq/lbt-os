@@ -1109,10 +1109,7 @@ class TestVariationSelectorControls:
         # Visible combining marks (U+0301, U+0303) are ordinary
         # prose in this product's world, not evasion: only the
         # invisible VS ranges join the detection drop set.
-        text = (
-            "José runs the café on Peña Street; "
-            "résumé reviews happen on Fridays."
-        )
+        text = "José runs the café on Peña Street; résumé reviews happen on Fridays."
         assert screening.screen(text) == text
 
     def test_emoji_with_vs_passes_and_stores_byte_for_byte(self, db):
@@ -1121,8 +1118,13 @@ class TestVariationSelectorControls:
         # evasion. The detection copy is throwaway; the stored
         # body keeps the selector exactly as written.
         text = (
-            "We are open today " + chr(0x2600) + chr(0xFE0F) + " and we "
-            + chr(0x2764) + chr(0xFE0F) + " our regulars, nine to five."
+            "We are open today "
+            + chr(0x2600)
+            + chr(0xFE0F)
+            + " and we "
+            + chr(0x2764)
+            + chr(0xFE0F)
+            + " our regulars, nine to five."
         )
         assert screening.screen(text) == text
         staged = _add(db, "emoji-hours", text)
@@ -1172,8 +1174,13 @@ class TestLacedBlockChecks:
 
     def test_format_laced_pem_header_with_real_body_blocks(self):
         body = (
-            "-----BEGIN" + chr(0x2060) + " PRIVATE KEY-----\n"
-            + B64_LINE_A + "\n" + B64_LINE_B + "\n"
+            "-----BEGIN"
+            + chr(0x2060)
+            + " PRIVATE KEY-----\n"
+            + B64_LINE_A
+            + "\n"
+            + B64_LINE_B
+            + "\n"
             "-----END PRIVATE KEY-----"
         )
         with pytest.raises(models.ScreeningBlocked):
@@ -1184,7 +1191,6 @@ class TestLacedBlockChecks:
             screening.screen(B64_LINE_A + "\n" + B64_LINE_B)
         with pytest.raises(models.ScreeningBlocked):
             screening.screen(
-                "-----BEGIN PRIVATE KEY-----\n"
-                + B64_LINE_A + "\n" + B64_LINE_B + "\n"
+                "-----BEGIN PRIVATE KEY-----\n" + B64_LINE_A + "\n" + B64_LINE_B + "\n"
                 "-----END PRIVATE KEY-----"
             )

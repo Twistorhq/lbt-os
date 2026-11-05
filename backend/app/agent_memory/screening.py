@@ -22,9 +22,15 @@ imported), layered on the B1 masking pipeline:
   orders, from-now-on rules, concealment directives aimed at
   the owner, claims of pre-approval). Detection runs on a
   normalized copy with every Unicode format character
-  (category Cf) and the combining grapheme joiner dropped
-  and whitespace collapsed, so evasion by invisible
-  characters does not work. A memory is future prompt
+  (category Cf), the combining grapheme joiner, and every
+  variation selector (U+FE00-U+FE0F, U+E0100-U+E01EF)
+  dropped and whitespace collapsed, so evasion by invisible
+  characters does not work. The squashed-PEM and
+  base64-block checks run on the same format-dropped copy
+  (line structure preserved), so invisible-character lacing
+  cannot defeat them either. Visible combining marks are
+  not dropped: they change the grapheme and are the TW-961
+  homoglyph scope. A memory is future prompt
   context, so this is the prompt-injection surface of the
   whole feature. The residual semantic layer is TW-961,
   not this module.
@@ -222,19 +228,36 @@ _DIRECTIVE_RES: tuple[re.Pattern[str], ...] = (
 # the category table).
 _DETECTION_DROP_EXTRA = frozenset({chr(0x034F), chr(0x180E)})
 
+# Variation selector ranges dropped from the detection copy
+# (Rex re-retest round 2, TW-951): U+FE00-U+FE0F and
+# U+E0100-U+E01EF. Selectors are category Mn but zero-width and
+# rendering-preserving on Latin text, so they are the same
+# invisible-character evasion mechanism as the Cf set, not the
+# visible combining marks (U+0300-class accents change the
+# grapheme and stay, per the TW-961 homoglyph split). Dropping
+# them is safe for legitimate text: the drop applies only to
+# the throwaway detection copy, so an emoji presentation
+# selector in stored prose is never rewritten.
+_VS_RANGES = ((0xFE00, 0xFE0F), (0xE0100, 0xE01EF))
+
+
+def _is_detection_dropped(ch: str) -> bool:
+    if unicodedata.category(ch) == "Cf" or ch in _DETECTION_DROP_EXTRA:
+        return True
+    cp = ord(ch)
+    return any(lo <= cp <= hi for lo, hi in _VS_RANGES)
+
 
 def _drop_format_chars(text: str) -> str:
-    """Drop every Unicode format character (category Cf) plus
-    the combining joiners named above. The old strip list named
-    only U+200B, U+200C, U+200D, and U+FEFF; Rex's retest
-    (TW-951) proved U+2060, U+00AD, U+061C, U+200E, U+200F,
-    U+2064, U+180E, and U+034F each defeated directive
-    detection when planted inside a keyword."""
-    return "".join(
-        ch
-        for ch in text
-        if unicodedata.category(ch) != "Cf" and ch not in _DETECTION_DROP_EXTRA
-    )
+    """Drop every Unicode format character (category Cf), the
+    combining joiners named above, and every variation
+    selector. The old strip list named only U+200B, U+200C,
+    U+200D, and U+FEFF; Rex's retest (TW-951) proved U+2060,
+    U+00AD, U+061C, U+200E, U+200F, U+2064, U+180E, and U+034F
+    each defeated directive detection when planted inside a
+    keyword, and his re-retest proved the variation selectors
+    U+FE0F, U+FE00, U+E0100, and U+E01EF did the same."""
+    return "".join(ch for ch in text if not _is_detection_dropped(ch))
 
 
 def _normalize_for_detection(text: str) -> str:
@@ -258,11 +281,21 @@ def _is_base64_block(text: str) -> bool:
 
 def _check_blocked(text: str) -> None:
     """Raise ScreeningBlocked for whole-secret, private-key,
-    injection, or steering shapes in text (detection copy)."""
-    squashed = re.sub(r"[\s-]+", "", text).upper()
+    injection, or steering shapes in text (detection copy).
+
+    The squashed-PEM and base64-block checks run on the
+    format-dropped copy, not the raw text (Rex re-retest round
+    2, TW-951): on raw text, a word joiner or variation
+    selector laced into every base64 line failed the line
+    charset check and the block sailed through, recoverable
+    from the snapshot by stripping the invisible characters.
+    The dropped copy keeps line structure, so both checks see
+    exactly what an attacker recovers by stripping."""
+    detection = _drop_format_chars(text)
+    squashed = re.sub(r"[\s-]+", "", detection).upper()
     if any(marker in squashed for marker in _SQUASHED_PRIVATE_KEY_MARKERS):
         raise ScreeningBlocked("private key material is not a memory entry")
-    if _is_base64_block(text):
+    if _is_base64_block(detection):
         raise ScreeningBlocked("base64 key material is not a memory entry")
     stripped = text.strip()
     normalized = _normalize_for_detection(text).strip()
