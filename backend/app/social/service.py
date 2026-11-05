@@ -2925,25 +2925,114 @@ def remove_reaction(db, user_id: UUID, post_id: UUID, kind: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
+AGE_BAND_DISPLAY = {
+    "age_21_plus": "21+",
+    "age_18_20": "18-20",
+    "age_16_17": "teen",
+}
+
+# The display contract's progress vocabulary (Sofia's TW-941
+# display half, frontend/src/lib/socialStanding.js): requirement
+# keys translated 1:1 from the canonical rewards keys, with
+# `target` naming what rewards calls `required`.
+_PROGRESS_KEY_DISPLAY = {
+    "completed_nights": "nights",
+    "show_rate": "showRate",
+    "would_meet_again_rate": "wmaRate",
+    "reviews_received": "wmaReviews",
+    "hosted_clean": "hostedClean",
+    "best_series_streak": "streak",
+    "tenure_days": "tenureDays",
+}
+
+
+def _display_progress(next_requirements: list[dict]) -> list[dict]:
+    """Translate next-rung requirements into the display contract's
+    progress list. The Fixture either/or pair collapses into one
+    `corroboration` entry carrying both paths as parts."""
+    out: list[dict] = []
+    corroboration_parts = []
+    corroboration_met = False
+    for req in next_requirements:
+        if req.get("any_of") == "corroboration":
+            part_key = "streak" if req["key"] == "best_series_streak" else "vouches"
+            corroboration_parts.append(
+                {"key": part_key, "current": req["current"], "target": req["required"]}
+            )
+            corroboration_met = corroboration_met or req["met"]
+            continue
+        out.append(
+            {
+                "key": _PROGRESS_KEY_DISPLAY[req["key"]],
+                "current": req["current"],
+                "target": req["required"],
+                "met": req["met"],
+            }
+        )
+    if corroboration_parts:
+        out.append(
+            {
+                "key": "corroboration",
+                "met": corroboration_met,
+                "parts": corroboration_parts,
+            }
+        )
+    return out
+
+
 def get_my_rewards(db, user_id: UUID, *, now=None) -> dict:
+    """The standing read. One payload serves two documented shapes:
+    the canonical rewards shape (tier / earned_tier / counts /
+    next_requirements / ladder) and the TW-941 display contract
+    Sofia's profile display consumes (standing_tier / age_band /
+    stats / progress / last_movement, in
+    frontend/src/lib/socialStanding.js). Field meanings are
+    identical; `tier` is the display tier (null while suspended)
+    and `standing_tier` is the member's tier as the display
+    normalizer expects it (the earned tier, with `suspended`
+    carrying the masking)."""
+    from . import trust
+
     ctx = get_member_context(db, user_id)
     _require_not_banned(ctx)
     now = _resolve_now(now)
     stats, dormant_days, _ledger = _project_member_stats(db, ctx.user_id, now)
     out = rewards.progress(stats, dormant_days=dormant_days)
     decided = stats.completed_nights + stats.no_shows
+    # Which force last moved the standing (Section 7.5's owed
+    # explanation): conduct when the band suspends the tier,
+    # dormancy when decay stepped it below the record's raw tier.
+    if out["suspended"]:
+        last_movement = "conduct"
+    elif trust.earned_tier(stats) != out["earned_tier"]:
+        last_movement = "dormancy"
+    else:
+        last_movement = None
     return {
         "user_id": ctx.user_id,
         "tier": out["tier"],
+        "standing_tier": out["earned_tier"],
         "earned_tier": out["earned_tier"],
         "band": out["band"],
         "suspended": out["suspended"],
+        "age_band": AGE_BAND_DISPLAY.get(ctx.band or ""),
         "show_rate": out["show_rate"],
         # Catalog Section 5 honesty rule: the rate displays only
         # after 5 or more decided RSVPs; below that it is a lie of
         # small numbers and the profile reads "still building".
         "show_rate_display": decided >= 5,
         "would_meet_again_rate": out["would_meet_again_rate"],
+        "stats": {
+            "completed_nights": stats.completed_nights,
+            "decided_rsvps": decided,
+            "show_rate": out["show_rate"],
+            "reviews_received": stats.reviews_received,
+            "would_meet_again_rate": out["would_meet_again_rate"],
+            "hosted_clean": stats.hosted_clean,
+            "best_series_streak": stats.best_series_streak,
+            "distinct_vouches": stats.distinct_vouches,
+            "tenure_days": stats.tenure_days,
+        },
         "counts": {
             "completed_nights": stats.completed_nights,
             "no_shows": stats.no_shows,
@@ -2957,6 +3046,10 @@ def get_my_rewards(db, user_id: UUID, *, now=None) -> dict:
             "dormant_days": dormant_days,
         },
         "next_tier": out["next_tier"],
+        "progress": (
+            None if out["suspended"] else _display_progress(out["next_requirements"])
+        ),
+        "last_movement": last_movement,
         "next_requirements": out["next_requirements"],
         "ladder": out["ladder"],
     }

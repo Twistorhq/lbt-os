@@ -79,9 +79,44 @@ true; earned_tier still reports the member's private position.
 GET /feed, GET /posts/{post_id}, POST /posts/{post_id}/comments,
 GET /posts/{post_id}/comments, POST /posts/{post_id}/reactions,
 DELETE /posts/{post_id}/reactions/{kind},
-GET /profiles/me/standing.
+GET /me/standing (canonical), GET /profiles/me/standing (alias).
 
-### Sofia's contract: GET /api/v1/social/profiles/me/standing
+**Contract reconciliation with Sofia's display half.** Sofia's
+parallel branch (sofia/tw-941-rewards-display @ 73958f6) built her
+client against a documented contract at GET /social/me/standing
+with a fail-closed normalizer (frontend/src/lib/socialStanding.js).
+The first GREEN payload did not match it (different path, different
+field vocabulary), so the backend reconciled to her documented
+contract in a follow-up commit: the standing payload is now a
+superset carrying both shapes (see the contract section below),
+and the reconciliation is proven against her actual code, not a
+re-reading of it: a real get_my_rewards payload (5 seeded nights,
+Regular) was piped through her normalizeStanding under node; it
+accepted the payload and mapped activityTier=regular,
+nextTier=fixture, with the corroboration either/or parts intact
+("SOFIA NORMALIZER ACCEPTS BACKEND PAYLOAD").
+
+### Sofia's contract: GET /api/v1/social/me/standing
+
+The display half consumes these fields (fail-closed normalizer;
+extra fields are ignored): standing_tier (the member's tier,
+never null; masking is the normalizer's job via suspended/band),
+band, suspended, age_band ("21+" | "18-20" | "teen" | null),
+stats {completed_nights, decided_rsvps, show_rate,
+reviews_received, would_meet_again_rate, hosted_clean,
+best_series_streak, distinct_vouches, tenure_days}, next_tier,
+progress [{key, current, target, met}] in the display vocabulary
+(nights, showRate, wmaRate, wmaReviews, hostedClean, streak,
+tenureDays, plus a single corroboration entry {key:
+"corroboration", met, parts: [{key: "streak", current, target},
+{key: "vouches", current, target}]} for the Fixture either/or;
+progress is null while suspended), and last_movement
+("dormancy" | "conduct" | null: conduct when the band suspends
+the tier, dormancy when decay stepped it below the raw record
+tier). The canonical rewards shape below rides in the same
+payload, so both consumers read one response.
+
+### Canonical rewards shape (same payload)
 
 ```json
 {
@@ -157,9 +192,13 @@ celebrate}, viewer_reactions [kinds], comment_count}.
 Commands actually run (backend/):
 `python3 -m pytest tests/test_social_feed.py tests/test_social_rewards.py -q`
 RED: 29 failed + 1 collection error. GREEN: 41 passed.
-Full Social set (12 files, listed in the ticket comment): 405 passed.
-Baseline on main before the change: 363 passed on the same set minus
-the two new files and the updated router test.
+Full Social set (12 files, listed in the ticket comment): 405 passed
+at GREEN, 407 passed after the display-contract reconciliation
+(2 added contract tests). Baseline on main before the change: 363
+passed on the same set minus the two new files and the updated
+router test. Cross-contract check: node running Sofia's
+normalizeStanding against a real backend payload, accepted (see
+Section 2).
 
 ## 4. Coverage and known gaps
 

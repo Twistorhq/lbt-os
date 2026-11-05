@@ -78,6 +78,7 @@ EXPECTED_ROUTES = {
     ("POST", "/social/posts/{post_id}/reactions"),
     ("DELETE", "/social/posts/{post_id}/reactions/{kind}"),
     ("GET", "/social/profiles/me/standing"),
+    ("GET", "/social/me/standing"),
 }
 
 

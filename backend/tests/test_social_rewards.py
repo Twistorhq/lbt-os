@@ -315,3 +315,58 @@ class TestRewardsService:
         uid = add_member(db, banned=True)
         with pytest.raises(service.ForbiddenError):
             service.get_my_rewards(db, uid, now=NOW)
+
+
+class TestDisplayContract:
+    """The shape Sofia's TW-941 display client consumes
+    (frontend/src/lib/socialStanding.js, fail-closed normalizer):
+    standing_tier in the tier vocabulary, stats with decided_rsvps,
+    progress in the display key vocabulary with `target`, and
+    last_movement distinguishing dormancy from conduct."""
+
+    def test_payload_matches_display_normalizer_vocabulary(self, db):
+        uid = add_member(db, band="age_18_20")
+        for i in range(5):
+            _seed_night(db, uid, when=NOW - timedelta(days=10 - i))
+        out = service.get_my_rewards(db, uid, now=NOW)
+        assert out["standing_tier"] == "regular"
+        assert out["age_band"] == "18-20"
+        assert out["stats"]["decided_rsvps"] == 5
+        assert out["stats"]["completed_nights"] == 5
+        assert out["stats"]["show_rate"] == 1.0
+        assert out["last_movement"] is None
+        progress = {p["key"]: p for p in out["progress"]}
+        assert set(progress) == {"nights", "showRate", "corroboration"}
+        assert progress["nights"] == {
+            "key": "nights",
+            "current": 5,
+            "target": 20,
+            "met": False,
+        }
+        assert progress["showRate"]["target"] == 0.85
+        corr = progress["corroboration"]
+        assert corr["met"] is False
+        assert {p["key"] for p in corr["parts"]} == {"streak", "vouches"}
+
+    def test_suspended_payload_keeps_tier_and_marks_conduct(self, db):
+        uid = add_member(db)
+        for i in range(5):
+            _seed_night(db, uid, when=NOW - timedelta(days=10 - i))
+        db.seed(
+            "rsn_trust_events",
+            {
+                "user_id": uid,
+                "event_type": "identity_strike",
+                "weight": -10,
+                "ref_type": "encounter_confirm",
+                "ref_id": str(uuid4()),
+                "created_at": NOW,
+            },
+        )
+        out = service.get_my_rewards(db, uid, now=NOW)
+        # The display normalizer masks on suspended/band itself, so
+        # standing_tier still names the member's tier (never null).
+        assert out["standing_tier"] == "regular"
+        assert out["suspended"] is True
+        assert out["progress"] is None
+        assert out["last_movement"] == "conduct"

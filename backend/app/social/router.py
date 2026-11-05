@@ -434,16 +434,28 @@ def get_my_review_summary(
     return _call(service.my_review_summary, db, UUID(claims["sub"]))
 
 
-@router.get("/profiles/me/standing")
+@router.get("/me/standing")
 @limiter.limit("300/minute")
 def get_my_standing(
     request: Request,
     claims: dict = Depends(_verified_claims),
     db: Client = Depends(get_db),
 ):
-    # TW-941 rewards loop: tier + progress toward the next rung,
-    # the contract Sofia's profile display consumes (see the
-    # service docstring and docs/evidence/TW-941-feed-rewards.tdd.md).
+    # TW-941 rewards loop: tier + progress toward the next rung.
+    # This is the canonical path Sofia's display client calls
+    # (frontend/src/lib/socialStandingClient.js, STANDING_PATH
+    # "/social/me/standing"); /profiles/me/standing below is the
+    # same payload under the profiles namespace.
+    return _call(service.get_my_rewards, db, UUID(claims["sub"]))
+
+
+@router.get("/profiles/me/standing")
+@limiter.limit("300/minute")
+def get_my_standing_in_profiles(
+    request: Request,
+    claims: dict = Depends(_verified_claims),
+    db: Client = Depends(get_db),
+):
     return _call(service.get_my_rewards, db, UUID(claims["sub"]))
 
 
