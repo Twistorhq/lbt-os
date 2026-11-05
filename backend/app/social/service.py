@@ -1447,7 +1447,10 @@ def request_rsvp(db, user_id: UUID, payload: models.RsvpCreate, *, now=None) -> 
         raise ForbiddenError("couple partner has no voice or band attestation")
     if not _can_view_event(db, partner_ctx, event, group):
         raise NotFoundError()
-    if partner_ctx.trust_band == "restricted":
+    if partner_ctx.trust_band == "restricted" or partner_ctx.restricted:
+        # Both restriction sources, matching the single path above:
+        # the trust band AND the Safety Desk restriction flag
+        # (TW-940 fix round 1, Rosa nit).
         raise ForbiddenError("couple partner is in the restricted safety band")
     partner_existing = _fetch_one(
         db, "rsn_rsvps", event_id=event["id"], user_id=partner_id
@@ -2649,18 +2652,31 @@ def recompute_member_standing(db, user_id: UUID | str, *, now=None) -> dict:
 #   never sanction, ban, touch evidence, decide appeals, or
 #   answer disclosures.
 # - A reviewer never claims or decides their own case: the
-#   reporter cannot claim their own report, a sanction's issuer
-#   cannot decide its appeal (fresh reviewer, Section 6.6), and
-#   nobody sanctions or bans themselves through a case.
+#   reporter cannot claim their own report, the SUBJECT of a
+#   report cannot claim or resolve their own case at all (fix
+#   round 1: the subject refusal is total, not reporter-only), a
+#   sanction's issuer can neither acknowledge nor decide its
+#   appeal (fresh reviewer, Section 6.6), and nobody sanctions or
+#   bans themselves through a case. Appeal decisions additionally
+#   require safety_lead, the same grade that issues bans.
+# - All desk authorization routes through _require_desk (triage
+#   included, ambassadors via its ambassador branch): a banned or
+#   suspended desk actor loses desk power, triage included. The
+#   disclosure staff view carries the same gate, and a staff
+#   member who is the case subject gets the subject view instead.
 # - Appeal intake is the one desk write open to a banned or
 #   suspended member: due process requires it. It grants no voice
 #   anywhere else; _require_voice still refuses every other write.
 #
 # AUDIT: every desk action below writes rsn_audit_log with the
 # actor's user id, a dotted action name, the target, and the
-# sha256 of a detail string. Raw notes never enter the audit log;
-# they live on their case rows (resolution_note, sanction / ban
-# note, appeal outcome_note), which are staff-side only.
+# sha256 of a detail string. That includes the sensitive reads:
+# the triage queue list, the appeals list, evidence packet reads,
+# and every disclosure view (the audience is the detail). Raw
+# notes never enter the audit log; they live on their case rows
+# (resolution_note, sanction / ban note, appeal outcome_note),
+# which are staff-side only. Subject disclosure views project
+# sanctions and bans without the note or issued_by.
 #
 # ENFORCEMENT HOOKS: bans write rsn_bans rows keyed by identity
 # anchor, which get_member_context already enforces (platform
@@ -2713,13 +2729,15 @@ def _desk_role(db, user_id) -> tuple[str, dict | None]:
 
 
 def _require_desk(
-    db, actor_id, *, lead: bool = False
+    db, actor_id, *, lead: bool = False, allow_ambassador: bool = False
 ) -> tuple[MemberContext, str, dict]:
-    """Gate for desk actions. Staff / lead actors need a live desk
-    row and must not themselves be banned or suspended; ambassadors
-    (where allowed by the caller) additionally need voice, because
-    they are members first. Age-band attestation is NOT required:
-    the desk is staff machinery, not a member surface, and no
+    """The one gate for desk authorization (TW-940 fix round 1:
+    triage used to hand-roll its own role check and never tested
+    suspension). Every desk actor needs a live desk row and must
+    not themselves be banned or suspended; ambassadors (only where
+    the caller allows them) additionally need voice, because they
+    are members first. Age-band attestation is NOT required: the
+    desk is staff machinery, not a member surface, and no
     age-rated content moves through it."""
     ctx = get_member_context(db, actor_id)
     _require_not_banned(ctx)
@@ -2729,6 +2747,8 @@ def _require_desk(
     if lead:
         if role != _DESK_LEAD:
             raise ForbiddenError("safety_lead role required for this action")
+    elif role == _DESK_AMBASSADOR and allow_ambassador:
+        _require_voice(ctx)
     elif role not in (_DESK_STAFF, _DESK_LEAD):
         raise ForbiddenError("safety staff role required for this action")
     return ctx, role, row
@@ -2831,13 +2851,7 @@ def create_report(
 def list_report_queue(
     db, actor_id: UUID, *, status: str | None = None, now=None
 ) -> list[dict]:
-    ctx = get_member_context(db, actor_id)
-    _require_not_banned(ctx)
-    role, role_row = _desk_role(db, actor_id)
-    if role == "none":
-        raise ForbiddenError("safety desk role required to read the triage queue")
-    if role == _DESK_AMBASSADOR:
-        _require_voice(ctx)
+    ctx, role, role_row = _require_desk(db, actor_id, allow_ambassador=True)
     reports = _fetch(db, "rsn_reports")
     if status is not None:
         reports = [r for r in reports if r.get("status") == status]
@@ -2850,20 +2864,27 @@ def list_report_queue(
             and _ambassador_may_see(role_row, r)
         ]
     reports.sort(key=lambda r: str(r.get("created_at") or ""))
+    now = _resolve_now(now)
+    _audit(
+        db,
+        ctx.user_id,
+        "report.queue_listed",
+        "reports:queue",
+        f"role={role}",
+        now=now,
+    )
     return [_report_out(r) for r in reports]
 
 
 def claim_report(db, actor_id: UUID, report_id: UUID, *, now=None) -> dict:
-    ctx = get_member_context(db, actor_id)
-    _require_not_banned(ctx)
-    role, role_row = _desk_role(db, actor_id)
-    if role == "none":
-        raise ForbiddenError("safety desk role required to claim a report")
-    if role == _DESK_AMBASSADOR:
-        _require_voice(ctx)
+    ctx, role, role_row = _require_desk(db, actor_id, allow_ambassador=True)
     report = _report_or_404(db, report_id)
     if report["reporter_id"] == ctx.user_id:
         raise ForbiddenError("the reporter cannot triage their own report")
+    if report.get("subject_user_id") and report["subject_user_id"] == ctx.user_id:
+        # TW-940 fix round 1 (Rosa blocker): the subject of a case
+        # never works it, whatever desk role they hold.
+        raise ForbiddenError("the subject cannot triage their own case")
     if report.get("status") != "open":
         raise ConflictError(f"report is {report.get('status')}, not open")
     if role == _DESK_AMBASSADOR and not _ambassador_may_see(role_row, report):
@@ -2900,16 +2921,15 @@ def _require_assignee(report: dict, actor_id: str) -> None:
 def resolve_report(
     db, actor_id: UUID, report_id: UUID, payload: models.ReportResolve, *, now=None
 ) -> dict:
-    ctx = get_member_context(db, actor_id)
-    _require_not_banned(ctx)
-    role, role_row = _desk_role(db, actor_id)
-    if role == "none":
-        raise ForbiddenError("safety desk role required to resolve a report")
-    if role == _DESK_AMBASSADOR:
-        _require_voice(ctx)
-        if not _ambassador_may_see(role_row, _report_or_404(db, report_id)):
-            raise ForbiddenError("this category is staff-only at intake")
+    ctx, role, role_row = _require_desk(db, actor_id, allow_ambassador=True)
     report = _report_or_404(db, report_id)
+    if report.get("subject_user_id") and report["subject_user_id"] == ctx.user_id:
+        # Defense in depth with claim_report: even a subject who
+        # somehow holds the claim never resolves their own case
+        # (and never collects the report_unfounded trust event).
+        raise ForbiddenError("the subject cannot resolve their own case")
+    if role == _DESK_AMBASSADOR and not _ambassador_may_see(role_row, report):
+        raise ForbiddenError("this category is staff-only at intake")
     if report.get("status") not in ("open", "triaged"):
         raise ConflictError(f"report is already {report.get('status')}")
     _require_assignee(report, ctx.user_id)
@@ -3115,12 +3135,23 @@ def issue_ban(
     subject_id, subject_ctx = _case_subject(db, report)
     if subject_id == ctx.user_id:
         raise ForbiddenError("a reviewer cannot ban themselves")
+    group_id = str(payload.group_id) if payload.group_id else None
     for existing in _fetch(
         db, "rsn_bans", identity_anchor_hash=subject_ctx.anchor_hash
     ):
-        if existing.get("scope") == "platform" and existing.get("lifted_at") is None:
+        if existing.get("lifted_at") is not None:
+            continue
+        if existing.get("scope") == "platform":
             raise ConflictError(
                 "an active platform ban already exists for this identity"
+            )
+        if (
+            payload.scope == "group"
+            and existing.get("scope") == "group"
+            and existing.get("group_id") == group_id
+        ):
+            raise ConflictError(
+                "an active group ban already exists for this identity in this group"
             )
     now = _resolve_now(now)
     row = _insert(
@@ -3258,11 +3289,19 @@ def create_appeal(
 def list_appeals(
     db, actor_id: UUID, *, status: str | None = None, now=None
 ) -> list[dict]:
-    _require_desk(db, actor_id)
+    ctx, role, _row = _require_desk(db, actor_id)
     appeals = _fetch(db, "rsn_appeals")
     if status is not None:
         appeals = [a for a in appeals if a.get("status") == status]
     appeals.sort(key=lambda a: str(a.get("created_at") or ""))
+    _audit(
+        db,
+        ctx.user_id,
+        "appeal.listed",
+        "appeals",
+        f"role={role}",
+        now=_resolve_now(now),
+    )
     return [_appeal_out(a) for a in appeals]
 
 
@@ -3271,6 +3310,19 @@ def acknowledge_appeal(db, actor_id: UUID, appeal_id: UUID, *, now=None) -> dict
     appeal = _appeal_or_404(db, appeal_id)
     if appeal.get("status") != "submitted":
         raise ConflictError(f"appeal is {appeal.get('status')}, not submitted")
+    if appeal["appellant_user_id"] == ctx.user_id:
+        raise ForbiddenError("the appellant cannot acknowledge their own appeal")
+    table = "rsn_sanctions" if appeal["target_type"] == "sanction" else "rsn_bans"
+    target = _fetch_one(db, table, id=appeal["target_id"])
+    if target is None:
+        raise NotFoundError()
+    if target.get("issued_by") == ctx.user_id:
+        # Acknowledge assigns the case to the acknowledger, so the
+        # issuer acknowledging here would self-assign the appeal of
+        # their own action (same conflict family as decide_appeal).
+        raise ForbiddenError(
+            "the issuer cannot acknowledge this appeal (fresh reviewer required)"
+        )
     now = _resolve_now(now)
     updated = _update_by_id(
         db,
@@ -3287,7 +3339,11 @@ def acknowledge_appeal(db, actor_id: UUID, appeal_id: UUID, *, now=None) -> dict
 def decide_appeal(
     db, actor_id: UUID, appeal_id: UUID, payload: models.AppealDecision, *, now=None
 ) -> dict:
-    ctx, role, _row = _require_desk(db, actor_id)
+    # safety_lead only (TW-940 fix round 1): issuing a ban takes a
+    # lead, so overturning one cannot take less. The section header,
+    # the v3 migration header, and the test docstring all stated
+    # this from the start; the gate now matches them.
+    ctx, role, _row = _require_desk(db, actor_id, lead=True)
     appeal = _appeal_or_404(db, appeal_id)
     if appeal.get("status") not in ("submitted", "under_review"):
         raise ConflictError(f"appeal is already {appeal.get('status')}")
@@ -3330,8 +3386,14 @@ def decide_appeal(
         patch = {"level": payload.modified_level}
         if payload.modified_level != "suspension":
             patch["expires_at"] = None
-        elif target.get("expires_at") is None:
-            raise ConflictError("modifying to a suspension requires an existing expiry")
+        elif not safety.suspension_within_cap(_parse_ts(target.get("expires_at")), now):
+            # The modified outcome keeps the target's existing
+            # expiry, so re-validate it against the Section 6.2
+            # 72h cap at decision time: present, future, in cap.
+            raise ConflictError(
+                "modifying to a suspension requires an existing expiry "
+                "within 72 hours (Section 6.2 cap)"
+            )
         _update_by_id(db, "rsn_sanctions", target["id"], patch)
     updated = _update_by_id(
         db,
@@ -3417,8 +3479,17 @@ def create_evidence_packet(
 
 
 def get_evidence_packet(db, actor_id: UUID, packet_id: UUID, *, now=None) -> dict:
-    _require_desk(db, actor_id)
-    return _packet_out(_packet_or_404(db, packet_id))
+    ctx, role, _row = _require_desk(db, actor_id)
+    packet = _packet_or_404(db, packet_id)
+    _audit(
+        db,
+        ctx.user_id,
+        "evidence.viewed",
+        f"packet:{packet['id']}",
+        f"role={role}",
+        now=_resolve_now(now),
+    )
+    return _packet_out(packet)
 
 
 def attach_evidence(
@@ -3488,30 +3559,95 @@ def set_evidence_legal_hold(
     return _packet_out(updated or {**packet, "legal_hold": payload.legal_hold})
 
 
+def _sanction_out_subject(row: dict) -> dict:
+    """Subject-safe sanction projection: what binds the member and
+    when it ends. Never the staff-side note, never issued_by, never
+    the identity anchor (staff internals; see the section header)."""
+    return {
+        "id": row["id"],
+        "level": row["level"],
+        "reason_category": row["reason_category"],
+        "scope": row.get("scope"),
+        "group_id": row.get("group_id"),
+        "expires_at": _iso(row.get("expires_at")),
+        "status": row["status"],
+        "created_at": _iso(row.get("created_at")),
+    }
+
+
+def _ban_out_subject(row: dict) -> dict:
+    """Subject-safe ban projection, same discipline as
+    _sanction_out_subject."""
+    return {
+        "id": row["id"],
+        "scope": row["scope"],
+        "group_id": row.get("group_id"),
+        "reason_category": row["reason_category"],
+        "issued_at": _iso(row.get("issued_at")),
+        "appeal_status": row.get("appeal_status"),
+        "lifted_at": _iso(row.get("lifted_at")),
+    }
+
+
 def get_report_disclosure(db, viewer_id: UUID, report_id: UUID, *, now=None) -> dict:
     """What each audience may learn about a case, as data. Nothing
     is sent anywhere; the surfaces that render this decide how.
 
-    - staff / lead: the full case (report, sanctions, bans, appeals);
+    Audience precedence (TW-940 fix round 1): the case SUBJECT is
+    resolved first, so a staff member who is the subject of the
+    case gets the subject view, never the staff view (the staff
+    view carries the reporter's identity and the report text:
+    reporter safety). The staff view itself is gated on a live,
+    non-banned, non-suspended desk status; a banned or suspended
+    staff member falls through to the party views below and, if
+    they are not a party, to the restricted shell.
+
+    - staff / lead (active, not banned, not suspended, and not the
+      case subject): the full case (report, sanctions, bans,
+      appeals);
     - reporter: outcome only (status, category, sanction levels,
       resolution note, dates). Never evidence, never staff internals;
     - subject: that a case exists against them, its category, the
-      sanctions / bans that bind them, and their appeal position.
+      sanctions / bans that bind them (subject-safe projections:
+      no staff-side note, no issued_by), and their appeal position.
       Never the reporter's identity or the report's description
       (reporter safety);
-    - anyone else: the Section 5.9 restricted shell (NotFound)."""
-    viewer = get_member_context(db, viewer_id)
+    - anyone else: the Section 5.9 restricted shell (NotFound).
+
+    Every successful view writes an audit row (TW-801 lens): a
+    disclosure read is exactly what the append-only log exists
+    for."""
+    now = _resolve_now(now)
+    viewer = get_member_context(db, viewer_id, now=now)
     report = _report_or_404(db, report_id)
     sanctions = _linked_sanctions(db, report["id"])
     bans = _linked_bans(db, report["id"])
+    is_subject = (
+        report.get("subject_user_id") is not None
+        and report["subject_user_id"] == viewer.user_id
+    )
     role, _row = _desk_role(db, viewer_id)
-    if role in (_DESK_STAFF, _DESK_LEAD):
+    staff_view = (
+        role in (_DESK_STAFF, _DESK_LEAD)
+        and not is_subject
+        and not viewer.banned
+        and not viewer.suspended
+    )
+    if staff_view:
         target_ids = {s["id"] for s in sanctions} | {b["id"] for b in bans}
         appeals = [
             _appeal_out(a)
             for a in _fetch(db, "rsn_appeals")
             if a.get("target_id") in target_ids
         ]
+        _audit(
+            db,
+            viewer.user_id,
+            "report.disclosure_viewed",
+            f"report:{report['id']}",
+            "audience=staff",
+            now=now,
+        )
         return {
             "audience": "staff",
             "report": _report_out(report),
@@ -3519,7 +3655,37 @@ def get_report_disclosure(db, viewer_id: UUID, report_id: UUID, *, now=None) -> 
             "bans": [_ban_out(b) for b in bans],
             "appeals": appeals,
         }
+    if is_subject:
+        _audit(
+            db,
+            viewer.user_id,
+            "report.disclosure_viewed",
+            f"report:{report['id']}",
+            "audience=subject",
+            now=now,
+        )
+        return {
+            "audience": "subject",
+            "report_id": report["id"],
+            "status": report["status"],
+            "category": report["category"],
+            "target_type": report["target_type"],
+            "sanctions": [_sanction_out_subject(s) for s in sanctions],
+            "bans": [_ban_out_subject(b) for b in bans],
+            "can_appeal": any(s.get("status") == "active" for s in sanctions)
+            or any(b.get("lifted_at") is None for b in bans),
+            "created_at": _iso(report.get("created_at")),
+            "resolved_at": _iso(report.get("resolved_at")),
+        }
     if report["reporter_id"] == viewer.user_id:
+        _audit(
+            db,
+            viewer.user_id,
+            "report.disclosure_viewed",
+            f"report:{report['id']}",
+            "audience=reporter",
+            now=now,
+        )
         return {
             "audience": "reporter",
             "report_id": report["id"],
@@ -3528,20 +3694,6 @@ def get_report_disclosure(db, viewer_id: UUID, report_id: UUID, *, now=None) -> 
             "sanction_levels": [s["level"] for s in sanctions],
             "ban_scopes": [b["scope"] for b in bans if b.get("lifted_at") is None],
             "resolution_note": report.get("resolution_note"),
-            "created_at": _iso(report.get("created_at")),
-            "resolved_at": _iso(report.get("resolved_at")),
-        }
-    if report.get("subject_user_id") and report["subject_user_id"] == viewer.user_id:
-        return {
-            "audience": "subject",
-            "report_id": report["id"],
-            "status": report["status"],
-            "category": report["category"],
-            "target_type": report["target_type"],
-            "sanctions": [_sanction_out(s) for s in sanctions],
-            "bans": [_ban_out(b) for b in bans],
-            "can_appeal": any(s.get("status") == "active" for s in sanctions)
-            or any(b.get("lifted_at") is None for b in bans),
             "created_at": _iso(report.get("created_at")),
             "resolved_at": _iso(report.get("resolved_at")),
         }

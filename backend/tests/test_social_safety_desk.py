@@ -672,14 +672,21 @@ class TestAppeals:
         assert acked["ack_at"] is not None
 
     def test_issuer_cannot_decide_own_case_fresh_reviewer_rule(self):
+        # TW-940 fix round 1 (Rosa must-fix 2): appeal decisions are
+        # lead-gated, so the fresh-reviewer probe uses a LEAD issuer;
+        # the refusal must come from the issuer rule, not the gate.
         db = FakeDb()
-        staff, _, subject, report = staff_case(db)
-        row = sanction(db, staff, report)
+        lead = add_lead(db)
+        reporter = add_member(db)
+        subject = add_member(db)
+        report = file_report(db, reporter, subject)
+        service.claim_report(db, UUID(lead), UUID(report["id"]), now=NOW)
+        row = sanction(db, lead, report)
         filed = appeal(db, subject, "sanction", row["id"])
         with pytest.raises(service.ForbiddenError):
             service.decide_appeal(
                 db,
-                UUID(staff),
+                UUID(lead),
                 UUID(filed["id"]),
                 models.AppealDecision(
                     decision="overturned", outcome_note="I changed my mind"
@@ -692,7 +699,7 @@ class TestAppeals:
         staff, _, subject, report = staff_case(db)
         row = sanction(db, staff, report)
         filed = appeal(db, subject, "sanction", row["id"])
-        reviewer = add_staff(db)
+        reviewer = add_lead(db)
         decided = service.decide_appeal(
             db,
             UUID(reviewer),
@@ -733,7 +740,7 @@ class TestAppeals:
         staff, _, subject, report = staff_case(db)
         row = sanction(db, staff, report, action="restrict")
         filed = appeal(db, subject, "sanction", row["id"])
-        reviewer = add_staff(db)
+        reviewer = add_lead(db)
         decided = service.decide_appeal(
             db,
             UUID(reviewer),
@@ -951,6 +958,394 @@ class TestExternalDisclosures:
         )
         assert decided["status"] == "denied"
         assert decided["disclosed_at"] is None
+
+
+# ---------------------------------------------------------------------------
+# Migration v3 (file only, NOT applied)
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Fix round 1 (Rosa gate on ca339c6): her FakeDb probes, turned into
+# tests. Each test reproduces the probe against the pre-fix code.
+# ---------------------------------------------------------------------------
+
+FAR_FUTURE = NOW + timedelta(days=365)
+
+
+def suspend_member(db: FakeDb, user_id, *, expires_at=FAR_FUTURE):
+    """Seed an active desk suspension binding this member (the same
+    row shape issue_sanction writes, resolved by
+    get_member_context)."""
+    return db.seed(
+        "rsn_sanctions",
+        {
+            "user_id": user_id,
+            "level": "suspension",
+            "status": "active",
+            "expires_at": expires_at,
+            "issued_by": "seed-issuer",
+        },
+    )
+
+
+def ban_member(db: FakeDb, user_id):
+    """Flip the member's identity anchor to banned (the vfy-side ban
+    get_member_context already enforces)."""
+    for row in db.rows("vfy_identity_anchors"):
+        if row["user_id"] == user_id:
+            row["is_banned"] = True
+
+
+class TestSubjectConflictOfInterest:
+    """Rosa must-fix 1: the SUBJECT of a report can never work their
+    own case, even with a desk role."""
+
+    def test_subject_with_staff_role_cannot_claim_own_case(self):
+        db = FakeDb()
+        subject = add_staff(db)
+        reporter = add_member(db)
+        report = file_report(db, reporter, subject)
+        with pytest.raises(service.ForbiddenError):
+            service.claim_report(db, UUID(subject), UUID(report["id"]), now=NOW)
+        assert db.rows("rsn_reports")[0]["assigned_to"] is None
+
+    def test_subject_cannot_resolve_own_case_unfounded(self):
+        db = FakeDb()
+        subject = add_staff(db)
+        reporter = add_member(db)
+        report = file_report(db, reporter, subject)
+        # Defense in depth: even holding the claim (seeded, as if it
+        # predated the claim fix), resolve refuses the subject.
+        row = db.rows("rsn_reports")[0]
+        row["status"] = "triaged"
+        row["assigned_to"] = subject
+        with pytest.raises(service.ForbiddenError):
+            service.resolve_report(
+                db,
+                UUID(subject),
+                UUID(report["id"]),
+                models.ReportResolve(outcome="unfounded", note="nothing here"),
+                now=NOW,
+            )
+        # No +1 trust event may be written for the subject.
+        events = [
+            e
+            for e in db.rows("rsn_trust_events")
+            if e["user_id"] == subject and e["event_type"] == "report_unfounded"
+        ]
+        assert events == []
+        assert db.rows("rsn_reports")[0]["status"] == "triaged"
+
+
+class TestAppealDecisionLeadGate:
+    """Rosa must-fix 2: decide_appeal requires safety_lead. A plain
+    staff member cannot overturn a lead-issued ban (or any appeal)."""
+
+    def test_plain_staff_cannot_overturn_lead_issued_ban(self):
+        db = FakeDb()
+        lead = add_lead(db)
+        reporter = add_member(db)
+        subject = add_member(db)
+        report = file_report(db, reporter, subject, category="threats")
+        service.claim_report(db, UUID(lead), UUID(report["id"]), now=NOW)
+        row = ban(db, lead, report)
+        filed = appeal(db, subject, "ban", row["id"])
+        staff_reviewer = add_staff(db)
+        with pytest.raises(service.ForbiddenError):
+            service.decide_appeal(
+                db,
+                UUID(staff_reviewer),
+                UUID(filed["id"]),
+                models.AppealDecision(
+                    decision="overturned", outcome_note="looks fine to me"
+                ),
+                now=LATER,
+            )
+        assert db.rows("rsn_bans")[0]["lifted_at"] is None
+        ctx = service.get_member_context(db, UUID(subject))
+        assert ctx.banned is True
+
+    def test_plain_staff_cannot_decide_sanction_appeal(self):
+        db = FakeDb()
+        staff, _, subject, report = staff_case(db)
+        row = sanction(db, staff, report)
+        filed = appeal(db, subject, "sanction", row["id"])
+        other_staff = add_staff(db)
+        with pytest.raises(service.ForbiddenError):
+            service.decide_appeal(
+                db,
+                UUID(other_staff),
+                UUID(filed["id"]),
+                models.AppealDecision(decision="upheld", outcome_note="stands"),
+                now=LATER,
+            )
+        assert db.rows("rsn_appeals")[0]["status"] == "submitted"
+
+
+class TestDisclosureAudienceGate:
+    """Rosa must-fixes 3 + 4: the staff disclosure view is gated on
+    an active, non-banned, non-suspended desk status and never goes
+    to the case subject; the subject view is a redacted projection
+    (no staff-side note, no issued_by)."""
+
+    def test_staff_subject_gets_subject_view_not_staff_view(self):
+        db = FakeDb()
+        subject = add_staff(db)
+        reporter = add_member(db)
+        reviewer = add_staff(db)
+        report = file_report(db, reporter, subject)
+        service.claim_report(db, UUID(reviewer), UUID(report["id"]), now=NOW)
+        sanction(db, reviewer, report)
+        view = service.get_report_disclosure(db, UUID(subject), UUID(report["id"]))
+        assert view["audience"] == "subject"
+        assert "report" not in view
+        assert "reporter_id" not in str(view)
+
+    def test_banned_staff_loses_staff_disclosure_view(self):
+        db = FakeDb()
+        _, _, _, report = staff_case(db)
+        viewer = add_staff(db)
+        ban_member(db, viewer)
+        with pytest.raises(service.NotFoundError):
+            service.get_report_disclosure(db, UUID(viewer), UUID(report["id"]))
+
+    def test_suspended_staff_loses_staff_disclosure_view(self):
+        db = FakeDb()
+        _, _, _, report = staff_case(db)
+        viewer = add_staff(db)
+        suspend_member(db, viewer)
+        with pytest.raises(service.NotFoundError):
+            service.get_report_disclosure(db, UUID(viewer), UUID(report["id"]))
+
+    def test_subject_view_redacts_sanction_and_ban_internals(self):
+        db = FakeDb()
+        lead = add_lead(db)
+        reporter = add_member(db)
+        subject = add_member(db)
+        report = file_report(db, reporter, subject, category="threats")
+        service.claim_report(db, UUID(lead), UUID(report["id"]), now=NOW)
+        sanction(db, lead, report)
+        ban(db, lead, report)
+        view = service.get_report_disclosure(db, UUID(subject), UUID(report["id"]))
+        assert view["audience"] == "subject"
+        sanction_view = view["sanctions"][0]
+        assert sanction_view["level"] == "strike"
+        assert sanction_view["status"] == "active"
+        assert "note" not in sanction_view
+        assert "issued_by" not in sanction_view
+        assert "identity_anchor_hash" not in sanction_view
+        ban_view = view["bans"][0]
+        assert ban_view["scope"] == "platform"
+        assert "note" not in ban_view
+        assert "issued_by" not in ban_view
+        assert "identity_anchor_hash" not in ban_view
+        assert view["can_appeal"] is True
+
+
+class TestSuspendedStaffTriageGate:
+    """Rosa must-fix 5: triage routes through the shared desk gate,
+    so a suspended staff member loses list / claim / resolve."""
+
+    def test_suspended_staff_cannot_list_queue(self):
+        db = FakeDb()
+        staff = add_staff(db)
+        suspend_member(db, staff)
+        with pytest.raises(service.ForbiddenError):
+            service.list_report_queue(db, UUID(staff))
+
+    def test_suspended_staff_cannot_claim(self):
+        db = FakeDb()
+        staff = add_staff(db)
+        reporter = add_member(db)
+        subject = add_member(db)
+        report = file_report(db, reporter, subject)
+        suspend_member(db, staff)
+        with pytest.raises(service.ForbiddenError):
+            service.claim_report(db, UUID(staff), UUID(report["id"]), now=NOW)
+
+    def test_suspended_staff_cannot_resolve_claimed_case(self):
+        db = FakeDb()
+        staff, _, _, report = staff_case(db)
+        suspend_member(db, staff)
+        with pytest.raises(service.ForbiddenError):
+            service.resolve_report(
+                db,
+                UUID(staff),
+                UUID(report["id"]),
+                models.ReportResolve(outcome="unfounded", note="no evidence"),
+                now=NOW,
+            )
+
+
+class TestAcknowledgeConflictOfInterest:
+    """Rosa must-fix 6: the issuer (and the appellant) cannot
+    acknowledge, and thereby self-assign, an appeal."""
+
+    def test_issuer_cannot_acknowledge_appeal_of_own_sanction(self):
+        db = FakeDb()
+        staff, _, subject, report = staff_case(db)
+        row = sanction(db, staff, report)
+        filed = appeal(db, subject, "sanction", row["id"])
+        with pytest.raises(service.ForbiddenError):
+            service.acknowledge_appeal(db, UUID(staff), UUID(filed["id"]), now=LATER)
+        assert db.rows("rsn_appeals")[0]["status"] == "submitted"
+        assert db.rows("rsn_appeals")[0]["assigned_to"] is None
+
+    def test_appellant_cannot_acknowledge_own_appeal(self):
+        db = FakeDb()
+        subject = add_staff(db)
+        issuer = add_staff(db)
+        reporter = add_member(db)
+        report = file_report(db, reporter, subject)
+        service.claim_report(db, UUID(issuer), UUID(report["id"]), now=NOW)
+        row = sanction(db, issuer, report)
+        filed = appeal(db, subject, "sanction", row["id"])
+        with pytest.raises(service.ForbiddenError):
+            service.acknowledge_appeal(db, UUID(subject), UUID(filed["id"]), now=LATER)
+
+
+class TestSensitiveReadsAreAudited:
+    """Rosa must-fix 7 (TW-801 lens): the header promises every desk
+    action writes rsn_audit_log; the sensitive reads must too."""
+
+    def test_queue_appeals_evidence_and_disclosure_reads_audit(self):
+        db = FakeDb()
+        staff, _, _, report = staff_case(db)
+        created = packet(db, staff, report)
+        service.list_report_queue(db, UUID(staff))
+        service.list_appeals(db, UUID(staff))
+        service.get_evidence_packet(db, UUID(staff), UUID(created["id"]))
+        service.get_report_disclosure(db, UUID(staff), UUID(report["id"]))
+        actions = [action for _, action in audit_actions(db)]
+        for expected in (
+            "report.queue_listed",
+            "appeal.listed",
+            "evidence.viewed",
+            "report.disclosure_viewed",
+        ):
+            assert expected in actions, expected
+
+
+class TestUnanchoredSubjectConflict:
+    """Rosa nit: the stated guarantee that a subject with no
+    identity anchor cannot be sanctioned or banned through the
+    desk (the enforcement is anchor-keyed) had no test."""
+
+    def test_sanction_unanchored_subject_conflicts(self):
+        db = FakeDb()
+        staff = add_staff(db)
+        reporter = add_member(db)
+        ghost = add_member(db, tier=None)
+        report = file_report(db, reporter, ghost)
+        service.claim_report(db, UUID(staff), UUID(report["id"]), now=NOW)
+        with pytest.raises(service.ConflictError):
+            sanction(db, staff, report)
+
+    def test_ban_unanchored_subject_conflicts(self):
+        db = FakeDb()
+        lead = add_lead(db)
+        reporter = add_member(db)
+        ghost = add_member(db, tier=None)
+        report = file_report(db, reporter, ghost, category="threats")
+        service.claim_report(db, UUID(lead), UUID(report["id"]), now=NOW)
+        with pytest.raises(service.ConflictError):
+            ban(db, lead, report)
+
+    def test_sanction_subjectless_report_conflicts(self):
+        db = FakeDb()
+        staff = add_staff(db)
+        reporter = add_member(db)
+        group = db.seed("rsn_groups", {"name": "G", "metro": "denver"})
+        report = service.create_report(
+            db,
+            UUID(reporter),
+            models.ReportCreate(
+                target_type="group",
+                target_id=UUID(group["id"]),
+                category="fraud",
+                description="the group itself is a scam",
+            ),
+            now=NOW,
+        )
+        service.claim_report(db, UUID(staff), UUID(report["id"]), now=NOW)
+        with pytest.raises(service.ConflictError):
+            sanction(db, staff, report)
+
+
+class TestModifiedSuspensionCap:
+    """Rosa nit: a 'modified' appeal outcome landing on suspension
+    re-validates the Section 6.2 72h cap against the kept expiry."""
+
+    def _restriction_appeal(self, db, *, expires_at):
+        staff, _, subject, report = staff_case(db)
+        row = sanction(db, staff, report, action="restrict")
+        stored = db.rows("rsn_sanctions")[0]
+        stored["expires_at"] = expires_at
+        filed = appeal(db, subject, "sanction", row["id"])
+        return filed
+
+    def test_modified_to_suspension_beyond_72h_cap_conflicts(self):
+        db = FakeDb()
+        filed = self._restriction_appeal(db, expires_at=NOW + timedelta(hours=100))
+        reviewer = add_lead(db)
+        with pytest.raises(service.ConflictError):
+            service.decide_appeal(
+                db,
+                UUID(reviewer),
+                UUID(filed["id"]),
+                models.AppealDecision(
+                    decision="modified",
+                    outcome_note="suspension instead",
+                    modified_level="suspension",
+                ),
+                now=LATER,
+            )
+        assert db.rows("rsn_sanctions")[0]["level"] == "restriction"
+
+    def test_modified_to_suspension_within_cap_keeps_expiry(self):
+        db = FakeDb()
+        expiry = NOW + timedelta(hours=24)
+        filed = self._restriction_appeal(db, expires_at=expiry)
+        reviewer = add_lead(db)
+        decided = service.decide_appeal(
+            db,
+            UUID(reviewer),
+            UUID(filed["id"]),
+            models.AppealDecision(
+                decision="modified",
+                outcome_note="suspension instead",
+                modified_level="suspension",
+            ),
+            now=LATER,
+        )
+        assert decided["status"] == "modified"
+        row = db.rows("rsn_sanctions")[0]
+        assert row["level"] == "suspension"
+        assert row["expires_at"] == expiry
+
+
+class TestDuplicateGroupBan:
+    """Rosa nit: duplicate group-scope bans for the same
+    anchor + group conflict, like platform duplicates do."""
+
+    def test_duplicate_group_scope_ban_conflicts_other_group_ok(self):
+        db = FakeDb()
+        lead = add_lead(db)
+        reporter = add_member(db)
+        subject = add_member(db)
+        group = db.seed("rsn_groups", {"name": "G", "metro": "denver"})
+        other_group = db.seed("rsn_groups", {"name": "H", "metro": "denver"})
+        first = file_report(db, reporter, subject, category="threats")
+        service.claim_report(db, UUID(lead), UUID(first["id"]), now=NOW)
+        ban(db, lead, first, scope="group", group_id=UUID(group["id"]))
+        second = file_report(db, reporter, subject, category="threats")
+        service.claim_report(db, UUID(lead), UUID(second["id"]), now=NOW)
+        with pytest.raises(service.ConflictError):
+            ban(db, lead, second, scope="group", group_id=UUID(group["id"]))
+        row = ban(db, lead, second, scope="group", group_id=UUID(other_group["id"]))
+        assert row["scope"] == "group"
+        assert row["group_id"] == other_group["id"]
 
 
 # ---------------------------------------------------------------------------

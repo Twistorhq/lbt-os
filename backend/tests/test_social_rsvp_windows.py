@@ -315,6 +315,30 @@ class TestCoupleRpc:
         assert out["user_id"] == a
 
 
+class TestCouplePartnerDeskRestriction:
+    """TW-940 fix round 1 (Rosa nit): the couple path checked the
+    partner's trust_band 'restricted' but not the partner's desk
+    'restricted' sanction flag, which the single RSVP path checks
+    both of. A desk-restricted partner blocks the pair."""
+
+    def test_desk_restricted_partner_blocks_couple_rsvp(self, db, host, group):
+        a, b, link = _couple(db, host, group)
+        event = make_event(db, host, group)
+        db.seed(
+            "rsn_sanctions",
+            {
+                "user_id": b,
+                "level": "restriction",
+                "status": "active",
+                "expires_at": None,
+                "issued_by": "seed-issuer",
+            },
+        )
+        with pytest.raises(service.ForbiddenError):
+            rsvp(db, a, event, couple_link_id=link["id"])
+        assert db.rows("rsn_rsvps") == []
+
+
 def _linked_couple(db, group, *, requester_standing, partner_standing):
     """A couple link where the two partners hold different standing
     tiers. Returns (requester, partner, link); both joined the group."""

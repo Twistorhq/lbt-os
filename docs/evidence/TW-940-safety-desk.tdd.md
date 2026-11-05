@@ -116,6 +116,14 @@ GREEN (after implementation, formatted):
 | 15 | Migration v3 file declares the staff table, desk columns, and new sanction levels | TestMigrationV3File | RED | PASS | 50 passed |
 | 16 | No regression in the pre-existing Social suites (363 tests) | Full Social suite command above | integration | PASS | 413 passed |
 | 17 | Ruff check + format clean on authored Python | ruff commands in section 2 | CI | PASS | all checks passed |
+| 18 | (Fix round 1) Subject can never claim or resolve their own case, incl. no report_unfounded trust event | TestSubjectConflictOfInterest | RED | PASS | 70 passed |
+| 19 | (Fix round 1) Appeal decisions require safety_lead; plain staff cannot overturn a lead ban | TestAppealDecisionLeadGate | RED | PASS | 70 passed |
+| 20 | (Fix round 1) Disclosure: staff-subject gets subject view; banned/suspended staff lose staff view; subject projections carry no note / issued_by / anchor | TestDisclosureAudienceGate | RED | PASS | 70 passed |
+| 21 | (Fix round 1) Suspended staff lose triage (list / claim / resolve) via the shared _require_desk gate | TestSuspendedStaffTriageGate | RED | PASS | 70 passed |
+| 22 | (Fix round 1) Issuer and appellant cannot acknowledge an appeal | TestAcknowledgeConflictOfInterest | RED | PASS | 70 passed |
+| 23 | (Fix round 1) Sensitive reads (queue list, appeals list, evidence read, disclosure view) write rsn_audit_log rows | TestSensitiveReadsAreAudited | RED | PASS | 70 passed |
+| 24 | (Fix round 1) Unanchored / subjectless sanction + ban return Conflict (previously untested guarantee) | TestUnanchoredSubjectConflict | unit | PASS | 70 passed |
+| 25 | (Fix round 1) Modified-to-suspension re-validates the 72h cap; duplicate group-scope ban conflicts; couple partner desk restriction blocks pair RSVP | TestModifiedSuspensionCap, TestDuplicateGroupBan, test_social_rsvp_windows.py::TestCouplePartnerDeskRestriction | RED | PASS | 434 passed |
 
 ## 4. Coverage and known gaps
 
@@ -158,7 +166,84 @@ GREEN (after implementation, formatted):
   dependency); pre-existing, unrelated to this change. The social
   router is exercised through the TestClient suites above.
 
-## 5. Plan-safety notes
+## 5. Fix round 1 (Rosa gate on ca339c6: REQUEST CHANGES)
+
+Rosa reproduced seven must-fixes with in-memory FakeDb probes.
+Each became a failing test first (RED), then the smallest fix.
+
+RED (fix-round tests against the ca339c6 implementation):
+`python3 -m pytest tests/test_social_safety_desk.py tests/test_social_rsvp_windows.py -q`
+gave `17 failed, 72 passed`. The 17 failures are exactly the
+probes and nit reproductions; 5 new tests (unanchored-subject
+Conflict x3, subjectless-report Conflict, modified-within-cap)
+passed pre-fix because they pin guarantees that already held.
+
+GREEN (after the fixes, formatted):
+- New desk suite: `70 passed` (50 original + 20 fix-round).
+- All Social suites: `434 passed` (413 at Rosa's gate + 21 new:
+  20 desk + 1 couple-RSVP), `tests/test_social_*.py -q`.
+- Ruff: `ruff check` clean and `ruff format --check` clean on
+  the three edited Python files (service.py, both test files).
+
+What changed, per must-fix:
+
+1. claim_report and resolve_report refuse the report's SUBJECT
+   outright (ForbiddenError), any desk role, before any state
+   change; the subject can no longer collect the +1
+   report_unfounded trust event on their own case. Sanction / ban
+   already self-checked and still do.
+2. decide_appeal now goes through _require_desk(lead=True),
+   matching the service header, the v3 migration header, and the
+   test docstring, which all stated safety_lead from the start.
+   Operative tests updated: overturn / modified reviewers are
+   leads now, and the fresh-reviewer test uses a lead issuer so
+   the refusal comes from the issuer rule, not the gate.
+3. get_report_disclosure resolves the subject audience FIRST (a
+   staff member who is the case subject gets the subject view,
+   never the staff view with reporter_id and description), and
+   the staff view is gated on the viewer being neither banned
+   nor suspended; a banned / suspended staff non-party falls to
+   the restricted shell (404).
+4. Subject disclosure sanctions / bans are new redacted
+   projections (_sanction_out_subject / _ban_out_subject):
+   level / scope / status / dates / appeal position only. No
+   note, no issued_by, no identity anchor hash.
+5. list_report_queue / claim_report / resolve_report no longer
+   hand-roll authorization: all three route through
+   _require_desk with its new ambassador branch
+   (allow_ambassador=True, which keeps the ambassador voice
+   requirement), so suspended staff lose triage power exactly
+   like every other desk action.
+6. acknowledge_appeal refuses the appellant and the sanction /
+   ban ISSUER (acknowledging assigns the case, so the issuer
+   would self-assign the appeal of their own action), mirroring
+   decide_appeal's conflict family.
+7. The header's audit promise is now kept by auditing the reads
+   instead of narrowing the claim: report.queue_listed,
+   appeal.listed, evidence.viewed, and report.disclosure_viewed
+   (detail = audience) each write an rsn_audit_log row. The
+   header AUDIT paragraph says so explicitly.
+
+Nits taken (all four of Rosa's logged nits):
+- Tests for the unanchored-subject Conflict guarantee (sanction
+  and ban) plus the subjectless-report Conflict.
+- decide_appeal 'modified' to suspension re-validates the kept
+  expiry with safety.suspension_within_cap at decision time
+  (present, future, within 72h), not mere presence.
+- Duplicate group-scope bans for the same anchor + group now
+  conflict in issue_ban, like platform duplicates; a different
+  group still succeeds.
+- The couple-RSVP partner gate now checks the partner's desk
+  'restricted' sanction flag alongside trust_band 'restricted',
+  matching the single RSVP path (one line + test in
+  test_social_rsvp_windows.py).
+
+Untouched, as instructed: migration_social_v3.sql still ships
+UNAPPLIED as a file only; fail-closed pre-v3 behavior unchanged;
+the Rex posture list on TW-940 is not addressed here (it runs
+after Rosa's re-check clears).
+
+## 6. Plan-safety notes
 
 No untrusted plan content was acted on. The brief, the ticket,
 and the in-repo spec (openspec TW-646 design, ambassador scope)
