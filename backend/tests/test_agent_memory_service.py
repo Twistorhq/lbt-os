@@ -27,6 +27,8 @@ map Section 4 B2 acceptance list:
   that changes the setting at all.
 """
 
+import base64
+import hashlib
 import os
 import threading
 import time
@@ -1194,3 +1196,148 @@ class TestLacedBlockChecks:
                 "-----BEGIN PRIVATE KEY-----\n" + B64_LINE_A + "\n" + B64_LINE_B + "\n"
                 "-----END PRIVATE KEY-----"
             )
+
+
+# -- Rex re-probe fix round 3: laced generic tokens (R3) ----------------
+
+# R3: _redact_generic_tokens ran on raw text only, so a single
+# variation selector (U+FE0F) or word joiner (U+2060) inserted
+# inside a generic token broke its charset and the token passed
+# screening completely unredacted. Plain tokens are redacted, so
+# the laced form must end up equally non-recoverable: generic
+# detection runs against the format-dropped copy and the whole
+# laced token is replaced by the redaction marker.
+CONCAT128 = base64.b64encode(bytes(range(96))).decode()
+HEX64 = hashlib.sha256(b"tw951 r3 hex token").hexdigest()
+B64_TOKEN = base64.b64encode(b"hello world this is a secret token value 12345").decode()
+GENERIC_TOKENS = {"concat128": CONCAT128, "hex64": HEX64, "b64": B64_TOKEN}
+LACE_CHARS = [chr(0xFE0F), chr(0x2060)]
+IBAN_TOKEN = "DE89370400440532013000"
+
+
+def _insert(token, char, pos):
+    return token[:pos] + char + token[pos:]
+
+
+def _recoverable(text, token):
+    return token in screening._drop_format_chars(text)
+
+
+class TestLacedGenericTokens:
+    def test_single_insertion_variants_of_generic_tokens_are_redacted(self):
+        assert len(CONCAT128) == 128
+        assert len(HEX64) == 64
+        for token in GENERIC_TOKENS.values():
+            for char in LACE_CHARS:
+                for pos in (0, len(token) // 2, len(token)):
+                    laced = _insert(token, char, pos)
+                    out = screening.screen(f"The note carries {laced} for reference.")
+                    assert models.REDACTION_MARKER in out
+                    assert laced not in out
+                    assert not _recoverable(out, token)
+
+    def test_single_insertion_iban_is_redacted(self):
+        for char in LACE_CHARS:
+            for pos in (0, len(IBAN_TOKEN) // 2, len(IBAN_TOKEN)):
+                laced = _insert(IBAN_TOKEN, char, pos)
+                out = screening.screen(f"The account is {laced} for payouts.")
+                assert models.REDACTION_MARKER in out
+                assert laced not in out
+                assert not _recoverable(out, IBAN_TOKEN)
+
+    def test_relaxed_propose_snapshot_has_no_recoverable_token(self, db):
+        service.set_gate_mode(
+            db, ORG, AGENT, models.GATE_RELAXED, actor_role="owner", actor_id="o-1"
+        )
+        cases = [
+            ("r3-concat", CONCAT128, chr(0xFE0F)),
+            ("r3-hex", HEX64, chr(0x2060)),
+            ("r3-b64", B64_TOKEN, chr(0xFE0F)),
+        ]
+        for key, token, char in cases:
+            laced = _insert(token, char, 10)
+            _add(db, key, f"The note carries {laced} for reference.")
+        entries = service.list_entries(db, ORG, AGENT, FACTS)
+        assert len(entries) == len(cases)
+        by_key = {e["entry_key"]: e["body"] for e in entries}
+        for key, token, _ in cases:
+            assert models.REDACTION_MARKER in by_key[key]
+            assert not _recoverable(by_key[key], token)
+        snap = service.assemble_snapshot(db, ORG, AGENT, "sess-r3-relaxed")
+        snap_bodies = {e["entry_key"]: e["body"] for e in snap["collections"][FACTS]}
+        assert len(snap_bodies) == len(cases)
+        for key, token, _ in cases:
+            assert models.REDACTION_MARKER in snap_bodies[key]
+            assert not _recoverable(snap_bodies[key], token)
+
+    def test_gated_approve_stores_no_recoverable_token(self, db):
+        cases = [
+            ("r3-gated-hex", HEX64, chr(0x2060)),
+            ("r3-gated-b64", B64_TOKEN, chr(0xFE0F)),
+            ("r3-gated-concat", CONCAT128, chr(0x2060)),
+        ]
+        for key, token, char in cases:
+            laced = _insert(token, char, len(token) // 2)
+            staged = _add(db, key, f"The note carries {laced} for reference.")
+            _approve(db, staged["id"])
+        entries = service.list_entries(db, ORG, AGENT, FACTS)
+        by_key = {e["entry_key"]: e["body"] for e in entries}
+        for key, token, _ in cases:
+            assert models.REDACTION_MARKER in by_key[key]
+            assert not _recoverable(by_key[key], token)
+
+
+class TestLacedGenericTokenControls:
+    def test_accented_and_emoji_prose_store_byte_for_byte(self, db):
+        accented = (
+            "Jose\u0301 runs the cafe\u0301 on Pen\u0303a Street; "
+            "re\u0301sume\u0301 reviews happen on Fridays."
+        )
+        emoji = (
+            "We are open today "
+            + chr(0x2600)
+            + chr(0xFE0F)
+            + " and we "
+            + chr(0x2764)
+            + chr(0xFE0F)
+            + " our regulars, nine to five."
+        )
+        for text in (accented, emoji):
+            assert screening.screen(text) == text
+        staged_a = _add(db, "accented-note", accented)
+        _approve(db, staged_a["id"])
+        staged_e = _add(db, "emoji-note", emoji)
+        _approve(db, staged_e["id"])
+        by_key = {
+            e["entry_key"]: e["body"]
+            for e in service.list_entries(db, ORG, AGENT, FACTS)
+        }
+        assert by_key["accented-note"] == accented
+        assert by_key["emoji-note"] == emoji
+        snap = service.assemble_snapshot(db, ORG, AGENT, "sess-r3-controls")
+        snap_bodies = {e["entry_key"]: e["body"] for e in snap["collections"][FACTS]}
+        assert snap_bodies["accented-note"] == accented
+        assert snap_bodies["emoji-note"] == emoji
+
+    def test_short_base64_looking_words_pass_unchanged(self):
+        text = (
+            "The code word is QWxhZGRpbgo and the batch tag is "
+            "aGVsbG8 for the shop; the hex tag is deadbeef."
+        )
+        assert screening.screen(text) == text
+
+    def test_keyword_anchored_redactors_unchanged(self):
+        out = screening.screen("The password is correcthorsebatterystaple1 ok.")
+        assert models.REDACTION_MARKER in out
+        assert "correcthorsebatterystaple1" not in out
+        out = screening.screen(
+            "Connect via postgres://shopuser:s3cretpass@db.internal/shop."
+        )
+        assert models.REDACTION_MARKER in out
+        assert "s3cretpass" not in out
+        # Keyword-anchored redaction still fires when the VALUE is
+        # laced: the anchor consumes the whole whitespace token.
+        laced_value = _insert("correcthorsebatterystaple1", chr(0xFE0F), 8)
+        out = screening.screen(f"The password is {laced_value} ok.")
+        assert models.REDACTION_MARKER in out
+        assert not _recoverable(out, "correcthorsebatterystaple1")
