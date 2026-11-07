@@ -1,0 +1,645 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TW-941 Standing Display: Preview (fixture data)</title>
+<style>
+/**
+ * Twistor Social design tokens (TW-652).
+ * Machine-readable companion to design-system/social/README.md.
+ * Package shape mirrors the Twistor Trades package (TW-175):
+ * tokens.css + manifest.json + README, brand contract in prose.
+ *
+ * SCHEME DECISION (Sofia, TW-652): Social is a consumer product with its
+ * own face. It does NOT use the trades-rugged scheme (warm bone, concrete,
+ * safety orange): that language belongs to Twistor Trades jobsite
+ * surfaces. Social runs two schemes built from the two existing brand
+ * palettes in twistor_core.design_intelligence, over one shared spine:
+ *
+ *   DAY   - Arroz con Leche. Warm paper canvas, ink text, indigo-violet
+ *           as structure. The default for every member surface: feed,
+ *           groups, events, profile, ghost town, public index. Consumer
+ *           social products live in daylight and in every lighting
+ *           condition; a clean light scheme is the corporate-clean face
+ *           applied to a consumer app, and it keeps the broadest
+ *           audience (including older members) reading comfortably.
+ *   VENUE - Medianoche. Near-black canvas, warm white text, violet mist
+ *           accents, boosted type sizes. NOT a user theme toggle: the
+ *           app switches by context for the moments that physically
+ *           happen in dark rooms: Door Pass door mode (TW-647 2.3), the
+ *           live check-in session (TW-646 7.1 to 7.4), and the venue
+ *           verify result page (TW-647 3.2). Dark surfaces do not blast
+ *           the member's eyes or light up a room, and the contrast
+ *           headroom is what makes a result glanceable at arm's length.
+ *
+ * SINGLE SOURCE OF TRUTH: every hex below is drawn from the shared
+ * Twistor brand palettes (Medianoche, Arroz con Leche) and the shared
+ * brand tokens in frontend/design-system/tokens.css. Social invents no
+ * hexes. The indigo-violet family is the spine both Twistor faces share;
+ * it is what makes Social and Trades one brand with two faces, never two
+ * brands. Semantic state hues (valid, caution, danger) are the one
+ * extension: functional colors a door result cannot ship without, each
+ * contrast-verified in README.md and always paired with words and icon
+ * shape, never color alone.
+ *
+ * NOTE: like the Trades package, this file is a reference for agents and
+ * tooling generating brand-conformant UI. Runtime styling maps these
+ * tokens through the Astryx theme layer (pinned @astryxdesign/core
+ * 0.6.2, theme-neutral, per the house design split) and Tailwind
+ * utilities. The [data-social-scheme] attribute is the runtime switch.
+ *
+ * Prepared by Twistor Holdings LLC
+ */
+
+/* ------------------------------------------------------------------ */
+/* Shared spine: the brand tokens Social inherits unchanged            */
+/* ------------------------------------------------------------------ */
+:root {
+  /* Brand violet family (shared with every Twistor surface) */
+  --soc-violet: #7c5cff;        /* Indigo Violet: accent, focus on dark */
+  --soc-violet-deep: #4a2fd6;   /* Indigo Deep: primary action, structure */
+  --soc-violet-mist: #b9a8ff;   /* Violet Mist: accent text on dark */
+
+  /* Brand neutrals shared across schemes */
+  --soc-warm-white: #f5f2ea;    /* text on dark, text on violet-deep */
+  --soc-medianoche: #0b0b10;    /* near-black canvas (venue scheme) */
+  --soc-panel: #13131b;         /* raised surface on near-black */
+
+  /* Type: Fraunces for display, Inter for UI. Fraunces is Social's own
+     face (warm, editorial, consumer); Inter is the family body font it
+     shares with Trades. Space Grotesk stays on Trades surfaces. */
+  --soc-font-display: "Fraunces", Georgia, serif;
+  --soc-font-body: Inter, system-ui, -apple-system, sans-serif;
+
+  /* Thumb-first primitives (mobile is the primary surface, TW-646 S.1) */
+  --soc-touch-min: 48px;        /* smallest tappable target, ever */
+  --soc-touch-primary: 56px;    /* primary actions, door and loop CTAs */
+  --soc-touch-door: 72px;       /* door mode exit and confirm targets */
+  --soc-thumb-pad: 16px;        /* screen edge padding inside thumb arc */
+  --soc-action-bar-clearance: calc(76px + env(safe-area-inset-bottom));
+  --soc-radius-card: 16px;
+  --soc-radius-sheet: 24px;     /* bottom sheets, one-handed flows */
+  --soc-radius-pill: 9999px;
+
+  /* Type scale, mobile first (rem, 16px root) */
+  --soc-text-caption: 0.8125rem;  /* 13px: labels, band chips, timestamps */
+  --soc-text-body: 1rem;          /* 16px: never smaller for body copy */
+  --soc-text-lede: 1.125rem;      /* 18px: card titles, list leads */
+  --soc-text-title: 1.5rem;       /* 24px: screen titles */
+  --soc-text-display: 2rem;       /* 32px: Fraunces display moments */
+  /* Venue scheme boosts (glanceable at arm's length, in bar light) */
+  --soc-text-venue-body: 1.1875rem;   /* 19px */
+  --soc-text-venue-title: 1.75rem;    /* 28px */
+  --soc-text-door-band: 4.5rem;       /* 72px: the "21+" on a result page */
+  --soc-text-door-clock: 2.25rem;     /* 36px: tabular, server time */
+
+  /* Motion: 150 to 300ms eases, never bouncy (brand rule). The one
+     exception is functional, not decorative: the Door Pass animated
+     validity element (TW-647 3.2) is a security control whose motion
+     is the proof a screenshot is dead. It runs only on the verify
+     result page and in door mode. */
+  --soc-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --soc-motion-fast: 150ms;
+  --soc-motion-base: 250ms;
+
+  /* Focus: visible everywhere, both schemes (accessibility gate) */
+  --soc-focus-ring: 0 0 0 2px var(--soc-canvas), 0 0 0 5px var(--soc-violet-deep);
+}
+
+/* ------------------------------------------------------------------ */
+/* DAY scheme: Arroz con Leche. Default for all member surfaces.       */
+/* ------------------------------------------------------------------ */
+:root,
+[data-social-scheme="day"] {
+  --soc-canvas: #faf7f0;          /* Paper */
+  --soc-surface: #f1ece1;         /* Crema: cards, sheets, modals
+                                     (separated by line and shadow) */
+  --soc-ink: #1a1712;             /* primary text */
+  --soc-ink-dim: #6e675c;         /* Muted Clay: secondary text */
+  --soc-line: rgba(26, 23, 18, 0.12);
+  --soc-action: #4a2fd6;          /* Indigo Deep fills; warm white text */
+  --soc-action-text: #f5f2ea;
+  --soc-accent: #4a2fd6;          /* links, active states */
+  --soc-chip-bg: rgba(74, 47, 214, 0.08);
+
+  /* Standing (rewards catalog): Ledger Gold is the currency metal.
+     Standing is shown in gold so it never borrows a safety color. */
+  --soc-standing: #8a5a2b;        /* Cafecito: tier text on paper */
+  --soc-standing-fill: #c9a24b;   /* Ledger Gold: marks only, never a
+                                     text color or text background */
+
+  /* Semantic states: always paired with words and icon shape */
+  --soc-valid: #067647;           /* arrived, confirmed, valid */
+  --soc-caution: #b54708;         /* need a minute, expiring, waitlist */
+  --soc-danger: #b42318;          /* need help, not valid, report */
+  --soc-valid-text: #f5f2ea;      /* text on valid fill */
+
+  /* Age band chips (decision: Justynn, 2026-10-20). The chip states a
+     verified fact about the member, like the door check does. 21 plus
+     is green, the 18 to 20 band is black, teen accounts carry the word
+     TEEN on an outlined violet chip. There is deliberately NO chip
+     variant for restriction or sanction state: punishment is never
+     displayed anywhere in the product (pattern 00). */
+  --soc-chip-21-bg: #067647;      /* deep green fill */
+  --soc-chip-21-text: #f5f2ea;
+  --soc-chip-18-bg: #1a1712;      /* Ink: the black chip */
+  --soc-chip-18-text: #f5f2ea;
+  --soc-chip-18-line: transparent; /* day: the fill defines the edge */
+  --soc-chip-teen-line: #4a2fd6;  /* Indigo Deep outline */
+  --soc-chip-teen-text: #4a2fd6;
+}
+
+/* ------------------------------------------------------------------ */
+/* VENUE scheme: Medianoche. Context-switched, never a user toggle.    */
+/* Applies to: door mode, live check-in session, verify result page.   */
+/* ------------------------------------------------------------------ */
+[data-social-scheme="venue"] {
+  --soc-canvas: #0b0b10;          /* Medianoche */
+  --soc-surface: #13131b;         /* Panel: cards, sheets, modals
+                                     (separated by line and shadow) */
+  --soc-ink: #f5f2ea;             /* Warm White */
+  --soc-ink-dim: #a8a29a;         /* Muted Sand */
+  --soc-line: rgba(245, 242, 234, 0.14);
+  --soc-action: #7c5cff;          /* Indigo Violet fills on dark */
+  --soc-action-text: #f5f2ea;
+  --soc-accent: #b9a8ff;          /* Violet Mist */
+  --soc-chip-bg: rgba(185, 168, 255, 0.12);
+
+  --soc-standing: #f2b33d;        /* Chinola: tier text on near-black */
+  --soc-standing-fill: #c9a24b;   /* Ledger Gold holds across schemes */
+
+  --soc-valid: #32d583;           /* bright: reads across a doorway */
+  --soc-caution: #fdb022;
+  --soc-danger: #f97066;
+  --soc-valid-text: #0b0b10;      /* near-black text on the valid banner */
+
+  /* Age band chips, venue scheme (pattern 00). Green brightens for bar
+     light; the black chip keeps its black fill and gains a warm white
+     outline so it stays defined on a near-black canvas; the TEEN chip
+     outline and text move to Violet Mist. */
+  --soc-chip-21-bg: #32d583;
+  --soc-chip-21-text: #0b0b10;
+  --soc-chip-18-bg: #1a1712;
+  --soc-chip-18-text: #f5f2ea;
+  --soc-chip-18-line: #f5f2ea;
+  --soc-chip-teen-line: #b9a8ff;
+  --soc-chip-teen-text: #b9a8ff;
+}
+
+/* ------------------------------------------------------------------ */
+/* Reduced motion: the brand rule, plus the venue exception handled    */
+/* honestly: with motion off, the verify page leans on the ticking     */
+/* server clock and rotating scan word (TW-647 3.2), which are text,   */
+/* not animation, and keep working.                                    */
+/* ------------------------------------------------------------------ */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --soc-motion-fast: 0ms;
+    --soc-motion-base: 0ms;
+  }
+}
+
+/**
+ * Twistor Social component styles (TW-652).
+ * Components consume the --soc-* tokens only; no hex is hardcoded here.
+ * Token source: frontend/design-system/social/tokens.css (the Social
+ * design foundation). Schemes switch on [data-social-scheme]; the
+ * consent flow is a day-scheme surface (pattern 01: it happens at home,
+ * in daylight, before the first night out).
+ *
+ * Prepared by Twistor Holdings LLC
+ */
+
+.soc-screen {
+  background: var(--soc-canvas);
+  color: var(--soc-ink);
+  font-family: var(--soc-font-body);
+  font-size: var(--soc-text-body);
+  line-height: 1.5;
+  min-height: 100%;
+  padding: 24px var(--soc-thumb-pad) var(--soc-action-bar-clearance);
+  box-sizing: border-box;
+}
+
+.soc-screen__inner {
+  max-width: 560px;
+  margin: 0 auto;
+}
+
+.soc-step {
+  color: var(--soc-ink-dim);
+  font-size: var(--soc-text-caption);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin: 0 0 8px;
+}
+
+.soc-badge-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--soc-accent);
+  font-weight: 600;
+  font-size: var(--soc-text-lede);
+  margin: 0 0 12px;
+}
+
+.soc-badge-line svg {
+  flex: none;
+}
+
+.soc-title {
+  font-family: var(--soc-font-display);
+  font-size: var(--soc-text-title);
+  font-weight: 600;
+  line-height: 1.2;
+  margin: 0 0 12px;
+}
+
+.soc-lede {
+  font-size: var(--soc-text-lede);
+  margin: 0 0 24px;
+}
+
+.soc-body {
+  margin: 0 0 16px;
+}
+
+.soc-body--dim {
+  color: var(--soc-ink-dim);
+}
+
+.soc-section-title {
+  font-size: var(--soc-text-lede);
+  font-weight: 700;
+  margin: 28px 0 8px;
+}
+
+/* Fact and schedule rows: label in ink, explanation below. Rows sit on
+   the canvas; the schedule screen groups them on a Crema surface. */
+.soc-fact {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--soc-line);
+}
+
+.soc-fact:last-child {
+  border-bottom: none;
+}
+
+.soc-fact__label {
+  font-weight: 700;
+  margin: 0 0 4px;
+}
+
+.soc-fact__text {
+  color: var(--soc-ink-dim);
+  margin: 0;
+}
+
+.soc-panel {
+  background: var(--soc-surface);
+  border-radius: var(--soc-radius-card);
+  padding: 4px 20px;
+  margin: 0 0 8px;
+}
+
+.soc-panel .soc-fact__text {
+  /* Muted Clay on Crema: 4.74 to 1, AA (computed 2026-10-20). */
+  color: var(--soc-ink-dim);
+}
+
+.soc-link {
+  color: var(--soc-accent);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.soc-link:focus-visible,
+.soc-btn:focus-visible,
+.soc-attest input:focus-visible {
+  outline: none;
+  box-shadow: var(--soc-focus-ring);
+  border-radius: 6px;
+}
+
+/* Attestation: the written-release equivalent (TW-654 Section 1.4,
+   item 1a). A real checkbox, unchecked by default, in a thumb-height
+   row; the grant button stays disabled until it is checked. */
+.soc-attest {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  min-height: var(--soc-touch-primary);
+  padding: 14px 0;
+  cursor: pointer;
+}
+
+.soc-attest input {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  margin: 2px 0 0;
+  accent-color: var(--soc-action);
+}
+
+.soc-version-line {
+  color: var(--soc-ink-dim);
+  font-size: var(--soc-text-caption);
+  margin: 16px 0 0;
+}
+
+/* Bottom action bar (pattern 00): one filled primary, one text-weight
+   secondary. The decline action is always rendered, always labeled,
+   never hidden behind a menu or a greyed state. */
+.soc-action-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--soc-canvas);
+  border-top: 1px solid var(--soc-line);
+  padding: 12px var(--soc-thumb-pad) calc(12px + env(safe-area-inset-bottom));
+  box-sizing: border-box;
+  z-index: 20;
+}
+
+.soc-action-bar__inner {
+  max-width: 560px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.soc-btn {
+  font-family: var(--soc-font-body);
+  font-size: var(--soc-text-body);
+  border: none;
+  cursor: pointer;
+  border-radius: var(--soc-radius-card);
+  transition: opacity var(--soc-motion-fast) var(--soc-ease);
+}
+
+.soc-btn--primary {
+  background: var(--soc-action);
+  color: var(--soc-action-text);
+  font-weight: 700;
+  min-height: var(--soc-touch-primary);
+  padding: 0 24px;
+  width: 100%;
+}
+
+.soc-btn--primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.soc-btn--text {
+  background: transparent;
+  color: var(--soc-accent);
+  font-weight: 600;
+  min-height: var(--soc-touch-min);
+  padding: 0 16px;
+  align-self: center;
+}
+
+/* State banner: icon shape plus words, never color alone (pattern 00). */
+.soc-banner {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  border-radius: var(--soc-radius-card);
+  padding: 16px 20px;
+  margin: 0 0 20px;
+}
+
+.soc-banner svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.soc-banner--valid {
+  background: var(--soc-valid);
+  color: var(--soc-valid-text);
+}
+
+.soc-banner--caution {
+  background: var(--soc-surface);
+  color: var(--soc-ink);
+  border: 1.5px solid var(--soc-caution);
+}
+
+.soc-banner__text {
+  margin: 0;
+  font-weight: 600;
+}
+
+/* Age band chip (pattern 00, SocBandChip): exactly three variants.
+   There is deliberately no variant for restriction or sanction state:
+   punishment is never displayed anywhere in the product. */
+.soc-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 8px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: var(--soc-text-caption);
+}
+
+.soc-chip--glance {
+  min-height: 36px;
+  padding: 0 14px;
+  font-size: 1rem;
+}
+
+.soc-chip--21 {
+  background: var(--soc-chip-21-bg);
+  color: var(--soc-chip-21-text);
+}
+
+.soc-chip--18 {
+  background: var(--soc-chip-18-bg);
+  color: var(--soc-chip-18-text);
+  border: 1.5px solid var(--soc-chip-18-line);
+}
+
+.soc-chip--teen {
+  background: transparent;
+  color: var(--soc-chip-teen-text);
+  border: 1.5px solid var(--soc-chip-teen-line);
+}
+
+.soc-approved-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 0 0 12px;
+}
+
+/* Standing display (TW-941, pattern 06). Ledger Gold is the currency
+   metal: it appears here and on the collectible shelf, nowhere else.
+   Gold fill is a mark only; tier text uses the standing text token,
+   which carries AA contrast in both schemes. */
+.soc-standing__head {
+  margin: 0 0 8px;
+}
+
+.soc-standing__tier {
+  font-family: var(--soc-font-display);
+  font-size: var(--soc-text-display);
+  font-weight: 600;
+  line-height: 1.15;
+  color: var(--soc-standing);
+  margin: 12px 0 4px;
+}
+
+.soc-standing__meaning {
+  font-size: var(--soc-text-lede);
+  margin: 0 0 8px;
+}
+
+.soc-standing__showrate {
+  font-weight: 700;
+  margin: 0;
+}
+
+/* The ladder is a list, not a grid of cards: each rung carries its
+   own state word, and the gold mark fills only for earned and
+   current rungs. The future-phase rung (Verified) never fills. */
+.soc-ladder {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.soc-rung {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--soc-line);
+}
+
+.soc-rung:last-child {
+  border-bottom: none;
+}
+
+.soc-rung__mark {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-top: 5px;
+  border-radius: 50%;
+  border: 2px solid var(--soc-standing-fill);
+  box-sizing: border-box;
+}
+
+.soc-rung[data-state='earned'] .soc-rung__mark,
+.soc-rung[data-state='current'] .soc-rung__mark {
+  background: var(--soc-standing-fill);
+}
+
+.soc-rung__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.soc-rung__name {
+  font-weight: 700;
+}
+
+.soc-rung[data-state='current'] .soc-rung__name {
+  color: var(--soc-standing);
+}
+
+.soc-rung__state {
+  color: var(--soc-ink-dim);
+  font-size: var(--soc-text-caption);
+  font-weight: 600;
+}
+
+.soc-rung__note {
+  color: var(--soc-ink-dim);
+}
+
+/* Progress conditions: one fact per row (pattern 06). There is no
+   bar anywhere in this pattern; the words carry the progress. */
+.soc-conds,
+.soc-detail {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.soc-cond {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  align-items: baseline;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--soc-line);
+}
+
+.soc-cond:last-child {
+  border-bottom: none;
+}
+
+.soc-cond__label {
+  font-weight: 700;
+  flex: 1 1 10rem;
+}
+
+.soc-cond__status {
+  font-weight: 700;
+  color: var(--soc-standing);
+}
+
+.soc-detail li {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--soc-line);
+}
+
+.soc-detail li:last-child {
+  border-bottom: none;
+}
+
+/* Desktop layer: Social is mobile first, and the standing surface
+   widens its fact rows on larger viewports without changing order
+   or content (the SocScreen column cap still governs reading width
+   for the header; the ladder and record use the extra room). */
+@media (min-width: 768px) {
+  .soc-cond {
+    flex-wrap: nowrap;
+  }
+
+  .soc-cond__fact {
+    flex: 1 1 auto;
+  }
+}
+
+body { margin: 0; background: #ddd6c4; font-family: Inter, system-ui, sans-serif; }
+header { padding: 20px; }
+.frame-wrap { display: inline-block; vertical-align: top; margin: 12px; }
+.frame-wrap figcaption { font-weight: 700; padding: 6px 2px; }
+.phone { width: 390px; border: 1px solid rgba(26,23,18,.25); border-radius: 12px; overflow: hidden; }
+.phone .soc-screen { min-height: auto; }
+</style></head>
+<body>
+<header><h1>TW-941 standing display preview</h1>
+<p>Fixture data mirroring the documented tier and progress contract. Prepared by Twistor Holdings LLC.</p></header>
+<figure class="frame-wrap"><figcaption>EN · newMember (fixture data)</figcaption><div class="phone"><main class="soc-screen" data-social-scheme="day"><div class="soc-screen__inner"><h1 class="soc-title">Your standing</h1><div class="soc-standing"><div class="soc-standing__head"><span class="soc-chip soc-chip--21" role="img" aria-label="Age band: 21 plus">21+</span><h2 class="soc-standing__tier">No standing tier yet</h2><p class="soc-standing__meaning">Your first tier is Regular. You earn it by showing up.</p><p class="soc-standing__showrate">New: still building a record</p></div><section aria-labelledby="soc-ladder-title"><h3 id="soc-ladder-title" class="soc-section-title">The ladder</h3><ol class="soc-ladder"><li class="soc-rung" data-rung="verified" data-state="future"><span class="soc-rung__mark" aria-hidden="true"></span><span class="soc-rung__body"><span class="soc-rung__name">Verified</span><span class="soc-rung__state">Coming in a later phase</span><span class="soc-rung__note">Door verification is part of the design for Twistor Social, planned for a later phase. It is not live yet, and it is not a tier you can earn today.</span></span></li><li class="soc-rung" data-rung="regular" data-state="next"><span class="soc-rung__mark" aria-hidden="true"></span><span class="soc-rung__body"><span class="soc-rung__name">Regular</span><span class="soc-rung__state">Next</span></span></li><li class="soc-rung" data-rung="fixture" data-state="upcoming"><span class="soc-rung__mark" aria-hidden="true"></span><span class="soc-rung__body"><span class="soc-rung__name">Fixture</span><span class="soc-rung__state">Not yet</span></span></li><li class="soc-rung" data-rung="pillar" data-state="upcoming"><span class="soc-rung__mark" aria-hidden="true"></span><span class="soc-rung__body"><span class="soc-rung__name">Pillar</span><span class="soc-rung__state">Not yet</span></span></li><li class="soc-rung" data-rung="keyholder" data-state="upcoming"><span class="soc-rung__mark" aria-hidden="true"></span><span class="soc-rung__body"><span class="soc-rung__name">Keyholder</span><span class="soc-rung__state">Not yet</span></span></li></ol></section><section aria-labelledby="soc-next-title"><h3 id="soc-next-title" class="soc-section-title">Next: Regular</h3><ul class="soc-conds"><li class="soc-cond" data-condition="nights" data-met="false"><span class="soc-cond__label">Nights out</span><span class="soc-cond__fact"><span>3 of 5</span></span><span class="soc-cond__status">2 to go</span></li></ul></section><section aria-labelledby="soc-detail-title"><h3 id="soc-detail-title" class="soc-section-title">Your record</h3><ul class="soc-detail"><li>3 completed nights out</li><li>New: still building a record</li><li>No reviews yet</li><li>0 hosted rooms that ran clean</li><li>Best series streak: 1 in a row</li><li>0 vouches from members you shared a room with</li><li>21 days as a member</li></ul></section></div></div></main></div></figure>
+<figure class="frame-wrap"><figcaption>EN · regularClimbing (fixture data)</figcaption><div class="phone"><main class="soc-screen" data-social-scheme="day"><div class="soc-screen__inner"><h1 class="soc-title">Your standing</h1><div class="soc-standing"><div class="soc-standing__head"><span class="soc-chip soc-chip--18" role="img" aria-label="Age band: 18 to 20">18+</span><h2 class="soc-standing__tier">Regular</h2><p class="soc-standing__meaning">You come around. People have seen your face more than once.</p><p class="soc-standing__showrate">Shows up: 92 percent</p></div><section aria-labelledby="soc-ladder-title"><h3 id="soc-ladder-title" class="soc-section-title">The ladder</h3><ol class="soc-ladder"><li class="soc-rung" data-rung="verified" data-state="future"><span class="soc-rung__mark" aria-hidden="true"></span><span class="soc-rung__body"><span class="soc-rung__name">Verified</span><span class="soc-rung__state">Coming in a later phase</span><span class="soc-rung__note">Door verification is part of the design for Twistor Social, planned for a later phase. It is not live yet, and it is not a tier you can earn today.</span></span></li><li class="soc-rung" data-rung="regular" data-state="current"><span class="soc-rung__mark" aria-hidden="true"></span><span class="soc-rung__body"><span class="soc-rung__name">Regular</span><span class="soc-rung__state">Current</span></span></li><li class="soc-rung" data-rung="fixture" data-state="next"><span class="soc-rung__mark" aria-hidden="true"></span><span class="soc-rung__body"><span class="soc-rung__name">Fixture</span><span class="soc-rung__state">Next</span></span></li><li class="soc-rung" data-rung="pillar" data-state="upcoming"><span class="soc-rung__mark" aria-hidden="true"></span><span class="soc-rung__body"><span class="soc-rung__name">Pillar</span><span class="soc-rung__state">Not yet</span></span></li><li class="soc-rung" data-rung="keyholder" data-state="upcoming"><span class="soc-rung__mark" aria-hidden="true"></span><span class="soc-rung__body"><span class="soc-rung__name">Keyholder</span><span class="soc-rung__state">Not yet</span></span></li></ol></section><section aria-labelledby="soc-next-title"><h3 id="soc-next-title" class="soc-section-title">Next: Fixture</h3><ul class="soc-conds"><li class="soc-cond" data-condition="nights" data-met="false"><span class="soc-cond__label">Nights out</span><span class="soc-cond__fact"><span>12 of 20</span></span><span class="soc-cond__status">8 to go</span></li><li class="soc-cond" data-condition="showRate" data-met="true"><span class="soc-cond__label">Show rate</span><span class="soc-cond__fact"><span>92 percent of 85 percent</span></span><span class="soc-cond__status">Done</span></li><li class="soc-cond" data-condition="corroboration" data-met="false"><span class="soc-cond__label">A series streak or vouches</span><span class="soc-cond__fact"><span><span>Series streak: 2 of 4</span> or <span>Vouches from members you shared a room with: 1 of 3</span></span></span></li></ul></section><section aria-labelledby="soc-detail-title"><h3 id="soc-detail-title" class="soc-section-title">Your record</h3><ul class="soc-detail"><li>12 completed nights out</li><li>Shows up: 92 percent (12 of 13 RSVPs)</li><li>Would meet again: 100 percent across 4 reviews</li><li>0 hosted rooms that ran clean</li><li>Best series streak: 2 in a row</li><li>1 vouches from members you shared a room with</li><li>74 days as a member</li></ul></section></div></div></main></div></figure>
+<figure class="frame-wrap"><figcaption>EN · keyholder (fixture data)</figcaption><div class="phone"><main class="soc-screen" data-social-scheme="day"><div class="soc-screen__inner"><h1 class="soc-title">Your standing</h1><div class="soc-standing"><div class="soc-standing__head"><span class="soc-chip soc-chip--21" role="img" aria-label="Age band: 21 plus">21+</span><h2 class="soc-standing__tier">Keyholder</h2><p class="soc-standing__meaning">Your name opens doors, including for other people.</p><p class="soc-standing__showrate">Shows up: 93 percent</p></div><section aria-labelledby="soc-ladder-title"><h3 id="soc-ladder-title" class="soc-section-title">The ladder</h3><ol class="soc-ladder"><li class="soc-rung" data-rung="verified" data-state="future"><span class="soc-rung__mark" aria-hidden="true"></span><span class="soc-rung__body"><span class="soc-rung__name">Verified</span><span class="soc-rung__state">Coming in a later phase</span><span class="soc-rung__note">Door verification is part of the design for Twistor Social, planned for a later phase. It is not live yet, and it is not a tier you can earn today.</span></span></li><li class="soc-rung" data-rung="regular" data-state="earned"><span class="soc-rung__mark" aria-hidden="true"></span><span class="soc-rung__body"><span class="soc-rung__name">Regular</span><span class="soc-rung__state">Earned</span></span></li><li class="soc-rung" data-rung="fixture" data-state="earned"><span class="soc-rung__mark" aria-hidden="true"></span><span class="soc-rung__body"><span class="soc-rung__name">Fixture</span><span class="soc-rung__state">Earned</span></span></li><li class="soc-rung" data-rung="pillar" data-state="earned"><span class="soc-rung__mark" aria-hidden="true"></span><span class="soc-rung__body"><span class="soc-rung__name">Pillar</span><span class="soc-rung__state">Earned</span></span></li><li class="soc-rung" data-rung="keyholder" data-state="current"><span class="soc-rung__mark" aria-hidden="true"></span><span class="soc-rung__body"><span class="soc-rung__name">Keyholder</span><span class="soc-rung__state">Current</span></span></li></ol></section><p class="soc-body">Keyholder is the top of the ladder. There is no rung above it.</p><section aria-labelledby="soc-detail-title"><h3 id="soc-detail-title" class="soc-section-title">Your record</h3><ul class="soc-detail"><li>82 completed nights out</li><li>Shows up: 93 percent (82 of 88 RSVPs)</li><li>Would meet again: 97 percent across 34 reviews</li><li>17 hosted rooms that ran clean</li><li>Best series streak: 9 in a row</li><li>6 vouches from members you shared a room with</li><li>240 days as a member</li></ul><p class="soc-body soc-body--dim">Your standing last moved because you went quiet.</p></section></div></div></main></div></figure>
+<figure class="frame-wrap"><figcaption>EN · suspendedFixture (fixture data)</figcaption><div class="phone"><main class="soc-screen" data-social-scheme="day"><div class="soc-screen__inner"><h1 class="soc-title">Your standing</h1><div class="soc-standing"><div class="soc-standing__head"><span class="soc-chip soc-chip--21" role="img" aria-label="Age band: 21 plus">21+</span></div><section aria-labelledby="soc-suspended-title"><h2 id="soc-suspended-title" class="soc-section-title">Your standing is paused</h2><p class="soc-body">While your safety band is watch, your tier is not shown and its rewards stay off. Your record below is still yours to see. Standing returns when the band recovers through conduct and time.</p></section><section aria-labelledby="soc-detail-title"><h3 id="soc-detail-title" class="soc-section-title">Your record</h3><ul class="soc-detail"><li>26 completed nights out</li><li>Shows up: 90 percent (26 of 29 RSVPs)</li><li>Would meet again: 89 percent across 9 reviews</li><li>2 hosted rooms that ran clean</li><li>Best series streak: 5 in a row</li><li>3 vouches from members you shared a room with</li><li>130 days as a member</li></ul><p class="soc-body soc-body--dim">Your standing last moved because of conduct.</p></section></div></div></main></div></figure>
+<figure class="frame-wrap"><figcaption>ES · newMember (fixture data)</figcaption><div class="phone"><main class="soc-screen" data-social-scheme="day"><div class="soc-screen__inner"><h1 class="soc-title">Tu posición</h1><div class="soc-standing"><div class="soc-standing__head"><span class="soc-chip soc-chip--21" role="img" aria-label="Banda de edad: 21 o más">21+</span><h2 class="soc-standing__tier">Todavía no tienes nivel de posición</h2><p class="soc-standing__meaning">Tu primer nivel es Habitual. Lo ganas presentándote.</p><p class="soc-standing__showrate">Nuevo: todavía estás creando tu historial</p></div><section aria-labelledby="soc-ladder-title"><h3 id="soc-ladder-title" class="soc-section-title">La escalera</h3><ol class="soc-ladder"><li class="soc-rung" data-rung="verified" data-state="future"><span class="soc-rung__mark" aria-hidden="true"></span><span class="soc-rung__body"><span class="soc-rung__name">Verificado</span><span class="soc-rung__state">Llega en una fase posterior</span><span class="soc-rung__note">La verificación en la puerta es parte del diseño de Twistor Social, prevista para una fase posterior. Todavía no está activa y no es un nivel que puedas ganar hoy.</span></span></li><li class="soc-rung" data-rung="regular" data-state="next"><span class="soc-rung__mark" aria-hidden="true"></span><span class="soc-rung__body"><span class="soc-rung__name">Habitual</span><span class="soc-rung__state">Siguiente</span></span></li><li class="soc-rung" data-rung="fixture" data-state="upcoming"><span class="soc-rung__mark" aria-hidden="true"></span><span class="soc-rung__body"><span class="soc-rung__name">De la casa</span><span class="soc-rung__state">Todavía no</span></span></li><li class="soc-rung" data-rung="pillar" data-state="upcoming"><span class="soc-rung__mark" aria-hidden="true"></span><span class="soc-rung__body"><span class="soc-rung__name">Pilar</span><span class="soc-rung__state">Todavía no</span></span></li><li class="soc-rung" data-rung="keyholder" data-state="upcoming"><span class="soc-rung__mark" aria-hidden="true"></span><span class="soc-rung__body"><span class="soc-rung__name">Llave maestra</span><span class="soc-rung__state">Todavía no</span></span></li></ol></section><section aria-labelledby="soc-next-title"><h3 id="soc-next-title" class="soc-section-title">Siguiente: Habitual</h3><ul class="soc-conds"><li class="soc-cond" data-condition="nights" data-met="false"><span class="soc-cond__label">Noches completadas</span><span class="soc-cond__fact"><span>3 de 5</span></span><span class="soc-cond__status">Faltan 2</span></li></ul></section><section aria-labelledby="soc-detail-title"><h3 id="soc-detail-title" class="soc-section-title">Tu historial</h3><ul class="soc-detail"><li>3 noches completadas</li><li>Nuevo: todavía estás creando tu historial</li><li>Todavía no hay reseñas</li><li>0 eventos organizados que salieron bien</li><li>Mejor racha de serie: 1 seguidas</li><li>0 avales de miembros con quienes compartiste un lugar</li><li>21 días como miembro</li></ul></section></div></div></main></div></figure>
+<figure class="frame-wrap"><figcaption>ES · regularClimbing (fixture data)</figcaption><div class="phone"><main class="soc-screen" data-social-scheme="day"><div class="soc-screen__inner"><h1 class="soc-title">Tu posición</h1><div class="soc-standing"><div class="soc-standing__head"><span class="soc-chip soc-chip--18" role="img" aria-label="Banda de edad: de 18 a 20">18+</span><h2 class="soc-standing__tier">Habitual</h2><p class="soc-standing__meaning">Vienes seguido. La gente ya te ha visto más de una vez.</p><p class="soc-standing__showrate">Se presenta: 92 por ciento</p></div><section aria-labelledby="soc-ladder-title"><h3 id="soc-ladder-title" class="soc-section-title">La escalera</h3><ol class="soc-ladder"><li class="soc-rung" data-rung="verified" data-state="future"><span class="soc-rung__mark" aria-hidden="true"></span><span class="soc-rung__body"><span class="soc-rung__name">Verificado</span><span class="soc-rung__state">Llega en una fase posterior</span><span class="soc-rung__note">La verificación en la puerta es parte del diseño de Twistor Social, prevista para una fase posterior. Todavía no está activa y no es un nivel que puedas ganar hoy.</span></span></li><li class="soc-rung" data-rung="regular" data-state="current"><span class="soc-rung__mark" aria-hidden="true"></span><span class="soc-rung__body"><span class="soc-rung__name">Habitual</span><span class="soc-rung__state">Actual</span></span></li><li class="soc-rung" data-rung="fixture" data-state="next"><span class="soc-rung__mark" aria-hidden="true"></span><span class="soc-rung__body"><span class="soc-rung__name">De la casa</span><span class="soc-rung__state">Siguiente</span></span></li><li class="soc-rung" data-rung="pillar" data-state="upcoming"><span class="soc-rung__mark" aria-hidden="true"></span><span class="soc-rung__body"><span class="soc-rung__name">Pilar</span><span class="soc-rung__state">Todavía no</span></span></li><li class="soc-rung" data-rung="keyholder" data-state="upcoming"><span class="soc-rung__mark" aria-hidden="true"></span><span class="soc-rung__body"><span class="soc-rung__name">Llave maestra</span><span class="soc-rung__state">Todavía no</span></span></li></ol></section><section aria-labelledby="soc-next-title"><h3 id="soc-next-title" class="soc-section-title">Siguiente: De la casa</h3><ul class="soc-conds"><li class="soc-cond" data-condition="nights" data-met="false"><span class="soc-cond__label">Noches completadas</span><span class="soc-cond__fact"><span>12 de 20</span></span><span class="soc-cond__status">Faltan 8</span></li><li class="soc-cond" data-condition="showRate" data-met="true"><span class="soc-cond__label">Tasa de asistencia</span><span class="soc-cond__fact"><span>92 por ciento de 85 por ciento</span></span><span class="soc-cond__status">Cumplido</span></li><li class="soc-cond" data-condition="corroboration" data-met="false"><span class="soc-cond__label">Una racha de serie o avales</span><span class="soc-cond__fact"><span><span>Racha de serie: 2 de 4</span> o <span>Avales de miembros con quienes compartiste un lugar: 1 de 3</span></span></span></li></ul></section><section aria-labelledby="soc-detail-title"><h3 id="soc-detail-title" class="soc-section-title">Tu historial</h3><ul class="soc-detail"><li>12 noches completadas</li><li>Se presenta: 92 por ciento (12 de 13 confirmaciones)</li><li>Volvería a verte: 100 por ciento en 4 reseñas</li><li>0 eventos organizados que salieron bien</li><li>Mejor racha de serie: 2 seguidas</li><li>1 avales de miembros con quienes compartiste un lugar</li><li>74 días como miembro</li></ul></section></div></div></main></div></figure>
+<figure class="frame-wrap"><figcaption>ES · keyholder (fixture data)</figcaption><div class="phone"><main class="soc-screen" data-social-scheme="day"><div class="soc-screen__inner"><h1 class="soc-title">Tu posición</h1><div class="soc-standing"><div class="soc-standing__head"><span class="soc-chip soc-chip--21" role="img" aria-label="Banda de edad: 21 o más">21+</span><h2 class="soc-standing__tier">Llave maestra</h2><p class="soc-standing__meaning">Tu nombre abre puertas, también para otras personas.</p><p class="soc-standing__showrate">Se presenta: 93 por ciento</p></div><section aria-labelledby="soc-ladder-title"><h3 id="soc-ladder-title" class="soc-section-title">La escalera</h3><ol class="soc-ladder"><li class="soc-rung" data-rung="verified" data-state="future"><span class="soc-rung__mark" aria-hidden="true"></span><span class="soc-rung__body"><span class="soc-rung__name">Verificado</span><span class="soc-rung__state">Llega en una fase posterior</span><span class="soc-rung__note">La verificación en la puerta es parte del diseño de Twistor Social, prevista para una fase posterior. Todavía no está activa y no es un nivel que puedas ganar hoy.</span></span></li><li class="soc-rung" data-rung="regular" data-state="earned"><span class="soc-rung__mark" aria-hidden="true"></span><span class="soc-rung__body"><span class="soc-rung__name">Habitual</span><span class="soc-rung__state">Ganado</span></span></li><li class="soc-rung" data-rung="fixture" data-state="earned"><span class="soc-rung__mark" aria-hidden="true"></span><span class="soc-rung__body"><span class="soc-rung__name">De la casa</span><span class="soc-rung__state">Ganado</span></span></li><li class="soc-rung" data-rung="pillar" data-state="earned"><span class="soc-rung__mark" aria-hidden="true"></span><span class="soc-rung__body"><span class="soc-rung__name">Pilar</span><span class="soc-rung__state">Ganado</span></span></li><li class="soc-rung" data-rung="keyholder" data-state="current"><span class="soc-rung__mark" aria-hidden="true"></span><span class="soc-rung__body"><span class="soc-rung__name">Llave maestra</span><span class="soc-rung__state">Actual</span></span></li></ol></section><p class="soc-body">Llave maestra es lo más alto de la escalera. No hay ningún nivel por encima.</p><section aria-labelledby="soc-detail-title"><h3 id="soc-detail-title" class="soc-section-title">Tu historial</h3><ul class="soc-detail"><li>82 noches completadas</li><li>Se presenta: 93 por ciento (82 de 88 confirmaciones)</li><li>Volvería a verte: 97 por ciento en 34 reseñas</li><li>17 eventos organizados que salieron bien</li><li>Mejor racha de serie: 9 seguidas</li><li>6 avales de miembros con quienes compartiste un lugar</li><li>240 días como miembro</li></ul><p class="soc-body soc-body--dim">Tu posición se movió por última vez porque dejaste de venir.</p></section></div></div></main></div></figure>
+<figure class="frame-wrap"><figcaption>ES · suspendedFixture (fixture data)</figcaption><div class="phone"><main class="soc-screen" data-social-scheme="day"><div class="soc-screen__inner"><h1 class="soc-title">Tu posición</h1><div class="soc-standing"><div class="soc-standing__head"><span class="soc-chip soc-chip--21" role="img" aria-label="Banda de edad: 21 o más">21+</span></div><section aria-labelledby="soc-suspended-title"><h2 id="soc-suspended-title" class="soc-section-title">Tu posición está en pausa</h2><p class="soc-body">Mientras tu banda de seguridad sea observación, tu nivel no se muestra y sus beneficios quedan desactivados. Tu historial, abajo, sigue siendo tuyo. La posición vuelve cuando la banda se recupera con conducta y tiempo.</p></section><section aria-labelledby="soc-detail-title"><h3 id="soc-detail-title" class="soc-section-title">Tu historial</h3><ul class="soc-detail"><li>26 noches completadas</li><li>Se presenta: 90 por ciento (26 de 29 confirmaciones)</li><li>Volvería a verte: 89 por ciento en 9 reseñas</li><li>2 eventos organizados que salieron bien</li><li>Mejor racha de serie: 5 seguidas</li><li>3 avales de miembros con quienes compartiste un lugar</li><li>130 días como miembro</li></ul><p class="soc-body soc-body--dim">Tu posición se movió por última vez por conducta.</p></section></div></div></main></div></figure>
+</body></html>
