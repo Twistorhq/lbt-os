@@ -5,8 +5,11 @@ recurring series, RSVPs, and the location reveal, over the merged
 rsn_ schema (TW-650), plus the member-facing read of the TW-651 gold
 events index. TW-673 adds the Phase 5 safety check-in loop below
 (geo arrival, encounter confirms, welfare checks, write-ups, and
-the standing recompute). Profiles remain a later Phase 4 slice;
-reports are Phase 6 and that stub still raises honestly.
+the standing recompute). TW-941 adds the feed (posts, comments,
+reactions, celebrations), the rewards read (tier + progress from
+the same projection), and report intake into rsn_reports (the
+safety queue the TW-940 Safety Desk triages). Profiles remain a
+later Phase 4 slice.
 
 Contracts (from the TW-650 skeleton, unchanged):
 
@@ -57,7 +60,7 @@ from uuid import UUID, uuid4
 
 from dateutil.rrule import rrulestr
 
-from . import models, safety
+from . import models, rewards, safety
 
 log = logging.getLogger(__name__)
 
@@ -2437,11 +2440,12 @@ def my_review_summary(db, user_id: UUID, *, now=None) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def recompute_member_standing(db, user_id: UUID | str, *, now=None) -> dict:
+def _project_member_stats(db, uid: str, now: datetime):
+    """Project one member's loop records into (MemberStats,
+    dormant_days, ledger). Pure I/O: no writes, no tier decision
+    (trust.py decides), no stored-row trust."""
     from . import trust
 
-    uid = str(user_id)
-    now = _resolve_now(now)
     events = {r["id"]: r for r in _fetch(db, "rsn_events")}
     my_rsvps = _fetch(db, "rsn_rsvps", user_id=uid)
     my_checkins = _fetch(db, "rsn_checkins", user_id=uid)
@@ -2589,6 +2593,15 @@ def recompute_member_standing(db, user_id: UUID | str, *, now=None) -> dict:
             signals.append(ts)
     dormant_days = max(0, (now - max(signals)).days) if signals else 0
 
+    return stats, dormant_days, ledger
+
+
+def recompute_member_standing(db, user_id: UUID | str, *, now=None) -> dict:
+    from . import trust
+
+    uid = str(user_id)
+    now = _resolve_now(now)
+    stats, dormant_days, ledger = _project_member_stats(db, uid, now)
     earned = trust.earned_tier(stats)
     result = trust.compute_standing(stats, dormant_days=dormant_days)
     score = sum(float(e.get("weight") or 0) for e in ledger)
@@ -2612,88 +2625,512 @@ def recompute_member_standing(db, user_id: UUID | str, *, now=None) -> dict:
         "band": result.band,
         "suspended": result.suspended,
         "score": score,
-        "completed_nights": completed_nights,
-        "no_shows": no_shows,
+        "completed_nights": stats.completed_nights,
+        "no_shows": stats.no_shows,
         "show_rate": trust.show_rate(stats),
         "would_meet_again_rate": trust.would_meet_again_rate(stats),
-        "hosted_clean": hosted_clean,
-        "best_series_streak": best_streak,
+        "hosted_clean": stats.hosted_clean,
+        "best_series_streak": stats.best_series_streak,
         "dormant_days": dormant_days,
     }
 
 
 # ---------------------------------------------------------------------------
-# Safety Desk (TW-940, Phase 6 minimum for the Jan 1 Denver launch)
+# The feed (TW-941; spec Sections 4, 5.9-5.11, pattern 03).
 #
-# Interim trust model (Justynn's ruling, TW-937): no live identity
-# verification at launch; accountability is behavioral (standing,
-# strikes, bans). Nothing in this section touches verification,
-# weakens the Section 5.9 age-band fail-closed rules, or widens
-# ghost-town scope: desk endpoints are staff machinery and owner-
-# scoped disclosure reads, never member surfaces, and they return
-# no age-rated content.
-#
-# AUTHORIZATION (security-relevant; for Rosa's review and Rex's
-# posture pass):
-# - Staff: an rsn_safety_staff row (migration_social_v3, shipped
-#   UNAPPLIED with this change) with status 'active'. Role 'staff'
-#   may triage, sanction (strike / suspend / restrict), build
-#   evidence packets, and intake external disclosures. Role
-#   'safety_lead' additionally may issue bans, decide appeals,
-#   set legal holds, and decide external disclosures. No row or a
-#   non-active row is not staff: fail closed. Desk accounts are
-#   provisioned by hand into that table; there is no self-service
-#   path to a desk role.
-# - Ambassadors: an rsn_ambassadors row with status 'active'
-#   (TW-648 scope). They may list / claim only categories that
-#   safety.ambassador_may_triage allows AND whose case metro is
-#   their metro (an unresolvable metro fails closed to staff),
-#   and may only resolve as 'unfounded' or 'escalated'. They may
-#   never sanction, ban, touch evidence, decide appeals, or
-#   answer disclosures.
-# - A reviewer never claims or decides their own case: the
-#   reporter cannot claim their own report, the SUBJECT of a
-#   report cannot claim or resolve their own case at all (fix
-#   round 1: the subject refusal is total, not reporter-only), a
-#   sanction's issuer can neither acknowledge nor decide its
-#   appeal (fresh reviewer, Section 6.6), and nobody sanctions or
-#   bans themselves through a case. Appeal decisions additionally
-#   require safety_lead, the same grade that issues bans.
-# - All desk authorization routes through _require_desk (triage
-#   included, ambassadors via its ambassador branch): a banned or
-#   suspended desk actor loses desk power, triage included. The
-#   disclosure staff view carries the same gate, and a staff
-#   member who is the case subject gets the subject view instead.
-# - Appeal intake is the one desk write open to a banned or
-#   suspended member: due process requires it. It grants no voice
-#   anywhere else; _require_voice still refuses every other write.
-#
-# AUDIT: every desk action below writes rsn_audit_log with the
-# actor's user id, a dotted action name, the target, and the
-# sha256 of a detail string. That includes the sensitive reads:
-# the triage queue list, the appeals list, evidence packet reads,
-# and every disclosure view (the audience is the detail). Raw
-# notes never enter the audit log; they live on their case rows
-# (resolution_note, sanction / ban note, appeal outcome_note),
-# which are staff-side only. Subject disclosure views project
-# sanctions and bans without the note or issued_by.
-#
-# ENFORCEMENT HOOKS: bans write rsn_bans rows keyed by identity
-# anchor, which get_member_context already enforces (platform
-# scope, unlifted). Sanctions write rsn_sanctions rows;
-# get_member_context now also resolves active 'suspension' rows
-# (voice removed until expiry) and 'restriction' rows (hosting
-# and RSVP removed) from them. A strike additionally writes the
-# identity_strike trust event the standing job already counts.
-# Sanctions and bans are anchored: a subject with no identity
-# anchor cannot be sanctioned through the desk (ConflictError),
-# because an unanchored sanction could never be enforced.
+# Chronological only: there is no ranking and no engagement economy
+# (Section 7.5), so the feed is a bulletin of a real social life in
+# time order. A post carries no rating of its own: visibility
+# inherits its container's rating, enforced here at the query
+# layer, before any count or page is produced. The ghost town has
+# no feed surface at all (Section 5.11's closed list contains no
+# feed): skeleton viewers are refused on reads and writes alike.
+# Audience scope composes with the band filter; neither substitutes
+# for the other. Celebrations are system-generated (catalog
+# Section 4): the member API refuses them, and the system path
+# honors the member's standing-display toggle.
 # ---------------------------------------------------------------------------
+
+FEED_DEFAULT_LIMIT = 50
+FEED_MAX_LIMIT = 100
+
+
+def _post_out(db, post: dict, ctx: MemberContext) -> dict:
+    reactions = _fetch(db, "rsn_reactions", post_id=post["id"])
+    counts = {"like": 0, "congrats": 0, "celebrate": 0}
+    viewer_kinds = []
+    for row in reactions:
+        if row.get("kind") in counts:
+            counts[row["kind"]] += 1
+        if row.get("user_id") == ctx.user_id:
+            viewer_kinds.append(row.get("kind"))
+    comments = _fetch(db, "rsn_comments", post_id=post["id"])
+    return {
+        "id": post["id"],
+        "author_id": post["author_id"],
+        "group_id": post.get("group_id"),
+        "post_type": post["post_type"],
+        "body": post["body"],
+        "media_refs": post.get("media_refs") or [],
+        "visibility": post["visibility"],
+        "audience_scope": post.get("audience_scope") or "group",
+        "created_at": _iso(post.get("created_at")),
+        "reaction_counts": counts,
+        "viewer_reactions": sorted(viewer_kinds),
+        "comment_count": sum(1 for c in comments if c.get("status") == "published"),
+    }
+
+
+def _can_view_post(db, ctx: MemberContext, post: dict) -> bool:
+    """The feed's fail-closed visibility predicate. Mirrors the
+    event rules (_can_view_event) with the author in the host's
+    place; a post in no container (metro) fails closed on the
+    author's own band, and the teen wall holds in both directions
+    there, because no container rating mediates it."""
+    if ctx.is_skeleton:
+        return False
+    author_id = post["author_id"]
+    if _blocked_between(db, ctx.user_id, author_id):
+        return False
+    if ctx.user_id == author_id:
+        return True
+    scope = post.get("audience_scope") or "group"
+    if post.get("visibility") == "connections" and scope == "group":
+        scope = "connections"
+    group = None
+    if post.get("group_id"):
+        group = _fetch_one(db, "rsn_groups", id=post["group_id"])
+        if group is None or not _group_visible_to_member(db, ctx, group):
+            return False
+        membership = _membership(db, group["id"], ctx.user_id)
+        is_member = membership is not None and membership.get("status") == "active"
+        if group["visibility"] in ("private", "hidden") and not is_member:
+            return False
+        if scope == "group":
+            # A group post surfaced to the metro reaches any member
+            # who passes the container's band wall; a group-scoped
+            # post stays inside the room.
+            return post.get("visibility") == "metro" or is_member
+        if scope == "close_friends":
+            return _is_close_friend(db, author_id, ctx.user_id)
+        # connections: members, the author's close friends, and
+        # members couple-linked to the author or an active member.
+        if is_member or _is_close_friend(db, author_id, ctx.user_id):
+            return True
+        partners = _couple_partner_ids(db, ctx.user_id)
+        return bool(partners & (set(_active_member_ids(db, group["id"])) | {author_id}))
+    # Metro post, no container: fail closed on the author's band.
+    author_ctx = get_member_context(db, author_id)
+    if author_ctx.band_rank == 0:
+        return False
+    if (ctx.band == "age_16_17") != (author_ctx.band == "age_16_17"):
+        return False
+    if ctx.band_rank < author_ctx.band_rank:
+        return False
+    if scope == "close_friends":
+        return _is_close_friend(db, author_id, ctx.user_id)
+    if scope == "connections":
+        return _is_close_friend(
+            db, author_id, ctx.user_id
+        ) or author_id in _couple_partner_ids(db, ctx.user_id)
+    return True
+
+
+def create_post(db, user_id: UUID, payload: models.PostCreate, *, now=None) -> dict:
+    ctx = get_member_context(db, user_id)
+    _require_voice(ctx)
+    if payload.post_type != "update":
+        raise ForbiddenError(
+            "celebrations and recaps are system-generated from loop "
+            "records; members post updates"
+        )
+    group = None
+    if payload.group_id is not None:
+        group = _fetch_one(db, "rsn_groups", id=str(payload.group_id))
+        if group is None or not _group_visible_to_member(db, ctx, group):
+            raise NotFoundError()
+        membership = _membership(db, group["id"], ctx.user_id)
+        if membership is None or membership.get("status") != "active":
+            raise ForbiddenError("only active group members post in the group")
+    elif payload.visibility != "metro":
+        raise ForbiddenError("a post with no group is a metro post")
+    now = _resolve_now(now)
+    post = _insert(
+        db,
+        "rsn_posts",
+        {
+            "id": str(uuid4()),
+            "author_id": ctx.user_id,
+            "group_id": group["id"] if group else None,
+            "post_type": payload.post_type,
+            "body": payload.body,
+            "media_refs": payload.media_refs,
+            "visibility": payload.visibility,
+            "audience_scope": payload.audience_scope,
+            "created_at": now,
+        },
+    )
+    return _post_out(db, post, ctx)
+
+
+def create_celebration_post(
+    db, subject_id: UUID | str, body: str, *, group_id=None, now=None
+) -> dict | None:
+    """The system path for catalog Section 4 moments. There is no
+    member route to this function: a celebration is a fact from
+    the ledger before it is a post. Honors the member's standing
+    display toggle (Section 8): a member who turned celebrations
+    off gets no post; the moment still lives on their shelf and
+    standing detail. Returns the post, or None when the toggle
+    suppresses it."""
+    subject = get_member_context(db, subject_id)
+    if subject.banned:
+        raise ForbiddenError("account refused")
+    profile = _fetch_one(db, "rsn_profiles", user_id=subject.user_id)
+    if profile is not None and profile.get("show_standing_default") is False:
+        return None
+    group = None
+    if group_id is not None:
+        group = _fetch_one(db, "rsn_groups", id=str(group_id))
+        if group is None:
+            raise NotFoundError()
+        membership = _membership(db, group["id"], subject.user_id)
+        if membership is None or membership.get("status") != "active":
+            raise ForbiddenError("celebrations post to the member's own groups")
+    now = _resolve_now(now)
+    post = _insert(
+        db,
+        "rsn_posts",
+        {
+            "id": str(uuid4()),
+            "author_id": subject.user_id,
+            "group_id": group["id"] if group else None,
+            "post_type": "celebration",
+            "body": body,
+            "media_refs": [],
+            "visibility": "group" if group else "metro",
+            "audience_scope": "group",
+            "created_at": now,
+        },
+    )
+    return _post_out(db, post, subject)
+
+
+def list_feed(
+    db,
+    viewer_user_id: UUID,
+    *,
+    group_id=None,
+    limit: int = FEED_DEFAULT_LIMIT,
+    now=None,
+) -> list[dict]:
+    ctx = get_member_context(db, viewer_user_id)
+    _require_not_banned(ctx)
+    if ctx.is_skeleton:
+        # Section 5.11: the skeleton is a closed list and the feed
+        # is not on it. The surface does not exist for this state.
+        raise ForbiddenError("the feed is a member surface: verification required")
+    if group_id is not None:
+        group = _fetch_one(db, "rsn_groups", id=str(group_id))
+        if group is None or not _group_visible_to_member(db, ctx, group):
+            raise NotFoundError()
+    posts = _fetch(db, "rsn_posts")
+    if group_id is not None:
+        posts = [p for p in posts if p.get("group_id") == str(group_id)]
+    visible = [p for p in posts if _can_view_post(db, ctx, p)]
+    visible.sort(
+        key=lambda p: _parse_ts(p.get("created_at")) or _resolve_now(now),
+        reverse=True,
+    )
+    limit = max(1, min(int(limit), FEED_MAX_LIMIT))
+    return [_post_out(db, p, ctx) for p in visible[:limit]]
+
+
+def get_post(db, viewer_user_id: UUID, post_id: UUID, *, now=None) -> dict:
+    ctx = get_member_context(db, viewer_user_id)
+    _require_not_banned(ctx)
+    post = _fetch_one(db, "rsn_posts", id=str(post_id))
+    if post is None or not _can_view_post(db, ctx, post):
+        raise NotFoundError()
+    return _post_out(db, post, ctx)
+
+
+def _comment_out(row: dict) -> dict:
+    return {
+        "id": row["id"],
+        "post_id": row["post_id"],
+        "author_id": row["author_id"],
+        "body": row.get("body"),
+        "status": row.get("status") or "published",
+        "screening_verdict": row.get("screening_verdict") or "clean",
+        "created_at": _iso(row.get("created_at")),
+    }
+
+
+def create_comment(
+    db, user_id: UUID, post_id: UUID, payload: models.CommentCreate, *, now=None
+) -> dict:
+    ctx = get_member_context(db, user_id)
+    _require_voice(ctx)
+    post = _fetch_one(db, "rsn_posts", id=str(post_id))
+    if post is None or not _can_view_post(db, ctx, post):
+        raise NotFoundError()
+    now = _resolve_now(now)
+    row = _insert(
+        db,
+        "rsn_comments",
+        {
+            "id": str(uuid4()),
+            "post_id": post["id"],
+            "author_id": ctx.user_id,
+            "body": payload.body,
+            "status": "published",
+            "screening_verdict": "clean",
+            "screening_categories": [],
+            "human_review_state": None,
+            "created_at": now,
+        },
+    )
+    return _comment_out(row)
+
+
+def list_comments(db, viewer_user_id: UUID, post_id: UUID, *, now=None) -> list[dict]:
+    ctx = get_member_context(db, viewer_user_id)
+    _require_not_banned(ctx)
+    post = _fetch_one(db, "rsn_posts", id=str(post_id))
+    if post is None or not _can_view_post(db, ctx, post):
+        raise NotFoundError()
+    out = []
+    rows = _fetch(db, "rsn_comments", post_id=post["id"])
+    rows.sort(key=lambda r: _parse_ts(r.get("created_at")) or _resolve_now(now))
+    for row in rows:
+        if row.get("status") == "published":
+            out.append(_comment_out(row))
+        elif row.get("author_id") == ctx.user_id:
+            # Pattern 03: a held or removed comment leaves a plain
+            # tombstone for its author only, never the body.
+            tombstone = _comment_out(row)
+            tombstone["body"] = None
+            out.append(tombstone)
+    return out
+
+
+def add_reaction(db, user_id: UUID, post_id: UUID, kind: str, *, now=None) -> dict:
+    ctx = get_member_context(db, user_id)
+    _require_voice(ctx)
+    if kind not in models.REACTION_KINDS:
+        raise ForbiddenError(f"unknown reaction kind: {kind}")
+    post = _fetch_one(db, "rsn_posts", id=str(post_id))
+    if post is None or not _can_view_post(db, ctx, post):
+        raise NotFoundError()
+    existing = [
+        r
+        for r in _fetch(db, "rsn_reactions", post_id=post["id"])
+        if r.get("user_id") == ctx.user_id and r.get("kind") == kind
+    ]
+    if not existing:
+        _insert(
+            db,
+            "rsn_reactions",
+            {
+                "id": str(uuid4()),
+                "post_id": post["id"],
+                "user_id": ctx.user_id,
+                "kind": kind,
+                "created_at": _resolve_now(now),
+            },
+        )
+    return _post_out(db, post, ctx)
+
+
+def remove_reaction(db, user_id: UUID, post_id: UUID, kind: str) -> dict:
+    ctx = get_member_context(db, user_id)
+    _require_voice(ctx)
+    post = _fetch_one(db, "rsn_posts", id=str(post_id))
+    if post is None or not _can_view_post(db, ctx, post):
+        raise NotFoundError()
+    for row in _fetch(db, "rsn_reactions", post_id=post["id"]):
+        if row.get("user_id") == ctx.user_id and row.get("kind") == kind:
+            _delete_by_id(db, "rsn_reactions", row["id"])
+    return _post_out(db, post, ctx)
+
+
+# ---------------------------------------------------------------------------
+# Rewards loop (TW-941): the member's own standing detail with
+# tier + progress toward the next rung, for the profile display.
+# The projection is _project_member_stats (the recompute's own
+# I/O) and the ladder math is rewards.progress over trust.py's
+# thresholds: this read adds no numbers of its own.
+# ---------------------------------------------------------------------------
+
+
+AGE_BAND_DISPLAY = {
+    "age_21_plus": "21+",
+    "age_18_20": "18-20",
+    "age_16_17": "teen",
+}
+
+# The display contract's progress vocabulary (Sofia's TW-941
+# display half, frontend/src/lib/socialStanding.js): requirement
+# keys translated 1:1 from the canonical rewards keys, with
+# `target` naming what rewards calls `required`.
+_PROGRESS_KEY_DISPLAY = {
+    "completed_nights": "nights",
+    "show_rate": "showRate",
+    "would_meet_again_rate": "wmaRate",
+    "reviews_received": "wmaReviews",
+    "hosted_clean": "hostedClean",
+    "best_series_streak": "streak",
+    "tenure_days": "tenureDays",
+}
+
+
+def _display_progress(next_requirements: list[dict]) -> list[dict]:
+    """Translate next-rung requirements into the display contract's
+    progress list. The Fixture either/or pair collapses into one
+    `corroboration` entry carrying both paths as parts."""
+    out: list[dict] = []
+    corroboration_parts = []
+    corroboration_met = False
+    for req in next_requirements:
+        if req.get("any_of") == "corroboration":
+            part_key = "streak" if req["key"] == "best_series_streak" else "vouches"
+            corroboration_parts.append(
+                {"key": part_key, "current": req["current"], "target": req["required"]}
+            )
+            corroboration_met = corroboration_met or req["met"]
+            continue
+        out.append(
+            {
+                "key": _PROGRESS_KEY_DISPLAY[req["key"]],
+                "current": req["current"],
+                "target": req["required"],
+                "met": req["met"],
+            }
+        )
+    if corroboration_parts:
+        out.append(
+            {
+                "key": "corroboration",
+                "met": corroboration_met,
+                "parts": corroboration_parts,
+            }
+        )
+    return out
+
+
+def get_my_rewards(db, user_id: UUID, *, now=None) -> dict:
+    """The standing read. One payload serves two documented shapes:
+    the canonical rewards shape (tier / earned_tier / counts /
+    next_requirements / ladder) and the TW-941 display contract
+    Sofia's profile display consumes (standing_tier / age_band /
+    stats / progress / last_movement, in
+    frontend/src/lib/socialStanding.js). Field meanings are
+    identical; `tier` is the display tier (null while suspended)
+    and `standing_tier` is the member's tier as the display
+    normalizer expects it (the earned tier, with `suspended`
+    carrying the masking)."""
+    from . import trust
+
+    ctx = get_member_context(db, user_id)
+    _require_not_banned(ctx)
+    now = _resolve_now(now)
+    stats, dormant_days, _ledger = _project_member_stats(db, ctx.user_id, now)
+    out = rewards.progress(stats, dormant_days=dormant_days)
+    # Rosa's TW-941 gate semantics on the display fields:
+    # standing_tier is the member's tier with the teen cap applied
+    # (catalog Section 7: Keyholder does not exist in the teen
+    # tier, the top is Pillar); next_tier is always the immediate
+    # successor of that tier, and null at the top tier or while
+    # suspended. The canonical earned_tier keeps the raw record.
+    display_tier = out["earned_tier"]
+    if (
+        ctx.band == "age_16_17"
+        and STANDING_RANK[display_tier] > STANDING_RANK["pillar"]
+    ):
+        display_tier = "pillar"
+    if out["suspended"] or display_tier == "keyholder":
+        display_next = None
+    elif ctx.band == "age_16_17" and display_tier == "pillar":
+        display_next = None
+    else:
+        display_next = trust.TIER_ORDER[STANDING_RANK[display_tier] + 1]
+    display_requirements = (
+        rewards.rung_requirements(stats)[display_next] if display_next else []
+    )
+    decided = stats.completed_nights + stats.no_shows
+    # Which force last moved the standing (Section 7.5's owed
+    # explanation): conduct when the band suspends the tier,
+    # dormancy when decay stepped it below the record's raw tier.
+    if out["suspended"]:
+        last_movement = "conduct"
+    elif trust.earned_tier(stats) != out["earned_tier"]:
+        last_movement = "dormancy"
+    else:
+        last_movement = None
+    return {
+        "user_id": ctx.user_id,
+        "tier": None if out["suspended"] else display_tier,
+        "standing_tier": display_tier,
+        "earned_tier": out["earned_tier"],
+        "band": out["band"],
+        "suspended": out["suspended"],
+        "age_band": AGE_BAND_DISPLAY.get(ctx.band or ""),
+        "show_rate": out["show_rate"],
+        # Catalog Section 5 honesty rule: the rate displays only
+        # after 5 or more decided RSVPs; below that it is a lie of
+        # small numbers and the profile reads "still building".
+        "show_rate_display": decided >= 5,
+        "would_meet_again_rate": out["would_meet_again_rate"],
+        "stats": {
+            "completed_nights": stats.completed_nights,
+            "decided_rsvps": decided,
+            "show_rate": out["show_rate"],
+            "reviews_received": stats.reviews_received,
+            "would_meet_again_rate": out["would_meet_again_rate"],
+            "hosted_clean": stats.hosted_clean,
+            "best_series_streak": stats.best_series_streak,
+            "distinct_vouches": stats.distinct_vouches,
+            "tenure_days": stats.tenure_days,
+        },
+        "counts": {
+            "completed_nights": stats.completed_nights,
+            "no_shows": stats.no_shows,
+            "rsvps_decided": decided,
+            "reviews_received": stats.reviews_received,
+            "would_meet_again_positive": stats.would_meet_again_positive,
+            "hosted_clean": stats.hosted_clean,
+            "best_series_streak": stats.best_series_streak,
+            "distinct_vouches": stats.distinct_vouches,
+            "tenure_days": stats.tenure_days,
+            "dormant_days": dormant_days,
+        },
+        "next_tier": display_next,
+        "progress": (
+            None if out["suspended"] else _display_progress(display_requirements)
+        ),
+        "last_movement": last_movement,
+        "next_requirements": display_requirements,
+        "ladder": out["ladder"],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Reports (TW-941 intake): a filed report is a row in rsn_reports
+# with status "open": that table is the safety queue the Phase 6
+# Safety Desk (TW-940) triages. Intake rules here: the reporter
+# needs voice (the ghost town files nothing, Section 5.11); the
+# target must exist and, for feed items, be visible to the
+# reporter (an invisible target answers exactly like a nonexistent
+# one); the subject of a post or comment report is resolved from
+# the item itself, never trusted from the request body; serious
+# categories bypass ambassadors to staff at intake (safety.py).
+# ---------------------------------------------------------------------------
+
 
 _DESK_STAFF = "staff"
 _DESK_LEAD = "lead"
 _DESK_AMBASSADOR = "ambassador"
-
 REPORT_SUBSTANTIATED_WEIGHT = -5
 REPORT_UNFOUNDED_WEIGHT = 1
 
@@ -2780,6 +3217,15 @@ def _report_out(row: dict) -> dict:
         "queue": (
             "ambassador" if safety.ambassador_may_triage(row["category"]) else "staff"
         ),
+        # TW-941 intake contract: the same routing under the name
+        # the member-facing create_report response shipped with.
+        # Alias, not a second computation: the two keys never
+        # disagree because both read this one expression.
+        "triage_queue": (
+            "ambassador_triage"
+            if safety.ambassador_may_triage(row["category"])
+            else "staff"
+        ),
         "resolution_note": row.get("resolution_note"),
         "created_at": _iso(row.get("created_at")),
         "resolved_at": _iso(row.get("resolved_at")),
@@ -2814,9 +3260,39 @@ def create_report(
 ) -> dict:
     ctx = get_member_context(db, reporter_id)
     _require_voice(ctx)
-    subject_id = payload.subject_user_id
-    if subject_id is None and payload.target_type == "user":
-        subject_id = payload.target_id
+    # TW-941: the subject is resolved from the target, never trusted
+    # from the body: a reported post or comment binds its author, an
+    # event/group target must exist, and a user target must be a
+    # known member.
+    subject_user_id = str(payload.subject_user_id) if payload.subject_user_id else None
+    if payload.target_type == "post":
+        post = _fetch_one(db, "rsn_posts", id=str(payload.target_id))
+        if post is None or not _can_view_post(db, ctx, post):
+            raise NotFoundError()
+        subject_user_id = post["author_id"]
+    elif payload.target_type == "comment":
+        comment = _fetch_one(db, "rsn_comments", id=str(payload.target_id))
+        if comment is None:
+            raise NotFoundError()
+        post = _fetch_one(db, "rsn_posts", id=comment["post_id"])
+        if post is None or not _can_view_post(db, ctx, post):
+            raise NotFoundError()
+        subject_user_id = comment["author_id"]
+    elif payload.target_type == "event":
+        if _fetch_one(db, "rsn_events", id=str(payload.target_id)) is None:
+            raise NotFoundError()
+    elif payload.target_type == "group":
+        if _fetch_one(db, "rsn_groups", id=str(payload.target_id)) is None:
+            raise NotFoundError()
+    elif payload.target_type == "user":
+        known = (
+            _fetch_one(db, "vfy_verification_states", user_id=str(payload.target_id))
+            or _fetch_one(db, "rsn_trust_scores", user_id=str(payload.target_id))
+            or _fetch_one(db, "rsn_profiles", user_id=str(payload.target_id))
+        )
+        if known is None:
+            raise NotFoundError()
+        subject_user_id = str(payload.target_id)
     now = _resolve_now(now)
     row = _insert(
         db,
@@ -2824,13 +3300,15 @@ def create_report(
         {
             "id": str(uuid4()),
             "reporter_id": ctx.user_id,
-            "subject_user_id": str(subject_id) if subject_id else None,
+            "subject_user_id": subject_user_id,
             "target_type": payload.target_type,
             "target_id": str(payload.target_id),
             "category": payload.category,
             "description": payload.description,
             "status": "open",
             "assigned_to": None,
+            # TW-940: metro is stamped at intake for ambassador
+            # scoping (group/event targets only; fail closed).
             "metro": _report_metro(db, payload),
             "resolution_note": None,
             "created_at": now,

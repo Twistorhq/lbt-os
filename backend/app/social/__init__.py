@@ -6,8 +6,11 @@ functions, and a router whose endpoints answered an honest 501.
 TW-660 implemented the Phase 4 core loop on top (groups, events,
 series, RSVPs, location reveal, gold listing reads); TW-673 added
 the Phase 5 check-in loop (arrival, encounter confirms, welfare,
-write-ups, standing recompute). Reports still answer 501 until
-their phase lands. Schema: supabase/
+write-ups, standing recompute). TW-941 adds the feed (posts,
+comments, reactions, system celebrations), the rewards read
+(tier + progress toward the next rung), and report intake into
+rsn_reports, the safety queue the TW-940 Safety Desk triages.
+Schema: supabase/
 migration_verify_v1.sql + migration_social_v1.sql (44 tables, RLS
 deny-all). Nothing in this package ever handles raw PII: identity
 facts arrive as bands and booleans from the verify service.

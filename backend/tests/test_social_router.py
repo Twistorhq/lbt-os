@@ -86,6 +86,16 @@ EXPECTED_ROUTES = {
     ("POST", "/social/safety/evidence/{packet_id}/legal-hold"),
     ("POST", "/social/safety/disclosures"),
     ("POST", "/social/safety/disclosures/{disclosure_id}/decision"),
+    # TW-941 feed + rewards read.
+    ("POST", "/social/posts"),
+    ("GET", "/social/feed"),
+    ("GET", "/social/posts/{post_id}"),
+    ("POST", "/social/posts/{post_id}/comments"),
+    ("GET", "/social/posts/{post_id}/comments"),
+    ("POST", "/social/posts/{post_id}/reactions"),
+    ("DELETE", "/social/posts/{post_id}/reactions/{kind}"),
+    ("GET", "/social/profiles/me/standing"),
+    ("GET", "/social/me/standing"),
 }
 
 
@@ -137,6 +147,18 @@ class TestSkeletonHonesty:
             return {"id": str(uuid4()), "status": "open"}
 
         monkeypatch.setattr(social_router.service, "create_report", _rec)
+
+    def test_report_create_lands_via_service(self, monkeypatch):
+        # TW-941: report intake is implemented; a filed report lands
+        # in rsn_reports (behavior lives in test_social_feed.py).
+        # The router's job is the 201 mapping, recorded at the seam.
+        calls = {}
+
+        def _accept(db, reporter_id, payload):
+            calls["reporter_id"] = reporter_id
+            return {"id": str(uuid4()), "status": "open"}
+
+        monkeypatch.setattr(social_router.service, "create_report", _accept)
         app = _build_app(authenticated=True)
         resp = TestClient(app, raise_server_exceptions=False).post(
             "/api/v1/social/reports",
@@ -150,6 +172,23 @@ class TestSkeletonHonesty:
         assert resp.status_code == 201
         assert calls["reporter_id"] is not None
         assert len(str(calls["reporter_id"])) == 36
+
+    def test_report_create_maps_ghost_refusal_to_403(self, monkeypatch):
+        def _refuse(db, reporter_id, payload):
+            raise social_router.service.ForbiddenError("verification required")
+
+        monkeypatch.setattr(social_router.service, "create_report", _refuse)
+        app = _build_app(authenticated=True)
+        resp = TestClient(app, raise_server_exceptions=False).post(
+            "/api/v1/social/reports",
+            json={
+                "target_type": "user",
+                "target_id": str(uuid4()),
+                "category": "fraud",
+                "description": "something happened",
+            },
+        )
+        assert resp.status_code == 403
 
     def test_reveal_fails_closed_when_service_refuses(self, monkeypatch):
         # TW-660: the reveal is implemented and fail-closed in the

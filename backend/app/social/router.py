@@ -8,6 +8,9 @@ TW-940 implemented reports and the Safety Desk Minimum (triage,
 sanctions, bans, appeals, evidence, disclosures) under /safety.
 Profiles still delegate to a service stub that answers an honest
 501 until its phase lands. A stub must never pretend to work.
+TW-941 adds the feed routes (posts, comments, reactions), the
+standing/rewards read, and report intake: a filed report lands in
+rsn_reports, the safety queue the TW-940 Safety Desk triages.
 
 Auth: Twistor Identity JWT (RS256), verified through the identity
 service exactly as Telemetry does. The member's user_id is the token
@@ -433,6 +436,114 @@ def get_my_review_summary(
     db: Client = Depends(get_db),
 ):
     return _call(service.my_review_summary, db, UUID(claims["sub"]))
+
+
+@router.get("/me/standing")
+@limiter.limit("300/minute")
+def get_my_standing(
+    request: Request,
+    claims: dict = Depends(_verified_claims),
+    db: Client = Depends(get_db),
+):
+    # TW-941 rewards loop: tier + progress toward the next rung.
+    # This is the canonical path Sofia's display client calls
+    # (frontend/src/lib/socialStandingClient.js, STANDING_PATH
+    # "/social/me/standing"); /profiles/me/standing below is the
+    # same payload under the profiles namespace.
+    return _call(service.get_my_rewards, db, UUID(claims["sub"]))
+
+
+@router.get("/profiles/me/standing")
+@limiter.limit("300/minute")
+def get_my_standing_in_profiles(
+    request: Request,
+    claims: dict = Depends(_verified_claims),
+    db: Client = Depends(get_db),
+):
+    return _call(service.get_my_rewards, db, UUID(claims["sub"]))
+
+
+@router.post("/posts", status_code=201)
+@limiter.limit("60/minute")
+def create_post(
+    request: Request,
+    payload: models.PostCreate,
+    claims: dict = Depends(_verified_claims),
+    db: Client = Depends(get_db),
+):
+    return _call(service.create_post, db, UUID(claims["sub"]), payload)
+
+
+@router.get("/feed")
+@limiter.limit("300/minute")
+def list_feed(
+    request: Request,
+    group_id: UUID | None = None,
+    limit: int = 50,
+    claims: dict = Depends(_verified_claims),
+    db: Client = Depends(get_db),
+):
+    return _call(
+        service.list_feed, db, UUID(claims["sub"]), group_id=group_id, limit=limit
+    )
+
+
+@router.get("/posts/{post_id}")
+@limiter.limit("300/minute")
+def get_post(
+    request: Request,
+    post_id: UUID,
+    claims: dict = Depends(_verified_claims),
+    db: Client = Depends(get_db),
+):
+    return _call(service.get_post, db, UUID(claims["sub"]), post_id)
+
+
+@router.post("/posts/{post_id}/comments", status_code=201)
+@limiter.limit("60/minute")
+def create_comment(
+    request: Request,
+    post_id: UUID,
+    payload: models.CommentCreate,
+    claims: dict = Depends(_verified_claims),
+    db: Client = Depends(get_db),
+):
+    return _call(service.create_comment, db, UUID(claims["sub"]), post_id, payload)
+
+
+@router.get("/posts/{post_id}/comments")
+@limiter.limit("300/minute")
+def list_comments(
+    request: Request,
+    post_id: UUID,
+    claims: dict = Depends(_verified_claims),
+    db: Client = Depends(get_db),
+):
+    return _call(service.list_comments, db, UUID(claims["sub"]), post_id)
+
+
+@router.post("/posts/{post_id}/reactions", status_code=201)
+@limiter.limit("60/minute")
+def add_reaction(
+    request: Request,
+    post_id: UUID,
+    payload: models.ReactionCreate,
+    claims: dict = Depends(_verified_claims),
+    db: Client = Depends(get_db),
+):
+    return _call(service.add_reaction, db, UUID(claims["sub"]), post_id, payload.kind)
+
+
+@router.delete("/posts/{post_id}/reactions/{kind}")
+@limiter.limit("60/minute")
+def remove_reaction(
+    request: Request,
+    post_id: UUID,
+    kind: str,
+    claims: dict = Depends(_verified_claims),
+    db: Client = Depends(get_db),
+):
+    return _call(service.remove_reaction, db, UUID(claims["sub"]), post_id, kind)
 
 
 @router.post("/reports", status_code=201)
