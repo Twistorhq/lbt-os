@@ -34,6 +34,7 @@ closed to staff: ambassadors never see a category nobody classified.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -126,6 +127,32 @@ def severe_offense_route() -> SevereRoute:
         max_suspension_hours=SEVERE_MAX_SUSPENSION_HOURS,
         ladder_applies=False,
     )
+
+
+def suspension_within_cap(expires_at: datetime | None, now: datetime) -> bool:
+    """A desk suspension is the Section 6.2 temporary safety
+    suspension: it must carry an expiry, in the future, at most
+    SEVERE_MAX_SUSPENSION_HOURS out. Anything longer requires a
+    full decision (sanction ladder or ban), never a longer timer."""
+    if expires_at is None:
+        return False
+    return now < expires_at <= now + timedelta(hours=SEVERE_MAX_SUSPENSION_HOURS)
+
+
+def evidence_item_hash(
+    prev_hash: str | None,
+    *,
+    kind: str,
+    ref: str,
+    content_sha256: str,
+    actor: str,
+    added_at: str,
+) -> str:
+    """Hash-chain one evidence manifest item to its predecessor, so
+    a packet produced later provably matches what was retained and
+    in what order (spec Section 4 hash-chained manifests)."""
+    material = "|".join([prev_hash or "", kind, ref, content_sha256, actor, added_at])
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
 def next_purge_stage(current: str) -> str:

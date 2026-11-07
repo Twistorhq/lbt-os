@@ -69,6 +69,23 @@ EXPECTED_ROUTES = {
     ("POST", "/social/events/{event_id}/reveal"),
     ("POST", "/social/events/{event_id}/checkins"),
     ("POST", "/social/reports"),
+    # TW-940 Safety Desk Minimum
+    ("GET", "/social/safety/reports"),
+    ("POST", "/social/safety/reports/{report_id}/claim"),
+    ("POST", "/social/safety/reports/{report_id}/resolve"),
+    ("POST", "/social/safety/reports/{report_id}/sanctions"),
+    ("POST", "/social/safety/reports/{report_id}/ban"),
+    ("GET", "/social/safety/reports/{report_id}/disclosure"),
+    ("POST", "/social/safety/appeals"),
+    ("GET", "/social/safety/appeals"),
+    ("POST", "/social/safety/appeals/{appeal_id}/acknowledge"),
+    ("POST", "/social/safety/appeals/{appeal_id}/decision"),
+    ("POST", "/social/safety/evidence"),
+    ("GET", "/social/safety/evidence/{packet_id}"),
+    ("POST", "/social/safety/evidence/{packet_id}/items"),
+    ("POST", "/social/safety/evidence/{packet_id}/legal-hold"),
+    ("POST", "/social/safety/disclosures"),
+    ("POST", "/social/safety/disclosures/{disclosure_id}/decision"),
 }
 
 
@@ -110,8 +127,18 @@ class TestSkeletonHonesty:
         )
         assert resp.status_code == 403
 
-    def test_report_create_is_501_not_silently_accepted(self, client):
-        resp = client.post(
+    def test_report_create_passes_reporter_subject_to_service(self, monkeypatch):
+        # TW-940: report filing is implemented; the router's job is
+        # handing the service the token subject as the reporter.
+        calls = {}
+
+        def _rec(db, reporter_id, payload):
+            calls["reporter_id"] = reporter_id
+            return {"id": str(uuid4()), "status": "open"}
+
+        monkeypatch.setattr(social_router.service, "create_report", _rec)
+        app = _build_app(authenticated=True)
+        resp = TestClient(app, raise_server_exceptions=False).post(
             "/api/v1/social/reports",
             json={
                 "target_type": "user",
@@ -120,7 +147,9 @@ class TestSkeletonHonesty:
                 "description": "something happened",
             },
         )
-        assert resp.status_code == 501
+        assert resp.status_code == 201
+        assert calls["reporter_id"] is not None
+        assert len(str(calls["reporter_id"])) == 36
 
     def test_reveal_fails_closed_when_service_refuses(self, monkeypatch):
         # TW-660: the reveal is implemented and fail-closed in the
