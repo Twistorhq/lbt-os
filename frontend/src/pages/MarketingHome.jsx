@@ -3,6 +3,12 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '@clerk/clerk-react'
 import { Ambient, DepthStage, DriftImage, Parallax, Reveal, ScrollScale } from '../components/motion'
 import SampleCharts from '../components/marketing/SampleCharts'
+import DemoKpiStrip from '../components/marketing/DemoKpiStrip'
+import DispatchMap from '../components/marketing/DispatchMap'
+import demoMapData from '../components/marketing/demo-map-data.json'
+
+const PAYS = demoMapData.paysForItself
+const money2 = (n) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 import StoryArc from '../components/StoryArc'
 import {
   ArrowRight,
@@ -80,11 +86,13 @@ const STEPS = [
   },
 ]
 
+/* Locked pricing (founder, 2026-11-16): Starter $299/mo, Pro $499/mo.
+ * TW-1149 fixed the stale preview tiers ($49/$129/$299) to match. */
 const TIERS = [
   {
     key: 'basic',
     name: 'Starter',
-    price: '$49',
+    price: '$299',
     badge: null,
     description: 'One operating dashboard that replaces scattered spreadsheets.',
     features: ['Lead and sales pipeline', 'Customer management', 'Revenue and expense tracking', 'Real-time profit dashboard', 'Core metrics and reports'],
@@ -93,23 +101,13 @@ const TIERS = [
   },
   {
     key: 'pro',
-    name: 'Growth',
-    price: '$129',
+    name: 'Pro',
+    price: '$499',
     badge: 'Most popular',
     description: 'For shops that want AI watching the numbers every week.',
-    features: ['Everything in Starter', 'Recurring AI revenue audits', 'Expense management', 'QuickBooks and HubSpot integrations', 'Up to 5 team members', 'PDF audit exports'],
-    cta: 'Start Growth',
+    features: ['Everything in Starter', 'Recurring AI revenue audits', 'Dispatch map with storm and market overlays', 'Expense management', 'QuickBooks and HubSpot integrations', 'Up to 5 team members', 'PDF audit exports'],
+    cta: 'Start Pro',
     featured: true,
-  },
-  {
-    key: 'premium',
-    name: 'Scale',
-    price: '$299',
-    badge: 'White-glove',
-    description: 'Multi-location operators and agencies that need deeper support.',
-    features: ['Everything in Growth', 'Unlimited team members', 'White-label audit reports', 'API access', 'Custom playbooks', 'Priority support'],
-    cta: 'Start Scale',
-    featured: false,
   },
 ]
 
@@ -131,8 +129,8 @@ const FAQS = [
     a: 'Yes. Plans are month to month. Cancel from the Billing page and you keep access until the end of the billing period.',
   },
   {
-    q: "What's the difference between Starter and Growth?",
-    a: 'Starter is the operating dashboard: pipeline, customers, revenue, expenses. Growth adds the AI revenue audit — recurring scans that find the money walking out your door — plus PDF exports and team seats.',
+    q: "What's the difference between Starter and Pro?",
+    a: 'Starter is the operating dashboard: pipeline, customers, revenue, expenses. Pro adds the AI revenue audit, recurring scans that find the money walking out your door, plus the dispatch map with storm and market overlays, PDF exports, and team seats.',
   },
 ]
 
@@ -474,6 +472,7 @@ function LivePreview({ onCta, ctaUrl }) {
           </h2>
           <p className="mt-5 max-w-xl text-base leading-7 text-slate-600">
             Pick a trade. This is a sample shop, but the brief format is exactly what lands in your inbox every week.
+            The numbers, the charts, and the day itself, drawn on the dispatch map.
           </p>
         </Reveal>
 
@@ -557,7 +556,15 @@ function LivePreview({ onCta, ctaUrl }) {
         </ScrollScale>
 
         <Reveal y={28}>
+          <DemoKpiStrip />
+        </Reveal>
+
+        <Reveal y={28}>
           <SampleCharts tradeKey={tradeKey} tradeLabel={trade.label} />
+        </Reveal>
+
+        <Reveal y={28}>
+          <DispatchMap />
         </Reveal>
       </div>
     </section>
@@ -580,7 +587,28 @@ function Pricing({ onCta, ctaUrl }) {
             Month to month. No setup fees. No contracts that outlive your truck.
           </p>
         </Reveal>
-        <div className="mt-14 grid gap-6 lg:grid-cols-3">
+        <Reveal y={24}>
+          <div className="mx-auto mt-12 max-w-4xl rounded-[1.75rem] border border-slate-200/80 bg-white p-7 text-left shadow-[0_24px_54px_-34px_rgba(10,10,24,0.3)] sm:p-8">
+            <div className="tt-kicker text-slate-400">From today&rsquo;s demo board</div>
+            <div className="mt-5 grid gap-6 sm:grid-cols-3">
+              <div>
+                <div className="text-3xl font-bold tracking-tight text-slate-950">{money2(PAYS.oneSavedJobValueUsd)}</div>
+                <p className="mt-1 text-[13px] leading-5 text-slate-500">One saved job: the average recovered ticket today</p>
+              </div>
+              <div>
+                <div className="text-3xl font-bold tracking-tight text-slate-950">{PAYS.oneSavedJobCoversStarterMonths}&times;</div>
+                <p className="mt-1 text-[13px] leading-5 text-slate-500">Starter months covered by one saved job</p>
+              </div>
+              <div>
+                <div className="text-3xl font-bold tracking-tight text-slate-950">{money2(PAYS.surplusAfterOneSavedJobUsd)}</div>
+                <p className="mt-1 text-[13px] leading-5 text-slate-500">Left over once the month is paid</p>
+              </div>
+            </div>
+            <p className="mt-5 max-w-[68ch] border-t border-slate-100 pt-4 text-[13px] leading-6 text-slate-500">{PAYS.mathNote}</p>
+          </div>
+        </Reveal>
+
+        <div className="mx-auto mt-14 grid max-w-4xl gap-6 sm:grid-cols-2">
           {TIERS.map((t, i) => (
             <Reveal key={t.key} delay={i * 130} className="h-full">
               <ScrollScale from={0.95} className="h-full">
