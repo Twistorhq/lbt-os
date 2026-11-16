@@ -1,0 +1,1366 @@
+{
+  "meta": {
+    "dataset": "Twistor Trades demo map data",
+    "ticket": "TW-1149",
+    "version": "1.0",
+    "day": "Monday (demo)",
+    "demo": true,
+    "shop": {
+      "name": "Front Range Comfort Co.",
+      "fictional": true,
+      "trade": "HVAC",
+      "hq": {
+        "name": "Shop HQ (fictional), Denver Tech Center",
+        "coordinates": [
+          -104.876,
+          39.617
+        ]
+      }
+    },
+    "pricing": {
+      "starterMonthlyUsd": 299,
+      "proMonthlyUsd": 499
+    },
+    "labelingLine": "Demo data: Front Range Comfort Co. is a fictional shop. Pins, routes, coverage, and the storm cell are illustrative and are not live customer data.",
+    "coordinateOrder": "GeoJSON order: [longitude, latitude]",
+    "preparedBy": "Twistor Holdings LLC"
+  },
+  "kpis": {
+    "jobsToday": 34,
+    "crewsOut": 4,
+    "revenueScheduledUsd": 50839,
+    "revenueAtRiskUsd": 8081,
+    "jobsAtRisk": 5,
+    "jobsCompleted": 7,
+    "jobsOnSite": 9,
+    "jobsEnRoute": 5,
+    "jobsScheduled": 13,
+    "jobsRecoveredToday": 5,
+    "recoveredRevenueUsd": 2853,
+    "averageTicketUsd": 1495.26,
+    "averageServiceTicketUsd": 500.32
+  },
+  "paysForItself": {
+    "starterPriceMonthlyUsd": 299,
+    "proPriceMonthlyUsd": 499,
+    "averageTicketAllJobsUsd": 1495.26,
+    "averageServiceTicketUsd": 500.32,
+    "averageRecoveredTicketUsd": 570.6,
+    "recoveredJobsToday": 5,
+    "recoveredRevenueTodayUsd": 2853,
+    "oneSavedJobValueUsd": 570.6,
+    "oneSavedJobCoversStarterMonths": 1.91,
+    "surplusAfterOneSavedJobUsd": 271.6,
+    "mathNote": "Average recovered ticket = recovered revenue / recovered jobs = $2,853 / 5 = $570.60. One saved job at $570.60 covers the $299 Starter month 1.91 times over, with $271.60 to spare. Cross-check on all work: average ticket across all 34 jobs is $1,495.26; average service ticket excluding full system installs is $500.32. Both sit above the $299 Starter price."
+  },
+  "charts": {
+    "jobsByStatus": {
+      "completed": 7,
+      "on_site": 9,
+      "en_route": 5,
+      "scheduled": 13
+    },
+    "jobsByType": {
+      "AC maintenance tune-up": 4,
+      "No-cool AC repair": 5,
+      "Smart thermostat install": 1,
+      "Furnace no-heat repair": 2,
+      "AC system install": 3,
+      "Refrigerant recharge": 2,
+      "Blower motor replacement": 1,
+      "Furnace maintenance tune-up": 2,
+      "Furnace repair": 2,
+      "Duct cleaning": 2,
+      "Heat pump service": 1,
+      "Commercial thermostat install": 1,
+      "Indoor air quality purifier install": 1,
+      "Furnace system install": 2,
+      "AC repair": 2,
+      "Water heater install": 1,
+      "Thermostat and air quality bundle": 1,
+      "Heat pump repair": 1
+    },
+    "jobsByCategory": {
+      "maintenance": 6,
+      "repair": 15,
+      "install_small": 4,
+      "install": 6,
+      "service": 3
+    },
+    "revenueByCrewUsd": {
+      "Crew North": 16243,
+      "Crew Central": 11718,
+      "Crew South": 13179,
+      "Crew East": 9699
+    },
+    "jobsByCrew": {
+      "Crew North": 9,
+      "Crew Central": 9,
+      "Crew South": 8,
+      "Crew East": 8
+    }
+  },
+  "geojson": {
+    "type": "FeatureCollection",
+    "features": [
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Polygon",
+          "coordinates": [
+            [
+              [
+                -105.26,
+                39.7
+              ],
+              [
+                -105.18,
+                39.92
+              ],
+              [
+                -104.98,
+                40.02
+              ],
+              [
+                -104.7,
+                40.01
+              ],
+              [
+                -104.6,
+                39.84
+              ],
+              [
+                -104.62,
+                39.55
+              ],
+              [
+                -104.78,
+                39.43
+              ],
+              [
+                -105.02,
+                39.44
+              ],
+              [
+                -105.2,
+                39.55
+              ],
+              [
+                -105.26,
+                39.7
+              ]
+            ]
+          ]
+        },
+        "properties": {
+          "layer": "coverage",
+          "id": "coverage-denver-metro",
+          "name": "Front Range Comfort Co. service area",
+          "jobsInside": 34
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Polygon",
+          "coordinates": [
+            [
+              [
+                -104.94,
+                39.8
+              ],
+              [
+                -104.64,
+                39.8
+              ],
+              [
+                -104.64,
+                40.0
+              ],
+              [
+                -104.94,
+                40.0
+              ],
+              [
+                -104.94,
+                39.8
+              ]
+            ]
+          ]
+        },
+        "properties": {
+          "name": "Storm Cell DEMO-1 (fictional)",
+          "severity": "Severe thunderstorm watch: hail to 1 inch, gusts to 55 mph",
+          "arrivalWindowStart": "2:40 PM",
+          "arrivalWindowEnd": "4:15 PM",
+          "movement": "Moving northeast at 18 mph",
+          "layer": "storm",
+          "id": "storm-demo-1",
+          "jobsInPath": 5,
+          "revenueInPathUsd": 8081,
+          "atRiskJobIds": [
+            "JOB-008",
+            "JOB-009",
+            "JOB-031",
+            "JOB-032",
+            "JOB-033"
+          ]
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "LineString",
+          "coordinates": [
+            [
+              -104.876,
+              39.617
+            ],
+            [
+              -105.0867,
+              39.9205
+            ],
+            [
+              -105.0372,
+              39.8364
+            ],
+            [
+              -105.021,
+              39.851
+            ],
+            [
+              -104.9878,
+              39.8856
+            ],
+            [
+              -104.9719,
+              39.868
+            ],
+            [
+              -105.0875,
+              39.8028
+            ],
+            [
+              -105.062,
+              39.789
+            ],
+            [
+              -104.8205,
+              39.9853
+            ],
+            [
+              -104.9038,
+              39.8083
+            ]
+          ]
+        },
+        "properties": {
+          "layer": "route",
+          "id": "crew-north",
+          "crewName": "Crew North",
+          "lead": "D. Alvarez",
+          "color": "#2563eb",
+          "startsAt": "Shop HQ (fictional), Denver Tech Center",
+          "jobIdsInOrder": [
+            "JOB-001",
+            "JOB-002",
+            "JOB-003",
+            "JOB-004",
+            "JOB-005",
+            "JOB-006",
+            "JOB-007",
+            "JOB-008",
+            "JOB-009"
+          ],
+          "stops": 9,
+          "routeMiles": 76.8,
+          "revenueUsd": 16243
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "LineString",
+          "coordinates": [
+            [
+              -104.876,
+              39.617
+            ],
+            [
+              -105.2211,
+              39.7555
+            ],
+            [
+              -105.0814,
+              39.7047
+            ],
+            [
+              -105.053,
+              39.682
+            ],
+            [
+              -105.0302,
+              39.7628
+            ],
+            [
+              -104.9903,
+              39.7392
+            ],
+            [
+              -104.9849,
+              39.7284
+            ],
+            [
+              -104.9805,
+              39.6989
+            ],
+            [
+              -104.955,
+              39.72
+            ],
+            [
+              -104.9878,
+              39.6479
+            ]
+          ]
+        },
+        "properties": {
+          "layer": "route",
+          "id": "crew-central",
+          "crewName": "Crew Central",
+          "lead": "M. Okafor",
+          "color": "#16a34a",
+          "startsAt": "Shop HQ (fictional), Denver Tech Center",
+          "jobIdsInOrder": [
+            "JOB-010",
+            "JOB-011",
+            "JOB-012",
+            "JOB-013",
+            "JOB-014",
+            "JOB-015",
+            "JOB-016",
+            "JOB-017",
+            "JOB-018"
+          ],
+          "stops": 9,
+          "routeMiles": 49.6,
+          "revenueUsd": 11718
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "LineString",
+          "coordinates": [
+            [
+              -104.876,
+              39.617
+            ],
+            [
+              -105.0166,
+              39.6133
+            ],
+            [
+              -105.041,
+              39.595
+            ],
+            [
+              -104.9693,
+              39.5532
+            ],
+            [
+              -104.993,
+              39.541
+            ],
+            [
+              -104.8836,
+              39.5365
+            ],
+            [
+              -104.8765,
+              39.5804
+            ],
+            [
+              -104.902,
+              39.596
+            ],
+            [
+              -104.9506,
+              39.6172
+            ]
+          ]
+        },
+        "properties": {
+          "layer": "route",
+          "id": "crew-south",
+          "crewName": "Crew South",
+          "lead": "J. Park",
+          "color": "#9333ea",
+          "startsAt": "Shop HQ (fictional), Denver Tech Center",
+          "jobIdsInOrder": [
+            "JOB-019",
+            "JOB-020",
+            "JOB-021",
+            "JOB-022",
+            "JOB-023",
+            "JOB-024",
+            "JOB-025",
+            "JOB-026"
+          ],
+          "stops": 8,
+          "routeMiles": 29.2,
+          "revenueUsd": 13179
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "LineString",
+          "coordinates": [
+            [
+              -104.876,
+              39.617
+            ],
+            [
+              -104.89,
+              39.7587
+            ],
+            [
+              -104.891,
+              39.7201
+            ],
+            [
+              -104.8319,
+              39.7294
+            ],
+            [
+              -104.812,
+              39.7089
+            ],
+            [
+              -104.8319,
+              39.8201
+            ],
+            [
+              -104.718,
+              39.843
+            ],
+            [
+              -104.905,
+              39.862
+            ],
+            [
+              -104.7614,
+              39.5186
+            ]
+          ]
+        },
+        "properties": {
+          "layer": "route",
+          "id": "crew-east",
+          "crewName": "Crew East",
+          "lead": "R. Nguyen",
+          "color": "#ea580c",
+          "startsAt": "Shop HQ (fictional), Denver Tech Center",
+          "jobIdsInOrder": [
+            "JOB-027",
+            "JOB-028",
+            "JOB-029",
+            "JOB-030",
+            "JOB-031",
+            "JOB-032",
+            "JOB-033",
+            "JOB-034"
+          ],
+          "stops": 8,
+          "routeMiles": 66.4,
+          "revenueUsd": 9699
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -105.0867,
+            39.9205
+          ]
+        },
+        "properties": {
+          "layer": "job",
+          "id": "JOB-001",
+          "area": "Broomfield",
+          "jobType": "AC maintenance tune-up",
+          "category": "maintenance",
+          "status": "completed",
+          "ticketUsd": 159,
+          "windowStart": "7:30 AM",
+          "windowEnd": "8:30 AM",
+          "crewId": "crew-north",
+          "crewName": "Crew North",
+          "recovered": false,
+          "atRisk": false,
+          "customerLabel": "Demo customer"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -105.0372,
+            39.8364
+          ]
+        },
+        "properties": {
+          "layer": "job",
+          "id": "JOB-002",
+          "area": "Westminster",
+          "jobType": "No-cool AC repair",
+          "category": "repair",
+          "status": "completed",
+          "ticketUsd": 486,
+          "windowStart": "8:00 AM",
+          "windowEnd": "9:00 AM",
+          "crewId": "crew-north",
+          "crewName": "Crew North",
+          "recovered": false,
+          "atRisk": false,
+          "customerLabel": "Demo customer"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -105.021,
+            39.851
+          ]
+        },
+        "properties": {
+          "layer": "job",
+          "id": "JOB-003",
+          "area": "Westminster",
+          "jobType": "Smart thermostat install",
+          "category": "install_small",
+          "status": "on_site",
+          "ticketUsd": 342,
+          "windowStart": "9:15 AM",
+          "windowEnd": "10:15 AM",
+          "crewId": "crew-north",
+          "crewName": "Crew North",
+          "recovered": false,
+          "atRisk": false,
+          "customerLabel": "Demo customer"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -104.9878,
+            39.8856
+          ]
+        },
+        "properties": {
+          "layer": "job",
+          "id": "JOB-004",
+          "area": "Northglenn",
+          "jobType": "Furnace no-heat repair",
+          "category": "repair",
+          "status": "en_route",
+          "ticketUsd": 618,
+          "windowStart": "9:45 AM",
+          "windowEnd": "10:45 AM",
+          "crewId": "crew-north",
+          "crewName": "Crew North",
+          "recovered": true,
+          "atRisk": false,
+          "customerLabel": "Demo customer"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -104.9719,
+            39.868
+          ]
+        },
+        "properties": {
+          "layer": "job",
+          "id": "JOB-005",
+          "area": "Thornton",
+          "jobType": "AC system install",
+          "category": "install",
+          "status": "on_site",
+          "ticketUsd": 6850,
+          "windowStart": "10:30 AM",
+          "windowEnd": "2:30 PM",
+          "crewId": "crew-north",
+          "crewName": "Crew North",
+          "recovered": false,
+          "atRisk": false,
+          "customerLabel": "Demo customer"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -105.0875,
+            39.8028
+          ]
+        },
+        "properties": {
+          "layer": "job",
+          "id": "JOB-006",
+          "area": "Arvada",
+          "jobType": "Refrigerant recharge",
+          "category": "repair",
+          "status": "en_route",
+          "ticketUsd": 429,
+          "windowStart": "11:00 AM",
+          "windowEnd": "12:00 PM",
+          "crewId": "crew-north",
+          "crewName": "Crew North",
+          "recovered": false,
+          "atRisk": false,
+          "customerLabel": "Demo customer"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -105.062,
+            39.789
+          ]
+        },
+        "properties": {
+          "layer": "job",
+          "id": "JOB-007",
+          "area": "Arvada",
+          "jobType": "Blower motor replacement",
+          "category": "repair",
+          "status": "scheduled",
+          "ticketUsd": 764,
+          "windowStart": "12:30 PM",
+          "windowEnd": "1:30 PM",
+          "crewId": "crew-north",
+          "crewName": "Crew North",
+          "recovered": false,
+          "atRisk": false,
+          "customerLabel": "Demo customer"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -104.8205,
+            39.9853
+          ]
+        },
+        "properties": {
+          "layer": "job",
+          "id": "JOB-008",
+          "area": "Brighton",
+          "jobType": "AC system install",
+          "category": "install",
+          "status": "scheduled",
+          "ticketUsd": 5940,
+          "windowStart": "1:00 PM",
+          "windowEnd": "5:00 PM",
+          "crewId": "crew-north",
+          "crewName": "Crew North",
+          "recovered": false,
+          "atRisk": true,
+          "customerLabel": "Demo customer"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -104.9038,
+            39.8083
+          ]
+        },
+        "properties": {
+          "layer": "job",
+          "id": "JOB-009",
+          "area": "Commerce City",
+          "jobType": "No-cool AC repair",
+          "category": "repair",
+          "status": "scheduled",
+          "ticketUsd": 655,
+          "windowStart": "2:30 PM",
+          "windowEnd": "3:30 PM",
+          "crewId": "crew-north",
+          "crewName": "Crew North",
+          "recovered": false,
+          "atRisk": true,
+          "customerLabel": "Demo customer"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -105.2211,
+            39.7555
+          ]
+        },
+        "properties": {
+          "layer": "job",
+          "id": "JOB-010",
+          "area": "Golden",
+          "jobType": "Furnace maintenance tune-up",
+          "category": "maintenance",
+          "status": "completed",
+          "ticketUsd": 149,
+          "windowStart": "7:30 AM",
+          "windowEnd": "8:30 AM",
+          "crewId": "crew-central",
+          "crewName": "Crew Central",
+          "recovered": false,
+          "atRisk": false,
+          "customerLabel": "Demo customer"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -105.0814,
+            39.7047
+          ]
+        },
+        "properties": {
+          "layer": "job",
+          "id": "JOB-011",
+          "area": "Lakewood",
+          "jobType": "Furnace repair",
+          "category": "repair",
+          "status": "completed",
+          "ticketUsd": 542,
+          "windowStart": "8:15 AM",
+          "windowEnd": "9:15 AM",
+          "crewId": "crew-central",
+          "crewName": "Crew Central",
+          "recovered": true,
+          "atRisk": false,
+          "customerLabel": "Demo customer"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -105.053,
+            39.682
+          ]
+        },
+        "properties": {
+          "layer": "job",
+          "id": "JOB-012",
+          "area": "Lakewood",
+          "jobType": "Duct cleaning",
+          "category": "service",
+          "status": "on_site",
+          "ticketUsd": 389,
+          "windowStart": "9:30 AM",
+          "windowEnd": "11:00 AM",
+          "crewId": "crew-central",
+          "crewName": "Crew Central",
+          "recovered": false,
+          "atRisk": false,
+          "customerLabel": "Demo customer"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -105.0302,
+            39.7628
+          ]
+        },
+        "properties": {
+          "layer": "job",
+          "id": "JOB-013",
+          "area": "Highlands",
+          "jobType": "Heat pump service",
+          "category": "service",
+          "status": "en_route",
+          "ticketUsd": 476,
+          "windowStart": "10:00 AM",
+          "windowEnd": "11:00 AM",
+          "crewId": "crew-central",
+          "crewName": "Crew Central",
+          "recovered": false,
+          "atRisk": false,
+          "customerLabel": "Demo customer"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -104.9903,
+            39.7392
+          ]
+        },
+        "properties": {
+          "layer": "job",
+          "id": "JOB-014",
+          "area": "Downtown Denver",
+          "jobType": "Commercial thermostat install",
+          "category": "install_small",
+          "status": "on_site",
+          "ticketUsd": 815,
+          "windowStart": "11:15 AM",
+          "windowEnd": "12:45 PM",
+          "crewId": "crew-central",
+          "crewName": "Crew Central",
+          "recovered": false,
+          "atRisk": false,
+          "customerLabel": "Demo customer"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -104.9849,
+            39.7284
+          ]
+        },
+        "properties": {
+          "layer": "job",
+          "id": "JOB-015",
+          "area": "Capitol Hill",
+          "jobType": "No-cool AC repair",
+          "category": "repair",
+          "status": "scheduled",
+          "ticketUsd": 458,
+          "windowStart": "12:00 PM",
+          "windowEnd": "1:00 PM",
+          "crewId": "crew-central",
+          "crewName": "Crew Central",
+          "recovered": true,
+          "atRisk": false,
+          "customerLabel": "Demo customer"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -104.9805,
+            39.6989
+          ]
+        },
+        "properties": {
+          "layer": "job",
+          "id": "JOB-016",
+          "area": "Washington Park",
+          "jobType": "AC maintenance tune-up",
+          "category": "maintenance",
+          "status": "scheduled",
+          "ticketUsd": 169,
+          "windowStart": "1:15 PM",
+          "windowEnd": "2:15 PM",
+          "crewId": "crew-central",
+          "crewName": "Crew Central",
+          "recovered": false,
+          "atRisk": false,
+          "customerLabel": "Demo customer"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -104.955,
+            39.72
+          ]
+        },
+        "properties": {
+          "layer": "job",
+          "id": "JOB-017",
+          "area": "Cherry Creek",
+          "jobType": "Indoor air quality purifier install",
+          "category": "install_small",
+          "status": "scheduled",
+          "ticketUsd": 1240,
+          "windowStart": "2:00 PM",
+          "windowEnd": "3:30 PM",
+          "crewId": "crew-central",
+          "crewName": "Crew Central",
+          "recovered": false,
+          "atRisk": false,
+          "customerLabel": "Demo customer"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -104.9878,
+            39.6479
+          ]
+        },
+        "properties": {
+          "layer": "job",
+          "id": "JOB-018",
+          "area": "Englewood",
+          "jobType": "Furnace system install",
+          "category": "install",
+          "status": "on_site",
+          "ticketUsd": 7480,
+          "windowStart": "9:00 AM",
+          "windowEnd": "1:00 PM",
+          "crewId": "crew-central",
+          "crewName": "Crew Central",
+          "recovered": false,
+          "atRisk": false,
+          "customerLabel": "Demo customer"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -105.0166,
+            39.6133
+          ]
+        },
+        "properties": {
+          "layer": "job",
+          "id": "JOB-019",
+          "area": "Littleton",
+          "jobType": "Furnace no-heat repair",
+          "category": "repair",
+          "status": "completed",
+          "ticketUsd": 587,
+          "windowStart": "7:45 AM",
+          "windowEnd": "8:45 AM",
+          "crewId": "crew-south",
+          "crewName": "Crew South",
+          "recovered": false,
+          "atRisk": false,
+          "customerLabel": "Demo customer"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -105.041,
+            39.595
+          ]
+        },
+        "properties": {
+          "layer": "job",
+          "id": "JOB-020",
+          "area": "Littleton",
+          "jobType": "AC maintenance tune-up",
+          "category": "maintenance",
+          "status": "on_site",
+          "ticketUsd": 159,
+          "windowStart": "9:00 AM",
+          "windowEnd": "10:00 AM",
+          "crewId": "crew-south",
+          "crewName": "Crew South",
+          "recovered": false,
+          "atRisk": false,
+          "customerLabel": "Demo customer"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -104.9693,
+            39.5532
+          ]
+        },
+        "properties": {
+          "layer": "job",
+          "id": "JOB-021",
+          "area": "Highlands Ranch",
+          "jobType": "AC repair",
+          "category": "repair",
+          "status": "en_route",
+          "ticketUsd": 723,
+          "windowStart": "10:15 AM",
+          "windowEnd": "11:15 AM",
+          "crewId": "crew-south",
+          "crewName": "Crew South",
+          "recovered": true,
+          "atRisk": false,
+          "customerLabel": "Demo customer"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -104.993,
+            39.541
+          ]
+        },
+        "properties": {
+          "layer": "job",
+          "id": "JOB-022",
+          "area": "Highlands Ranch",
+          "jobType": "Water heater install",
+          "category": "install",
+          "status": "scheduled",
+          "ticketUsd": 2150,
+          "windowStart": "11:30 AM",
+          "windowEnd": "1:30 PM",
+          "crewId": "crew-south",
+          "crewName": "Crew South",
+          "recovered": false,
+          "atRisk": false,
+          "customerLabel": "Demo customer"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -104.8836,
+            39.5365
+          ]
+        },
+        "properties": {
+          "layer": "job",
+          "id": "JOB-023",
+          "area": "Lone Tree",
+          "jobType": "Thermostat and air quality bundle",
+          "category": "install_small",
+          "status": "scheduled",
+          "ticketUsd": 689,
+          "windowStart": "12:45 PM",
+          "windowEnd": "2:00 PM",
+          "crewId": "crew-south",
+          "crewName": "Crew South",
+          "recovered": false,
+          "atRisk": false,
+          "customerLabel": "Demo customer"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -104.8765,
+            39.5804
+          ]
+        },
+        "properties": {
+          "layer": "job",
+          "id": "JOB-024",
+          "area": "Centennial",
+          "jobType": "Furnace system install",
+          "category": "install",
+          "status": "on_site",
+          "ticketUsd": 8120,
+          "windowStart": "8:30 AM",
+          "windowEnd": "12:30 PM",
+          "crewId": "crew-south",
+          "crewName": "Crew South",
+          "recovered": false,
+          "atRisk": false,
+          "customerLabel": "Demo customer"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -104.902,
+            39.596
+          ]
+        },
+        "properties": {
+          "layer": "job",
+          "id": "JOB-025",
+          "area": "Centennial",
+          "jobType": "Refrigerant recharge",
+          "category": "repair",
+          "status": "scheduled",
+          "ticketUsd": 402,
+          "windowStart": "2:15 PM",
+          "windowEnd": "3:15 PM",
+          "crewId": "crew-south",
+          "crewName": "Crew South",
+          "recovered": false,
+          "atRisk": false,
+          "customerLabel": "Demo customer"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -104.9506,
+            39.6172
+          ]
+        },
+        "properties": {
+          "layer": "job",
+          "id": "JOB-026",
+          "area": "Greenwood Village",
+          "jobType": "Duct cleaning",
+          "category": "service",
+          "status": "scheduled",
+          "ticketUsd": 349,
+          "windowStart": "3:00 PM",
+          "windowEnd": "4:30 PM",
+          "crewId": "crew-south",
+          "crewName": "Crew South",
+          "recovered": false,
+          "atRisk": false,
+          "customerLabel": "Demo customer"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -104.89,
+            39.7587
+          ]
+        },
+        "properties": {
+          "layer": "job",
+          "id": "JOB-027",
+          "area": "Central Park",
+          "jobType": "AC maintenance tune-up",
+          "category": "maintenance",
+          "status": "completed",
+          "ticketUsd": 149,
+          "windowStart": "7:30 AM",
+          "windowEnd": "8:30 AM",
+          "crewId": "crew-east",
+          "crewName": "Crew East",
+          "recovered": false,
+          "atRisk": false,
+          "customerLabel": "Demo customer"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -104.891,
+            39.7201
+          ]
+        },
+        "properties": {
+          "layer": "job",
+          "id": "JOB-028",
+          "area": "Lowry",
+          "jobType": "No-cool AC repair",
+          "category": "repair",
+          "status": "completed",
+          "ticketUsd": 512,
+          "windowStart": "8:45 AM",
+          "windowEnd": "9:45 AM",
+          "crewId": "crew-east",
+          "crewName": "Crew East",
+          "recovered": true,
+          "atRisk": false,
+          "customerLabel": "Demo customer"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -104.8319,
+            39.7294
+          ]
+        },
+        "properties": {
+          "layer": "job",
+          "id": "JOB-029",
+          "area": "Aurora",
+          "jobType": "Furnace repair",
+          "category": "repair",
+          "status": "on_site",
+          "ticketUsd": 598,
+          "windowStart": "10:00 AM",
+          "windowEnd": "11:00 AM",
+          "crewId": "crew-east",
+          "crewName": "Crew East",
+          "recovered": false,
+          "atRisk": false,
+          "customerLabel": "Demo customer"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -104.812,
+            39.7089
+          ]
+        },
+        "properties": {
+          "layer": "job",
+          "id": "JOB-030",
+          "area": "Aurora",
+          "jobType": "AC repair",
+          "category": "repair",
+          "status": "en_route",
+          "ticketUsd": 664,
+          "windowStart": "11:45 AM",
+          "windowEnd": "12:45 PM",
+          "crewId": "crew-east",
+          "crewName": "Crew East",
+          "recovered": false,
+          "atRisk": false,
+          "customerLabel": "Demo customer"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -104.8319,
+            39.8201
+          ]
+        },
+        "properties": {
+          "layer": "job",
+          "id": "JOB-031",
+          "area": "Montbello",
+          "jobType": "No-cool AC repair",
+          "category": "repair",
+          "status": "scheduled",
+          "ticketUsd": 471,
+          "windowStart": "1:30 PM",
+          "windowEnd": "2:30 PM",
+          "crewId": "crew-east",
+          "crewName": "Crew East",
+          "recovered": false,
+          "atRisk": true,
+          "customerLabel": "Demo customer"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -104.718,
+            39.843
+          ]
+        },
+        "properties": {
+          "layer": "job",
+          "id": "JOB-032",
+          "area": "Green Valley Ranch",
+          "jobType": "Furnace maintenance tune-up",
+          "category": "maintenance",
+          "status": "scheduled",
+          "ticketUsd": 179,
+          "windowStart": "2:00 PM",
+          "windowEnd": "3:00 PM",
+          "crewId": "crew-east",
+          "crewName": "Crew East",
+          "recovered": false,
+          "atRisk": true,
+          "customerLabel": "Demo customer"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -104.905,
+            39.862
+          ]
+        },
+        "properties": {
+          "layer": "job",
+          "id": "JOB-033",
+          "area": "Thornton East",
+          "jobType": "Heat pump repair",
+          "category": "repair",
+          "status": "scheduled",
+          "ticketUsd": 836,
+          "windowStart": "3:15 PM",
+          "windowEnd": "4:15 PM",
+          "crewId": "crew-east",
+          "crewName": "Crew East",
+          "recovered": false,
+          "atRisk": true,
+          "customerLabel": "Demo customer"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -104.7614,
+            39.5186
+          ]
+        },
+        "properties": {
+          "layer": "job",
+          "id": "JOB-034",
+          "area": "Parker",
+          "jobType": "AC system install",
+          "category": "install",
+          "status": "on_site",
+          "ticketUsd": 6290,
+          "windowStart": "9:30 AM",
+          "windowEnd": "1:30 PM",
+          "crewId": "crew-east",
+          "crewName": "Crew East",
+          "recovered": false,
+          "atRisk": false,
+          "customerLabel": "Demo customer"
+        }
+      }
+    ]
+  }
+}
