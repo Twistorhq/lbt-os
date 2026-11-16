@@ -1,8 +1,9 @@
 import { render, screen, fireEvent } from '@testing-library/react'
 import DispatchMap from './DispatchMap'
+import DemoKpiStrip from './DemoKpiStrip'
 
 test('KPI strip reads the demo data layer as given', () => {
-  render(<DispatchMap />)
+  render(<DemoKpiStrip />)
   expect(screen.getByText(/Front Range Comfort Co\. · Monday/)).toBeInTheDocument()
   expect(screen.getByText('34')).toBeInTheDocument()
   expect(screen.getByText('$50,839')).toBeInTheDocument()

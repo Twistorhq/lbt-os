@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '@clerk/clerk-react'
 import { Ambient, DepthStage, DriftImage, Parallax, Reveal, ScrollScale } from '../components/motion'
 import SampleCharts from '../components/marketing/SampleCharts'
+import DemoKpiStrip from '../components/marketing/DemoKpiStrip'
 import DispatchMap from '../components/marketing/DispatchMap'
 import demoMapData from '../components/marketing/demo-map-data.json'
 
@@ -553,6 +554,10 @@ function LivePreview({ onCta, ctaUrl }) {
             </div>
           </div>
         </ScrollScale>
+
+        <Reveal y={28}>
+          <DemoKpiStrip />
+        </Reveal>
 
         <Reveal y={28}>
           <SampleCharts tradeKey={tradeKey} tradeLabel={trade.label} />

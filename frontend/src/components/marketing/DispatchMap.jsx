@@ -10,11 +10,10 @@ import demoData from './demo-map-data.json'
  *
  * Data: Maya's demo data layer (twistor-lab/projects/twistor-trades/
  * DEMO-MAP-DATA.json, copied verbatim to demo-map-data.json beside this
- * file). One fictional shop, Front Range Comfort Co. Every KPI, pin,
+ * file). One fictional shop, Front Range Comfort Co. Every pin,
  * route, and dollar figure on this block is read from that file as
- * given; nothing is recomputed client side beyond formatting and the
- * route-mile total the schema note defines. The labeling line under the
- * map is meta.labelingLine, verbatim.
+ * given; nothing is recomputed client side beyond formatting. The
+ * labeling line under the map is meta.labelingLine, verbatim.
  *
  * Rendering: self-contained SVG on purpose. The preview snapshot ships
  * as a single file with no network, so the map cannot depend on tile
@@ -115,10 +114,11 @@ function LayerToggle({ label, pressed, onToggle }) {
 }
 
 /**
- * DispatchMap: the demo map block for the marketing live preview. KPI
- * strip on top (read from the data layer), then the map panel: coverage,
- * routes, job pins by status, at-risk pins flagged, storm overlay with
- * its callout, and the same day summarized as text beside the map.
+ * DispatchMap: the demo map panel for the marketing live preview:
+ * coverage, routes, job pins by status, at-risk pins flagged, storm
+ * overlay with its callout, and the same day summarized as text beside
+ * the map. The demo KPI strip (DemoKpiStrip) renders above the charts,
+ * ahead of this block, per the founder's ordering (TW-1149, Rosa N1).
  */
 export default function DispatchMap() {
   const [layers, setLayers] = useState({ jobs: true, coverage: true, storm: true })
@@ -154,52 +154,12 @@ export default function DispatchMap() {
       stormChipAt: [sb.cx - 124, Math.max(6, sb.top - 36)],
       hq: project(meta.shop.hq.coordinates),
       atRiskJobs: jobs.filter((j) => j.atRisk),
-      routeMilesTotal: routes.reduce((n, r) => n + r.routeMiles, 0),
     }
   }, [])
 
-  const kpiTiles = [
-    {
-      label: 'Jobs today',
-      value: String(kpis.jobsToday),
-      note: `${kpis.jobsCompleted} done · ${kpis.jobsOnSite} on site · ${kpis.jobsEnRoute} en route · ${kpis.jobsScheduled} scheduled`,
-    },
-    {
-      label: 'Crews out',
-      value: String(kpis.crewsOut),
-      note: `${model.routes.map((r) => r.stops).join(' · ')} stops · ${model.routeMilesTotal.toFixed(1)} route miles`,
-    },
-    {
-      label: 'Revenue scheduled',
-      value: money(kpis.revenueScheduledUsd),
-      note: `Average ticket ${money(Math.round(kpis.averageTicketUsd))}`,
-    },
-    {
-      label: 'Revenue at risk',
-      value: money(kpis.revenueAtRiskUsd),
-      note: `${kpis.jobsAtRisk} jobs inside the storm cell`,
-    },
-  ]
-
   return (
     <div className="mt-14">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="tt-kicker text-slate-500">
-          {meta.shop.name} · {meta.day}
-        </p>
-        <span className="tt-sample-badge on-light">Demo data</span>
-      </div>
-      <dl className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label="Demo shop key numbers from the demo data layer">
-        {kpiTiles.map((kpi) => (
-          <div key={kpi.label} className="rounded-3xl border border-slate-200/80 bg-white p-5 shadow-[0_18px_44px_-30px_rgba(10,10,24,0.25)]">
-            <dt className="tt-kicker text-slate-500">{kpi.label}</dt>
-            <dd className="mt-2 text-3xl font-bold tracking-tight text-slate-950">{kpi.value}</dd>
-            <dd className="mt-1 text-[13px] leading-5 text-slate-500">{kpi.note}</dd>
-          </div>
-        ))}
-      </dl>
-
-      <div className="mt-6 overflow-hidden rounded-[1.75rem] border border-sofrito-800 bg-sofrito-950 text-white shadow-[0_40px_90px_-40px_rgba(10,10,24,0.55)]">
+      <div className="overflow-hidden rounded-[1.75rem] border border-sofrito-800 bg-sofrito-950 text-white shadow-[0_40px_90px_-40px_rgba(10,10,24,0.55)]">
         <div className="flex flex-wrap items-end justify-between gap-5 px-7 pt-8 sm:px-10">
           <div className="max-w-xl">
             <div className="tt-kicker text-gold-400">Dispatch map</div>

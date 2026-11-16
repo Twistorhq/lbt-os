@@ -52,3 +52,21 @@ the new code, and how each item was handled:
 - Tests: 14 passed in the marketing and pages scope, including 5 new
   DispatchMap tests (KPI values read as given, 34 pins, verbatim
   labeling line, crew board, storm callout, toggle behavior).
+
+## Addendum: Rosa N1 fix (founder decision, 2026-11-16)
+
+Rosa approved with note N1: the KPI strip crowned the map block instead
+of sitting above the charts as the ticket ordered. The founder chose
+his original ordering. The strip (shop header row plus the four-tile
+dl) moved out of DispatchMap into a new DemoKpiStrip component and now
+renders between the analyst brief and SampleCharts in LivePreview, so
+the data section reads: KPI strip, charts, dispatch map as hero,
+pricing. Markup, classes, and figures are unchanged; the strip reads
+the same demo data layer as given (its Crews out note derives stops
+and route miles from the geojson route features, the same source the
+map model used). No new copy, no new styling, so no new Impeccable or
+unslop surface; the strip's tiles were already covered by the scan
+above. Tests: 61 passed in the marketing and pages scope (Rosa's
+broader run scope), with the KPI test now rendering DemoKpiStrip.
+Evidence refreshed: after-data-desktop.png and after-data-mobile.png
+show the new order; the before set is untouched.
