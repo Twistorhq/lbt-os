@@ -14,6 +14,7 @@ from slowapi.errors import RateLimitExceeded
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .agent_identity import router as agent_identity_router
+from .agent_jobs import router as agent_jobs_router
 from .agentperms import router as agentperms_router
 from .config import settings
 
@@ -139,6 +140,7 @@ app.include_router(identity_oauth.oauth_router, prefix="/api/v1")
 app.include_router(identity_saml.saml_router, prefix="/api/v1")
 app.include_router(notify_router.router, prefix="/api/v1")
 app.include_router(flows_router.router, prefix="/api/v1")
+app.include_router(agent_jobs_router.router, prefix="/api/v1")
 app.include_router(flags_router.router, prefix="/api/v1")
 app.include_router(agent_identity_router.router, prefix="/api/v1")
 app.include_router(agentperms_router.router, prefix="/api/v1")

@@ -136,6 +136,15 @@ class Settings(BaseSettings):
     # meet.twistor.co — NOT deployed); unset means the room provider
     # fails closed and no consult can start. Config alone activates
     # nothing.
+    # TW-952 (TW-948-B4) persistent agent jobs: per-org enable
+    # flag, default OFF for every org. Comma-separated org ids;
+    # empty means the job ticker fires nothing anywhere and
+    # trigger-now refuses. Definitions can be staged while off.
+    agent_jobs_enabled_orgs: str = ""
+    # Tick endpoint guard, same fail-closed shape as FLOWS_TICK_KEY:
+    # unset means the tick endpoint refuses every call.
+    agent_jobs_tick_key: str | None = None
+
     video_consult_enabled: bool = False
     video_consult_jitsi_base_url: str | None = None
 
