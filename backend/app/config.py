@@ -241,8 +241,11 @@ TRIAL_PERIOD_DAYS = 14
 
 # Micro-toll rates in cents per event (TW-549 Twistor staple). The toll ledger
 # owns this vocabulary; M2/M3 emit events, the ledger prices them.
-# Percent-of-value events (e.g. booking.recovered at 10% of job value) are NOT
-# in this map: the emitter computes the amount and passes amount_cents.
+# Percent-of-value events are NOT in this map: the emitter computes the
+# amount and passes amount_cents. The one named percent event is
+# booking.recovered (Section 11): a percentage of the recovered value
+# floating between 2 and 4 percent with 3 percent as the anchor. Its
+# band is enforced at emission in services/toll_service.py.
 # TW-787: the one-time agent.hire fee, in cents. Justynn's band is
 # $20-$30 per additional agent; $25 is the default until he confirms
 # the exact number. This constant is the ONLY place the fee lives —
@@ -262,23 +265,41 @@ AGENT_HIRE_FEE_CENTS = 2500
 STANDARD_AGENT_POWER_UNITS = 1
 INCLUDED_AGENT_POWER_UNITS = 10
 
+# TW-950 (TW-948-B3): booking.recovered band, as decided in Section 11
+# of the Tori product spec. The emitter computes the amount from the
+# recovered value; emission validates the amount sits inside this
+# band. These constants are the ONLY place the band lives.
+BOOKING_RECOVERED_EVENT = "booking.recovered"
+BOOKING_RECOVERED_MIN_PERCENT = 2.0
+BOOKING_RECOVERED_MAX_PERCENT = 4.0
+BOOKING_RECOVERED_ANCHOR_PERCENT = 3.0
+
 TOLL_RATES: dict[str, int] = {
     "agent.hire": AGENT_HIRE_FEE_CENTS,  # TW-787: one-time fee per additional agent hired
-    "missed_call.detected": 10,   # $0.10 per detected missed call
-    "sms.auto_reply":         5,  # $0.05 per auto-SMS
-    "call.ai_handled":       50,  # $0.50 per AI-handled call
-    "consult.session":       50,  # TW-734: $0.50 flat-mode/answering toll per consult session; per-minute mode passes amount_cents at $0.05/billable minute
-    "bi.embed_view":          5,  # $0.05 per public embed view (TW-570)
-    "bi.connector_sync":     25,  # $0.25 per connector sync (TW-570)
+    # TW-950 (TW-948-B3): Section 11 agent action tolls, at the rates
+    # already decided in the Tori product spec (Sections 8.4 and 11).
+    # No per-call toll and no standalone background-review toll exist:
+    # both are unnamed founder gaps and stay unpriced.
+    "agent.email_action": 5,  # $0.05 per email action
+    "agent.task_completed": 25,  # $0.25 per completed task
+    "agent.booking_confirmed": 50,  # $0.50 per confirmed booking
+    "agent.invoice_chase_step": 5,  # $0.05 per invoice chase step
+    "agent.estimate_chase_step": 5,  # $0.05 per estimate chase step
+    "missed_call.detected": 10,  # $0.10 per detected missed call
+    "sms.auto_reply": 5,  # $0.05 per auto-SMS
+    "call.ai_handled": 50,  # $0.50 per AI-handled call
+    "consult.session": 50,  # TW-734: $0.50 flat-mode/answering toll per consult session; per-minute mode passes amount_cents at $0.05/billable minute
+    "bi.embed_view": 5,  # $0.05 per public embed view (TW-570)
+    "bi.connector_sync": 25,  # $0.25 per connector sync (TW-570)
     # TW-593 science data layer (V1 defaults; dynamic volume tiers stamped per doctrine)
-    "data.science.query":     5,  # $0.05 per gold query call
-    "data.science.bulk":     25,  # $0.25 per 1k rows on bulk export
-    "data.science.ingest":   10,  # $0.10 per ingested batch (lab-side, nominal)
+    "data.science.query": 5,  # $0.05 per gold query call
+    "data.science.bulk": 25,  # $0.25 per 1k rows on bulk export
+    "data.science.ingest": 10,  # $0.10 per ingested batch (lab-side, nominal)
     "data.science.benchmark": 50,  # $0.50 per benchmark submission
     # TW-620 Twistor Notify: orchestration toll per message sent
-    "notify.message_sent":    1,  # $0.01 per orchestrated notification
+    "notify.message_sent": 1,  # $0.01 per orchestrated notification
     # TW-625 Twistor Flows: execution toll per step executed
-    "flows.step_executed":    1,  # $0.01 per executed workflow step
+    "flows.step_executed": 1,  # $0.01 per executed workflow step
 }
 
 # NOTE (TW-550): PLAN_FEATURES removed — it had no consumers and listed only
