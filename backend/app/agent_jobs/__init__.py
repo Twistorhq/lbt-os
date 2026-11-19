@@ -12,10 +12,37 @@ record every fire reads before running and updates after.
 The execution context is constructed with no job-management
 capability, so no-job-creates-job is a construction property.
 Ships behind a per-org enable flag defaulting OFF
-(settings.agent_jobs_enabled_orgs). Preflight and admission
-reconciliation are B5 (TW-953), out of scope here.
+(settings.agent_jobs_enabled_orgs).
+
+TW-953 (TW-948-B5) adds the safety layer on top: preflight
+(definition quarantine plus credential, skill, delivery, and
+ledger checks; a failure blocks the job with exactly one owner
+alert and creates no task), the durable step journal and
+exactly-once reconciliation, the stranded-fire reaper with
+pause-for-review recovery, durable delivery handoff receipts,
+and the durable tick heartbeat.
 """
 
-from . import cron, execution, models, service, ticker
+from . import (
+    cron,
+    execution,
+    heartbeat,
+    models,
+    preflight,
+    reconciliation,
+    recovery,
+    service,
+    ticker,
+)
 
-__all__ = ["cron", "execution", "models", "service", "ticker"]
+__all__ = [
+    "cron",
+    "execution",
+    "heartbeat",
+    "models",
+    "preflight",
+    "reconciliation",
+    "recovery",
+    "service",
+    "ticker",
+]

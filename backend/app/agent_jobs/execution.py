@@ -132,6 +132,7 @@ def run_steps(
     toll_sink: Callable[..., dict] | None = None,
     db: Any = None,
     fence_check: Callable[[str], bool] | None = None,
+    step_journal: Callable[[str, JobStep], None] | None = None,
 ) -> FireOutcome:
     """Run a fire's steps in order, fencing before each step.
 
@@ -142,6 +143,15 @@ def run_steps(
     if the run is retried. A fenced run stops before its next
     step: nothing further runs, and the outcome reports the
     steps that did complete.
+
+    The step journal (TW-953) is the reconciliation evidence:
+    'started' is journaled BEFORE the handler runs and
+    'executed' AFTER it returns, BEFORE the toll posts, so a
+    crash or a toll-sink failure between effect and toll leaves
+    durable proof of what executed (reconciliation.py classifies
+    from it). A toll failure journals 'toll_failed' and still
+    propagates: the run fails loud, and reconciliation, not a
+    blind retry, settles the toll.
     """
     outcome = FireOutcome(status="completed")
     surfaced: list[str] = []
@@ -155,6 +165,8 @@ def run_steps(
         if fenced():
             outcome.status = "cancelled"
             break
+        if step_journal is not None:
+            step_journal("started", step)
         result = step.handler(ctx)
         outcome.completed_steps.append(step.name)
         if isinstance(result, dict):
@@ -165,15 +177,24 @@ def run_steps(
             for item in result.get("surfaced_item_ids") or []:
                 if item not in surfaced:
                     surfaced.append(item)
+        if step_journal is not None:
+            step_journal("executed", step)
         if step.toll_event is not None and toll_sink is not None:
-            toll_sink(
-                db,
-                ctx.org_id,
-                step.toll_event,
-                idempotency_key=f"{ctx.fire_key}:step:{step.name}",
-                source_type="agt_job_fire",
-                source_id=ctx.fire_id,
-            )
+            try:
+                toll_sink(
+                    db,
+                    ctx.org_id,
+                    step.toll_event,
+                    idempotency_key=f"{ctx.fire_key}:step:{step.name}",
+                    source_type="agt_job_fire",
+                    source_id=ctx.fire_id,
+                )
+            except Exception:
+                if step_journal is not None:
+                    step_journal("toll_failed", step)
+                raise
+            if step_journal is not None:
+                step_journal("tolled", step)
     # Re-check the fence AFTER the final step too: the loop only
     # checks before each step, so a cancel landing inside the
     # last step would otherwise be missed and the run reported
