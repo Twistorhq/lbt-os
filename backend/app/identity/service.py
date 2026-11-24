@@ -21,6 +21,22 @@ class ValidationError(Exception):
     """TW-1327: the request data is invalid — the router maps this to
     400, not 401 (401 means unauthenticated to every client)."""
 
+
+class MagicLinkChallenge(Exception):
+    """TW-1325 R5: a password signup reached a passwordless account
+    whose mailbox was never verified. The service has already issued
+    a fresh login-purpose magic link; the router emails it and
+    answers 202 {"sent": true} — indistinguishable from the
+    magic-link endpoint, so the response leaks nothing about the
+    account's state. Carries the raw token for the router's send
+    ONLY: never log it, never put it in a response body."""
+
+    def __init__(self, email: str, raw_token: str):
+        super().__init__("magic link issued")
+        self.email = email
+        self.raw_token = raw_token
+
+
 REFRESH_TTL_DAYS = 30
 MAGIC_LINK_TTL_MINUTES = 15
 MIN_PASSWORD_LENGTH = 12
@@ -202,9 +218,11 @@ def signup(db, email: str, password: str, org_name: str | None = None) -> dict:
       * fresh signup compensates (deletes the just-created user row)
         if provisioning fails, so a retry starts clean;
       * an existing user with NO workspace resumes instead of being
-        rejected: a passwordless (magic-link) account gets its
-        password set; a password account must present the matching
-        password, then provisioning completes;
+        rejected: a VERIFIED passwordless (magic-link) account gets
+        its password set — an UNVERIFIED one is routed through
+        mailbox proof instead (TW-1325 R5, pre-hijacking); a
+        password account must present the matching password, then
+        provisioning completes;
       * only a fully-provisioned account is a true duplicate (409).
     """
     email = email.strip().lower()
@@ -218,9 +236,23 @@ def signup(db, email: str, password: str, org_name: str | None = None) -> dict:
     if existing:
         user = existing[0]
         if not user.get("password_hash"):
-            # Passwordless account (magic-link, TW-1325): set the
-            # password and finish provisioning — the email is NOT
-            # burned.
+            if not user.get("email_verified_at"):
+                # TW-1325 R5 (Rosa probe, Rex adjudication run-3 —
+                # FIX REQUIRED, HIGH): an unverified passwordless
+                # shell can be created by ANYONE through an
+                # unauthenticated magic-link request. Setting a
+                # password here would let whoever asks first claim
+                # the account — pre-hijacking. Set nothing, provision
+                # nothing: route the claimant through mailbox proof
+                # with a fresh login-purpose link instead.
+                raw = issue_magic_link(db, email, purpose="login")
+                raise MagicLinkChallenge(email, raw)
+            # Verified passwordless account (magic-link, TW-1325):
+            # consume sets email_verified_at for any purpose, and
+            # Clerk-migrated / OAuth users carry it from their
+            # verified flows — so this gate costs no legitimate
+            # journey. Set the password and finish provisioning —
+            # the email is NOT burned.
             db.table("idn_users").update(
                 {"password_hash": passwords.hash_password(password)}
             ).eq("id", user["id"]).execute()

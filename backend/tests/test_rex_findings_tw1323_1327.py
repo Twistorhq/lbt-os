@@ -8,6 +8,9 @@ encodes the FIXED behavior; all were RED against the pre-fix code.
               failure wedges the account permanently.
   TW-1325 F3: magic-link signup creates an identity that can never
               reach a workspace and burns the email.
+  TW-1325 R5: the F3 password-set, ungated, let anyone claim the
+              unverified passwordless shell a foreign magic-link
+              request creates — account pre-hijacking (Rex run-3).
   TW-1326 F4: visitor-events attribution forgeable via the
               unauthenticated x-lbt-user-id header.
   TW-1327 F5: error semantics — duplicate race 500 (want 409),
@@ -46,6 +49,7 @@ from app import main as main_module  # noqa: E402
 from app.database import get_db  # noqa: E402
 from app.identity import router as identity_router_module  # noqa: E402
 from app.identity import service as identity_service  # noqa: E402
+from app.identity import tokens as identity_tokens  # noqa: E402
 from app.limiter import limiter  # noqa: E402
 from app.routers import organizations as organizations_router  # noqa: E402
 from app.routers import visitor_events as visitor_router  # noqa: E402
@@ -457,6 +461,125 @@ def test_f3_magic_link_email_not_burned_for_password_signup(fake):
     identity_service.signup(fake, "later@example.com", PASSWORD)
     session = identity_service.login(fake, "later@example.com", PASSWORD)
     assert len(session["orgs"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# TW-1325 / R5 — account pre-hijacking via the unverified shell
+# (Rosa probe R5, Rex adjudication run-3: FIX REQUIRED, HIGH)
+#
+# An unauthenticated magic-link request auto-provisions a passwordless
+# shell (email_verified_at NULL). Before this fix, anyone — no token,
+# no mailbox access — could claim that shell via password signup,
+# provision the org, and log in with an attacker-chosen password; the
+# real owner's later signup got 409. The fix gates the password-set
+# on email_verified_at: an unverified shell sets nothing, provisions
+# nothing, and the signup answers an indistinguishable 202 with a
+# fresh magic link issued to the mailbox.
+# ---------------------------------------------------------------------------
+
+ATTACKER_PASSWORD = "attacker chosen password"
+OWNER_PASSWORD = "owner chosen password 99"
+
+
+def _shell_user(fake, email):
+    rows = [u for u in fake.rows("idn_users") if u["email"] == email]
+    assert len(rows) == 1
+    return rows[0]
+
+
+def test_r5_unverified_shell_claim_fails_closed(identity_client, fake, monkeypatch):
+    sent = []
+    monkeypatch.setattr(
+        identity_router_module.email_service,
+        "send_identity_magic_link",
+        lambda **kw: sent.append(kw),
+    )
+    # A foreign unauthenticated magic-link request creates the shell.
+    identity_service.issue_magic_link(fake, "victim@example.com")
+    shell = _shell_user(fake, "victim@example.com")
+    assert shell.get("password_hash") is None
+    assert shell.get("email_verified_at") is None
+    links_before = len(fake.rows("idn_magic_links"))
+
+    # The claim attempt: password signup with no mailbox proof.
+    r = identity_client.post(
+        "/api/v1/identity/signup",
+        json={"email": "victim@example.com", "password": ATTACKER_PASSWORD},
+    )
+    # Indistinguishable from the magic-link endpoint's answer.
+    assert r.status_code == 202, r.text
+    assert r.json() == {"sent": True}
+
+    # Store read-back: nothing set, nothing provisioned, link issued.
+    shell = _shell_user(fake, "victim@example.com")
+    assert shell.get("password_hash") is None
+    assert shell.get("email_verified_at") is None
+    assert fake.rows("idn_org_memberships") == []
+    assert fake.rows("organizations") == []
+    links = fake.rows("idn_magic_links")
+    assert len(links) == links_before + 1
+    assert links[-1]["purpose"] == "login"
+    assert links[-1]["user_id"] == shell["id"]
+    assert len(sent) == 1 and sent[0]["to"] == "victim@example.com"
+
+
+def test_r5_verified_shell_sets_password_and_provisions_once(fake):
+    # Consume sets email_verified_at for ANY purpose; a verify-purpose
+    # consume proves mailbox control but mints no session and
+    # provisions nothing. The password-set must still work after it.
+    raw = identity_service.issue_magic_link(
+        fake, "proven@example.com", purpose="verify"
+    )
+    result = identity_service.consume_magic_link(fake, raw)
+    assert "access_token" not in result
+    user = _shell_user(fake, "proven@example.com")
+    assert user.get("email_verified_at")
+    assert user.get("password_hash") is None
+    assert fake.rows("organizations") == []
+
+    identity_service.signup(fake, "proven@example.com", OWNER_PASSWORD)
+    user = _shell_user(fake, "proven@example.com")
+    assert user.get("password_hash")
+    assert len(fake.rows("organizations")) == 1
+    memberships = [
+        m for m in fake.rows("idn_org_memberships") if m["user_id"] == user["id"]
+    ]
+    assert len(memberships) == 1 and memberships[0]["role"] == "owner"
+    session = identity_service.login(fake, "proven@example.com", OWNER_PASSWORD)
+    assert len(session["orgs"]) == 1
+
+
+def test_r5_sequence_yields_no_attacker_login_and_owner_not_burned(
+    identity_client, fake, monkeypatch
+):
+    monkeypatch.setattr(
+        identity_router_module.email_service,
+        "send_identity_magic_link",
+        lambda **kw: None,
+    )
+    # R5 steps 1-2: foreign magic-link request, then a claim attempt.
+    identity_service.issue_magic_link(fake, "shop@example.com")
+    r = identity_client.post(
+        "/api/v1/identity/signup",
+        json={"email": "shop@example.com", "password": ATTACKER_PASSWORD},
+    )
+    assert r.status_code == 202, r.text
+    # R5 step 3 must now fail: no password login for the attacker.
+    with pytest.raises(identity_tokens.TokenError):
+        identity_service.login(fake, "shop@example.com", ATTACKER_PASSWORD)
+
+    # The real owner arrives by magic link (mailbox proof) ...
+    raw = identity_service.issue_magic_link(fake, "shop@example.com")
+    session = identity_service.consume_magic_link(fake, raw)
+    assert len(session["orgs"]) == 1
+    # ... and can still set their own password: not burned by the
+    # earlier claim attempt (no 409, no second org).
+    identity_service.signup(fake, "shop@example.com", OWNER_PASSWORD)
+    assert len(fake.rows("organizations")) == 1
+    session = identity_service.login(fake, "shop@example.com", OWNER_PASSWORD)
+    assert len(session["orgs"]) == 1
+    with pytest.raises(identity_tokens.TokenError):
+        identity_service.login(fake, "shop@example.com", ATTACKER_PASSWORD)
 
 
 # ---------------------------------------------------------------------------

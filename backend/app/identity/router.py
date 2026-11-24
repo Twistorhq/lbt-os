@@ -4,6 +4,7 @@ import datetime
 import os
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr
 from supabase import Client
@@ -66,6 +67,18 @@ def _token_err(e: tokens.TokenError) -> HTTPException:
 def signup(request: Request, body: SignupIn, db: Client = Depends(get_db)):
     try:
         return service.signup(db, body.email, body.password, body.org_name)
+    except service.MagicLinkChallenge as e:
+        # TW-1325 R5: unverified passwordless shell — email the fresh
+        # link the service issued and answer EXACTLY like the
+        # magic-link endpoint (202, {"sent": true}), so the response
+        # leaks nothing about the account's state. The raw token goes
+        # only into the email: never logged, never in the body.
+        email_service.send_identity_magic_link(
+            to=e.email, token=e.raw_token, purpose="login"
+        )
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED, content={"sent": True}
+        )
     except service.ConflictError as e:
         # TW-1327: duplicates (including the lost race) are 409.
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
