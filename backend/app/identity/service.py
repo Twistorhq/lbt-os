@@ -5,10 +5,21 @@ import os
 import warnings
 from datetime import datetime, timedelta, timezone
 
+from ..database import is_unique_violation
 from . import keys, passwords, tokens
 from .keys import Keypair
 
 log = logging.getLogger(__name__)
+
+
+class ConflictError(Exception):
+    """TW-1327: the resource already exists — the router maps this to
+    409, distinct from TokenError (401, an auth failure)."""
+
+
+class ValidationError(Exception):
+    """TW-1327: the request data is invalid — the router maps this to
+    400, not 401 (401 means unauthenticated to every client)."""
 
 REFRESH_TTL_DAYS = 30
 MAGIC_LINK_TTL_MINUTES = 15
@@ -147,34 +158,18 @@ def _user_orgs(db, user_id: str) -> list[dict]:
     return res.data or []
 
 
-def signup(db, email: str, password: str, org_name: str | None = None) -> dict:
-    """Create user + org + owner membership. Returns user (no session until
-    first login — explicit, auditable)."""
-    email = email.strip().lower()
-    if len(password) < MIN_PASSWORD_LENGTH:
-        raise tokens.TokenError(
-            f"password must be at least {MIN_PASSWORD_LENGTH} characters"
-        )
-    existing = (
-        db.table("idn_users").select("id").eq("email", email).limit(1).execute()
-    ).data
-    if existing:
-        raise tokens.TokenError("email already registered")
-    user = (
-        db.table("idn_users")
-        .insert(
-            {
-                "email": email,
-                "password_hash": passwords.hash_password(password),
-            }
-        )
-        .execute()
-    ).data[0]
+def _provision_org(db, user: dict, org_name: str | None = None) -> dict:
+    """Create the user's workspace org + owner membership.
+
+    TW-1324/TW-1325: this is the ONE provisioning path — password
+    signup, wedged-account repair, and magic-link first consume all
+    go through it, so no identity can exist without a workspace.
+    """
     org = (
         db.table("organizations")
         .insert(
             {
-                "name": org_name or f"{email.split('@')[0]}'s org",
+                "name": org_name or f"{user['email'].split('@')[0]}'s org",
             }
         )
         .execute()
@@ -186,6 +181,84 @@ def signup(db, email: str, password: str, org_name: str | None = None) -> dict:
             "role": "owner",
         }
     ).execute()
+    return org
+
+
+def _ensure_provisioned(db, user: dict, org_name: str | None = None) -> dict | None:
+    """Provision a workspace iff the user has none. Returns the org."""
+    if _user_orgs(db, user["id"]):
+        return None
+    return _provision_org(db, user, org_name)
+
+
+def signup(db, email: str, password: str, org_name: str | None = None) -> dict:
+    """Create user + org + owner membership. Returns user (no session until
+    first login — explicit, auditable).
+
+    TW-1324 (Rex F2): provisioning is resumable and self-compensating.
+    The old three bare inserts meant one transient failure left a user
+    row with zero orgs whose re-signup was rejected — permanently
+    wedged. Now:
+      * fresh signup compensates (deletes the just-created user row)
+        if provisioning fails, so a retry starts clean;
+      * an existing user with NO workspace resumes instead of being
+        rejected: a passwordless (magic-link) account gets its
+        password set; a password account must present the matching
+        password, then provisioning completes;
+      * only a fully-provisioned account is a true duplicate (409).
+    """
+    email = email.strip().lower()
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise ValidationError(
+            f"password must be at least {MIN_PASSWORD_LENGTH} characters"
+        )
+    existing = (
+        db.table("idn_users").select("*").eq("email", email).limit(1).execute()
+    ).data
+    if existing:
+        user = existing[0]
+        if not user.get("password_hash"):
+            # Passwordless account (magic-link, TW-1325): set the
+            # password and finish provisioning — the email is NOT
+            # burned.
+            db.table("idn_users").update(
+                {"password_hash": passwords.hash_password(password)}
+            ).eq("id", user["id"]).execute()
+            org = _ensure_provisioned(db, user, org_name)
+            org_id = org["id"] if org else _user_orgs(db, user["id"])[0]["org_id"]
+            return {"user": _public_user(user), "org_id": org_id}
+        if not _user_orgs(db, user["id"]):
+            # Wedged account (probe D): resume only for the owner —
+            # the presented password must match the stored hash.
+            if not passwords.verify_password(password, user["password_hash"]):
+                raise ConflictError("email already registered")
+            org = _provision_org(db, user, org_name)
+            return {"user": _public_user(user), "org_id": org["id"]}
+        raise ConflictError("email already registered")
+    try:
+        user = (
+            db.table("idn_users")
+            .insert(
+                {
+                    "email": email,
+                    "password_hash": passwords.hash_password(password),
+                }
+            )
+            .execute()
+        ).data[0]
+    except Exception as exc:
+        # TW-1327: the duplicate-signup race loses to the CITEXT
+        # UNIQUE constraint — translate to 409, never a bare 500.
+        if is_unique_violation(exc):
+            raise ConflictError("email already registered") from exc
+        raise
+    try:
+        org = _provision_org(db, user, org_name)
+    except Exception:
+        # Compensation: remove the half-created user so the account
+        # is never left wedged (TW-1324).
+        db.table("idn_users").delete().eq("id", user["id"]).execute()
+        raise
     return {"user": _public_user(user), "org_id": org["id"]}
 
 
@@ -210,6 +283,10 @@ def login(db, email: str, password: str, ip=None, user_agent=None) -> dict:
         password, user["password_hash"]
     ):
         raise tokens.TokenError("invalid credentials")
+    # TW-1324: login is also a repair path — a wedged account (user
+    # row, no workspace, e.g. from a pre-fix failed signup) gets its
+    # provisioning completed here instead of a session into orgs=[].
+    _ensure_provisioned(db, user)
     return _open_session(db, user, ip, user_agent)
 
 
@@ -345,6 +422,15 @@ def consume_magic_link(db, raw_token: str, ip=None, user_agent=None) -> dict:
             "id", user["id"]
         ).execute()
         user["email_verified_at"] = _now().isoformat()
+    # TW-1327 (Rex F5): purpose is enforced, not just stored. A
+    # "verify" link proves mailbox ownership ONLY — it must never
+    # mint a login session.
+    if (link.get("purpose") or "login") == "verify":
+        return {"verified": True, "user": _public_user(user)}
+    # TW-1325 (Rex F3): a login-purpose consume completes
+    # provisioning, exactly like signup — a magic-link identity lands
+    # in a real workspace instead of a session into orgs=[].
+    _ensure_provisioned(db, user)
     return _open_session(db, user, ip, user_agent)
 
 

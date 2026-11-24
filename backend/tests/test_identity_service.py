@@ -133,7 +133,9 @@ def test_signup_creates_owner_membership(db):
 
 def test_signup_duplicate_email_rejected(db):
     _signup(db)
-    with pytest.raises(tokens.TokenError):
+    # TW-1327: a fully-provisioned duplicate is a conflict (409 at
+    # the router), not an auth error.
+    with pytest.raises(service.ConflictError):
         _signup(db)
 
 
@@ -200,7 +202,8 @@ def test_switch_org_ok(db):
 
 
 def test_signup_rejects_short_password(db):
-    with pytest.raises(tokens.TokenError):
+    # TW-1327: validation failure (400 at the router), not 401.
+    with pytest.raises(service.ValidationError):
         service.signup(db, "short@x.co", "tiny", org_name="Acme")
 
 

@@ -48,8 +48,23 @@ def _hash_ip(ip_address: str) -> str | None:
 
 
 def _optional_user_id(request: Request) -> str | None:
-    user_id = request.headers.get("x-lbt-user-id")
-    return user_id[:128] if user_id else None
+    """TW-1326 (Rex F4): attribution comes ONLY from a verified Clerk
+    JWT in the Authorization header. The old code trusted the
+    client-supplied x-lbt-user-id header verbatim, so anyone could
+    pin funnel events on any real user. Unauthenticated events are
+    stored with clerk_user_id = NULL — never a claimed identity.
+    """
+    auth = request.headers.get("authorization", "")
+    if not auth.lower().startswith("bearer "):
+        return None
+    try:
+        from ..auth import _verify_clerk_jwt
+
+        payload = _verify_clerk_jwt(auth[7:].strip())
+    except Exception:
+        return None
+    sub = payload.get("sub")
+    return sub[:128] if sub else None
 
 
 def build_event_row(body: VisitorEventCreate, request: Request) -> dict[str, Any]:

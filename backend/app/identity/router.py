@@ -66,6 +66,14 @@ def _token_err(e: tokens.TokenError) -> HTTPException:
 def signup(request: Request, body: SignupIn, db: Client = Depends(get_db)):
     try:
         return service.signup(db, body.email, body.password, body.org_name)
+    except service.ConflictError as e:
+        # TW-1327: duplicates (including the lost race) are 409.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except service.ValidationError as e:
+        # TW-1327: validation failures are 400, never 401.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)
+        )
     except tokens.TokenError as e:
         raise _token_err(e)
 
