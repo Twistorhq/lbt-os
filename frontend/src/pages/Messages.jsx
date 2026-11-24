@@ -524,20 +524,26 @@ function OfficePulseRail({ activeChannel, messageCount, bots, onMentionBot }) {
   )
 }
 
-function NewChannelModal({ onClose, onCreate }) {
+export function NewChannelModal({ onClose, onCreate }) {
   const [name, setName] = useState('')
   const [type, setType] = useState('team')
   const [desc, setDesc] = useState('')
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
 
   const handleSubmit = async (e) => {
     e.preventDefault()
     if (!name.trim()) return
     setLoading(true)
+    setError('')
     try {
       await onCreate({ name, channel_type: type, description: desc || undefined })
       onClose()
-    } catch {}
+    } catch (err) {
+      // TW-1322: this catch used to swallow the failure whole — the modal
+      // just sat there. Surface the reason; the entries stay put.
+      setError(err?.response?.data?.detail || 'Could not open the room. Your entries are still here. Try again.')
+    }
     setLoading(false)
   }
 
@@ -567,6 +573,11 @@ function NewChannelModal({ onClose, onCreate }) {
               placeholder="What should this room keep moving?"
               className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-slate-950 text-sm placeholder-slate-400 focus:outline-none focus:border-amber-300" />
           </div>
+          {error && (
+            <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+              {error}
+            </div>
+          )}
           <div className="flex gap-3 pt-2">
             <button type="button" onClick={onClose}
               className="flex-1 px-4 py-2 rounded-xl border border-slate-200 text-slate-500 hover:text-slate-950 hover:bg-slate-50 text-sm transition-colors">
@@ -603,6 +614,7 @@ export default function Messages() {
   const [showGif, setShowGif] = useState(false)
   const [showNewChannel, setShowNewChannel] = useState(false)
   const [uploadingFile, setUploadingFile] = useState(false)
+  const [uploadError, setUploadError] = useState('')
 
   const { data: botCatalog } = useQuery({
     queryKey: ['message-bots'],
@@ -675,7 +687,9 @@ export default function Messages() {
   const handleSend = () => {
     const content = draft.trim()
     if (!content && !gifPreview && pendingFiles.length === 0) return
-    if (sendMutation.isLoading) return
+    // TW-1322: mutations expose isPending in React Query v5 — the old
+    // isLoading check was always undefined, so this guard never fired.
+    if (sendMutation.isPending) return
 
     sendMutation.mutate({
       content,
@@ -697,12 +711,15 @@ export default function Messages() {
     const files = Array.from(e.target.files || [])
     if (files.length === 0) return
     setUploadingFile(true)
+    setUploadError('')
     for (const file of files.slice(0, 5)) {
       try {
         const res = await messagesApi.uploadFile(activeChannelId, file)
         setPendingFiles(prev => [...prev, res.data])
       } catch {
-        // upload failed — file input cleared below, user can retry
+        // TW-1322: name the file that failed — a silent skip left the user
+        // believing the attachment was part of the message.
+        setUploadError(`${file.name} did not upload. Try attaching it again.`)
       }
     }
     setUploadingFile(false)
@@ -880,6 +897,14 @@ export default function Messages() {
               </div>
             )}
 
+            {/* TW-1322: failed sends/uploads used to be invisible. The draft
+                and pending files are preserved on failure; say so. */}
+            {(sendMutation.isError || uploadError) && (
+              <div role="alert" className="mb-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                {uploadError || 'That message did not send. Your draft is still here. Try again.'}
+              </div>
+            )}
+
             {/* GIF preview */}
             {gifPreview && (
               <div className="relative inline-block mb-2">
@@ -961,13 +986,13 @@ export default function Messages() {
               {/* Send button */}
               <button
                 onClick={handleSend}
-                disabled={(!draft.trim() && !gifPreview && pendingFiles.length === 0) || sendMutation.isLoading}
+                disabled={(!draft.trim() && !gifPreview && pendingFiles.length === 0) || sendMutation.isPending}
                 className={`h-10 w-10 rounded-xl flex items-center justify-center text-white transition-all ${
                   aiMode
                     ? 'bg-sky-600 hover:bg-sky-500'
                     : 'bg-slate-950 hover:bg-slate-800'
                 } disabled:opacity-30 disabled:cursor-not-allowed`}>
-                {sendMutation.isLoading ? (
+                {sendMutation.isPending ? (
                   <span className="animate-spin text-sm">⟳</span>
                 ) : (
                   <span className="text-sm">↑</span>
