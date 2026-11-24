@@ -1,9 +1,13 @@
 # Prepared by Twistor Holdings LLC
 # TW-488: lbt-os backend on Fly.io free tier ($0).
+# TW-1322: app renamed to twistor-trades-backend. The old name,
+# lbt-os-backend, is registered to a third party (Fly API returns 403
+# for it; it is NOT ours to reclaim). twistor-trades-backend returned
+# 404 (unclaimed) on 2026-11-24 and is not in our org's app list.
 # Deploy: flyctl launch --no-deploy (first time) then flyctl deploy
-# Secrets: flyctl secrets set KEY=value (see docs/deployment.md)
+# Secrets: flyctl secrets set KEY=value (see docs/deploy-package-tw1322.md)
 
-app = "lbt-os-backend"
+app = "twistor-trades-backend"
 primary_region = "den"  # Denver — closest to home
 
 [build]

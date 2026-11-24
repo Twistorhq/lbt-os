@@ -21,6 +21,30 @@ log = logging.getLogger(__name__)
 stripe.api_key = settings.stripe_secret_key
 
 
+def _stripe_field(obj, key, default=None):
+    """Read a field from a Stripe object or a plain dict.
+
+    stripe-python >= 11 StripeObjects are NOT dicts: .get() raises
+    AttributeError on them (see the note in verify_checkout_session).
+    Attribute access works on StripeObjects, .get() works on dicts,
+    and test doubles may offer either — so try attribute access first,
+    then dict access, then item access. (TW-1322: the webhook path
+    missed this migration and every production webhook 500'd before
+    dispatch, so trial/payment sync never landed.)
+    """
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    value = getattr(obj, key, None)
+    if value is not None:
+        return value
+    try:
+        return obj[key]
+    except Exception:
+        return default
+
+
 def _configured_price_id(plan: str) -> str:
     price_id = PLAN_PRICE_MAP.get(plan)
     if not price_id:
@@ -271,8 +295,9 @@ def sync_subscription(db: Client, subscription: stripe.Subscription) -> None:
     Sync a Stripe subscription to the organizations table.
     Called from the webhook handler on created/updated/checkout events.
     """
-    org_id = subscription.metadata.get("lbt_org_id")
-    plan   = subscription.metadata.get("plan", "basic")
+    metadata = _stripe_field(subscription, "metadata") or {}
+    org_id = _stripe_field(metadata, "lbt_org_id")
+    plan   = _stripe_field(metadata, "plan", "basic") or "basic"
 
     if not org_id:
         log.warning("sync_subscription_missing_org_id", extra={"sub_id": getattr(subscription, "id", None)})
@@ -287,10 +312,11 @@ def sync_subscription(db: Client, subscription: stripe.Subscription) -> None:
         "incomplete":         "inactive",
         "incomplete_expired": "inactive",
     }
-    internal_status = status_map.get(subscription.status, "inactive")
+    internal_status = status_map.get(_stripe_field(subscription, "status"), "inactive")
+    sub_id = _stripe_field(subscription, "id")
 
     db.table("organizations").update({
-        "stripe_subscription_id": subscription.id,
+        "stripe_subscription_id": sub_id,
         "subscription_status":    internal_status,
         "plan":                   plan,
     }).eq("id", org_id).execute()
@@ -301,6 +327,6 @@ def sync_subscription(db: Client, subscription: stripe.Subscription) -> None:
             "org_id": org_id,
             "plan": plan,
             "status": internal_status,
-            "sub_id": subscription.id,
+            "sub_id": sub_id,
         },
     )

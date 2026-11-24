@@ -1,5 +1,13 @@
 # LBT OS — Deployment Guide
 
+> **TW-1322 (2026-11-24):** For the Twistor Trades production launch,
+> use `docs/deploy-package-tw1322.md` instead of this guide's Fly and
+> secrets sections. This guide predates the flat Trades pricing: it
+> names the retired legacy price env vars, omits the required Trades
+> price IDs, and uses the old Fly app name (`lbt-os-backend`), which
+> is now registered to a third party. The staged app name is
+> `twistor-trades-backend`.
+
 ## Prerequisites
 
 - Supabase project (free tier works for MVP)
