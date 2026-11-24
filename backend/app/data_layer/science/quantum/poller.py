@@ -73,16 +73,25 @@ class QuantumPoller:
         store: FileBronzeStore,
         account_basis: str,
         vendor: str = "ibm",
+        source: str | None = None,
+        endpoint_prefix: str = "/backends",
     ) -> None:
-        if account_basis not in ("payg", "open"):
+        if account_basis not in ("payg", "open", "published"):
             raise ValueError(
-                f"account_basis must be 'payg' or 'open', got {account_basis!r}"
+                "account_basis must be 'payg', 'open', or 'published', "
+                f"got {account_basis!r}"
             )
         self.transport = transport
         self.store = store
         self.account_basis = account_basis
         self.vendor = vendor
-        self.purpose = "production" if account_basis == "payg" else "code-test"
+        self.source = source
+        self.endpoint_prefix = endpoint_prefix
+        self.purpose = {
+            "payg": "production",
+            "open": "code-test",
+            "published": "published-snapshot",
+        }[account_basis]
 
     def run(self, device_filter: list[str] | None = None) -> PollRunResult:
         names = self.transport.list_backends()
@@ -113,8 +122,9 @@ class QuantumPoller:
                     kind=kind,
                     payload=json.dumps(doc).encode(),
                     retrieved_at=now,
-                    source=SOURCE_IBM if self.vendor == "ibm" else self.vendor,
-                    endpoint=f"/backends/{name}",
+                    source=self.source
+                    or (SOURCE_IBM if self.vendor == "ibm" else self.vendor),
+                    endpoint=f"{self.endpoint_prefix}/{name}",
                     account_basis=self.account_basis,
                 )
                 (result.captured if res.stored else result.skipped).append(res)

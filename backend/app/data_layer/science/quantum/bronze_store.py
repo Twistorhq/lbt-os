@@ -139,11 +139,19 @@ class FileBronzeStore:
         endpoint: str,
         account_basis: str,
     ) -> CaptureResult:
-        if account_basis not in ("payg", "open"):
+        if account_basis not in ("payg", "open", "published"):
             raise ValueError(
-                f"account_basis must be 'payg' or 'open', got {account_basis!r}"
+                "account_basis must be 'payg', 'open', or 'published', "
+                f"got {account_basis!r}"
             )
-        purpose = "production" if account_basis == "payg" else "code-test"
+        purpose = {
+            "payg": "production",
+            "open": "code-test",
+            # TW-1329: credential-free published snapshots (qiskit fake
+            # provider). Stamped distinctly so they can never be read
+            # as account telemetry.
+            "published": "published-snapshot",
+        }[account_basis]
         canonical = _canonical(payload)
         content_hash = hashlib.sha256(canonical).hexdigest()
         artifact_key = f"q-{content_hash[:24]}"
