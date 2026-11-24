@@ -6,6 +6,7 @@ from typing import Any
 
 from supabase import Client
 
+from ..database import is_unique_violation
 from .templates import get_template
 
 DEFAULT_LEAD_SOURCES = ["referral", "website", "google", "social", "yelp", "other"]
@@ -261,15 +262,20 @@ def bootstrap_demo_org(
     state: str = "CO",
     seed: int = 42,
 ) -> dict[str, Any]:
-    existing = (
+    # TW-1323 (Rex F1): defensive read (oldest row wins, never
+    # maybe_single) + conflict-safe insert, same as create_organization.
+    existing_rows = (
         db.table("organizations")
         .select("*")
         .eq("clerk_user_id", user_id)
-        .maybe_single()
+        .order("created_at")
+        .limit(1)
         .execute()
-    )
-    if existing is not None and existing.data:
-        org = (
+    ).data
+    existing = existing_rows[0] if existing_rows else None
+
+    def _apply_demo_profile(org_id: str) -> dict[str, Any]:
+        return (
             db.table("organizations")
             .update({
                 "name": name,
@@ -278,24 +284,43 @@ def bootstrap_demo_org(
                 "state": state,
                 "onboarding_complete": True,
             })
-            .eq("id", existing.data["id"])
+            .eq("id", org_id)
             .execute()
         ).data[0]
+
+    if existing is not None:
+        org = _apply_demo_profile(existing["id"])
         reset_org_operating_data(db, org["id"])
     else:
-        org = (
-            db.table("organizations")
-            .insert({
-                "clerk_user_id": user_id,
-                "clerk_org_id": user_id,
-                "name": name,
-                "industry": industry,
-                "city": city,
-                "state": state,
-                "onboarding_complete": True,
-            })
-            .execute()
-        ).data[0]
+        try:
+            org = (
+                db.table("organizations")
+                .insert({
+                    "clerk_user_id": user_id,
+                    "clerk_org_id": user_id,
+                    "name": name,
+                    "industry": industry,
+                    "city": city,
+                    "state": state,
+                    "onboarding_complete": True,
+                })
+                .execute()
+            ).data[0]
+        except Exception as exc:
+            if not is_unique_violation(exc):
+                raise
+            raced_rows = (
+                db.table("organizations")
+                .select("*")
+                .eq("clerk_user_id", user_id)
+                .order("created_at")
+                .limit(1)
+                .execute()
+            ).data
+            if not raced_rows:
+                raise
+            org = _apply_demo_profile(raced_rows[0]["id"])
+            reset_org_operating_data(db, org["id"])
 
     seed_summary = seed_org_data(db, org["id"], industry, seed=seed)
     return {"organization": org, "seed_summary": seed_summary}

@@ -3,7 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..auth import AuthContext, UserContext, get_auth, get_user
-from ..database import get_db
+from ..database import get_db, is_unique_violation
 from ..models.organization import (
     DemoBootstrapRequest,
     DemoReseedRequest,
@@ -30,6 +30,24 @@ def _safe_count(db, table: str, org_id: str) -> int:
         raise
 
 
+def _get_org_for_user(db, user_id: str) -> dict | None:
+    """Oldest org for a Clerk user, or None.
+
+    TW-1323 (Rex F1): deliberately NOT maybe_single() — duplicate
+    rows in pre-migration data must not raise PGRST116 and wedge
+    every route that resolves the user's org.
+    """
+    rows = (
+        db.table("organizations")
+        .select("*")
+        .eq("clerk_user_id", user_id)
+        .order("created_at")
+        .limit(1)
+        .execute()
+    ).data
+    return rows[0] if rows else None
+
+
 @router.post("", status_code=201)
 def create_organization(
     body: OrgCreate,
@@ -40,24 +58,29 @@ def create_organization(
     Idempotent — returns existing org if already created.
     """
     db = get_db()
-    existing = (
-        db.table("organizations")
-        .select("*")
-        .eq("clerk_user_id", user.user_id)
-        .maybe_single()
-        .execute()
-    )
-    if existing is not None and existing.data:
-        return existing.data
+    existing = _get_org_for_user(db, user.user_id)
+    if existing is not None:
+        return existing
 
-    result = db.table("organizations").insert({
-        "clerk_user_id": user.user_id,
-        "clerk_org_id":  user.user_id,
-        "name":          body.name,
-        "industry":      body.industry,
-        "city":          body.city,
-        "state":         body.state,
-    }).execute()
+    try:
+        result = db.table("organizations").insert({
+            "clerk_user_id": user.user_id,
+            "clerk_org_id":  user.user_id,
+            "name":          body.name,
+            "industry":      body.industry,
+            "city":          body.city,
+            "state":         body.state,
+        }).execute()
+    except Exception as exc:
+        # TW-1323: a raced second submit (double-click, retry, two
+        # tabs) loses to the UNIQUE index — that is the idempotent
+        # outcome, not a 500. Return the org that won the race.
+        if not is_unique_violation(exc):
+            raise
+        existing = _get_org_for_user(db, user.user_id)
+        if existing is None:
+            raise
+        return existing
     return result.data[0]
 
 
@@ -107,15 +130,9 @@ def bootstrap_demo(
         raise HTTPException(status_code=404, detail=f"No template for industry '{body.industry}'")
 
     db = get_db()
-    existing = (
-        db.table("organizations")
-        .select("id, name")
-        .eq("clerk_user_id", user.user_id)
-        .maybe_single()
-        .execute()
-    )
-    if existing is not None and existing.data:
-        org_id = existing.data["id"]
+    existing = _get_org_for_user(db, user.user_id)
+    if existing is not None:
+        org_id = existing["id"]
         activity_counts = {
             "leads": _safe_count(db, "leads", org_id),
             "customers": _safe_count(db, "customers", org_id),

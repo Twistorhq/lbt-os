@@ -5,6 +5,7 @@ Derives the JWKS URL from the publishable key so no secret key is needed
 for token verification — uses Clerk's standard .well-known endpoint.
 """
 import base64
+import logging
 import threading
 import time
 from typing import Annotated
@@ -19,6 +20,8 @@ from .config import settings
 from .database import get_db
 
 bearer_scheme = HTTPBearer()
+
+_log = logging.getLogger(__name__)
 
 _jwks_cache: dict = {}
 _jwks_fetched_at: float = 0
@@ -194,26 +197,41 @@ async def get_auth(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token missing sub claim.")
 
     db = get_db()
+    # TW-1323 (Rex F1): never maybe_single() here. Duplicate org rows
+    # for one clerk_user_id (possible in pre-migration data) made
+    # maybe_single raise PGRST116 and 500 EVERY authed route,
+    # including the recovery path. Fail loud-but-safe instead: log the
+    # duplicate state and resolve to the OLDEST org until the data is
+    # cleaned and the partial UNIQUE index lands.
     result = (
         db.table("organizations")
         .select("id, plan, subscription_status, stripe_subscription_id")
         .eq("clerk_user_id", user_id)
-        .maybe_single()
+        .order("created_at")
+        .limit(2)
         .execute()
     )
-
-    if result is None or not result.data:
+    rows = result.data or []
+    if not rows:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="No organization found. Complete onboarding first.",
         )
+    if len(rows) > 1:
+        _log.error(
+            "TW-1323: duplicate organizations for clerk_user_id=%s; "
+            "resolving to oldest org %s — dedupe required",
+            user_id,
+            rows[0]["id"],
+        )
+    org = rows[0]
 
     return AuthContext(
         user_id=user_id,
-        org_id=result.data["id"],
-        plan=result.data.get("plan", "basic"),
-        subscription_status=result.data.get("subscription_status", "inactive"),
-        stripe_subscription_id=result.data.get("stripe_subscription_id"),
+        org_id=org["id"],
+        plan=org.get("plan", "basic"),
+        subscription_status=org.get("subscription_status", "inactive"),
+        stripe_subscription_id=org.get("stripe_subscription_id"),
         # TW-484: owner SSO — cached lookup, not a Clerk call per request.
         is_owner=resolve_owner_status(user_id),
     )

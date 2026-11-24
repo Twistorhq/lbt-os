@@ -21,6 +21,7 @@ from ..auth import AuthContext, get_auth, get_clerk_user_email
 from ..config import settings
 from ..database import get_db
 from ..services.stripe_service import (
+    _stripe_field,
     claim_webhook_event,
     create_checkout_session,
     create_portal_session,
@@ -118,8 +119,10 @@ async def stripe_webhook(request: Request):
         log.warning("webhook_signature_invalid", extra={"sig_present": bool(sig_header)})
         raise HTTPException(status_code=400, detail="Invalid Stripe signature.")
 
-    event_id   = event.get("id", "unknown")
-    event_type = event.get("type", "unknown")
+    # TW-1322: handle_webhook returns a stripe.Event; stripe >= 11
+    # StripeObjects raise on .get(), so read fields via _stripe_field.
+    event_id   = _stripe_field(event, "id", "unknown") or "unknown"
+    event_type = _stripe_field(event, "type", "unknown") or "unknown"
 
     log.info("webhook_received", extra={"event_id": event_id, "event_type": event_type})
 
@@ -168,23 +171,23 @@ def _dispatch(db, event_type: str, event: dict) -> None:
 
     elif event_type == "customer.subscription.deleted":
         sub    = event["data"]["object"]
-        org_id = sub.get("metadata", {}).get("lbt_org_id")
+        org_id = _stripe_field(_stripe_field(sub, "metadata") or {}, "lbt_org_id")
         if org_id:
             db.table("organizations").update({
                 "subscription_status": "inactive",
                 "plan": "basic",
             }).eq("id", org_id).execute()
         else:
-            log.warning("subscription_deleted_no_org", extra={"sub_id": sub.get("id")})
+            log.warning("subscription_deleted_no_org", extra={"sub_id": _stripe_field(sub, "id")})
 
     elif event_type == "checkout.session.completed":
         session = event["data"]["object"]
-        sub_id  = session.get("subscription")
+        sub_id  = _stripe_field(session, "subscription")
         if sub_id:
             sub = stripe.Subscription.retrieve(sub_id)
             sync_subscription(db, sub)
         else:
-            log.warning("checkout_completed_no_subscription", extra={"session_id": session.get("id")})
+            log.warning("checkout_completed_no_subscription", extra={"session_id": _stripe_field(session, "id")})
 
     else:
         log.debug("webhook_unhandled_type", extra={"event_type": event_type})
