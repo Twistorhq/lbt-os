@@ -407,9 +407,12 @@ function RoadmapMarquee() {
   )
 }
 
+// TW-1322: the section clips overflow like the hero/pricing sections —
+// the DepthStage scale on the step cards otherwise bleeds ~14px past
+// phone viewports and gives the page a horizontal scroll.
 function HowItWorks() {
   return (
-    <section id="how-it-works" className="relative bg-sofrito-950 py-24 sm:py-32" aria-labelledby="hiw-heading">
+    <section id="how-it-works" className="relative overflow-hidden bg-sofrito-950 py-24 sm:py-32" aria-labelledby="hiw-heading">
       <div className="mx-auto max-w-7xl px-6 xl:px-8">
         <Reveal>
           <div className="tt-kicker text-gold-400">How it works</div>

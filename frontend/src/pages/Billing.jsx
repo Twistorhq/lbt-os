@@ -98,40 +98,43 @@ export default function Billing() {
 
       {/* ── Stripe checkout return banner ── */}
       {(upgradedPlan || checkoutSessionId) && !bannerDismissed && (() => {
-        // Verification error → degrade gracefully (Stripe redirect already confirms payment)
+        // TW-1322: success copy only after the backend confirms. Landing
+        // back on this page from Stripe (the ?upgraded= param, or even a
+        // session_id) is not confirmation by itself, and a failed
+        // verification call must never read as "payment received". The
+        // plan itself activates via webhook regardless of this banner;
+        // until the session check succeeds, the banner says so honestly.
         const isVerified   = checkoutStatus.isSuccess
-        const isVerifying  = checkoutStatus.isPending
-        // Treat any verification failure as a soft success: plan will sync via webhook
-        const softSuccess  = checkoutStatus.isError || (!checkoutSessionId && upgradedPlan)
+        const isVerifying  = Boolean(checkoutSessionId) && checkoutStatus.isPending
         const displayPlan  = checkoutStatus.data?.plan || upgradedPlan
         const displayLabel = plans.find((p) => p.key === displayPlan)?.name
 
         return (
           <section className={`rounded-2xl border px-6 py-5 flex items-start gap-4 ${
-            isVerifying ? 'border-blue-200 bg-blue-50' : 'border-emerald-200 bg-emerald-50'
+            isVerified ? 'border-emerald-200 bg-emerald-50' : 'border-blue-200 bg-blue-50'
           }`}>
             {/* Icon */}
             <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full font-bold text-lg ${
-              isVerifying ? 'bg-blue-100 text-blue-600' : 'bg-emerald-100 text-emerald-700'
+              isVerified ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-600'
             }`}>
-              {isVerifying
-                ? <span className="inline-block animate-spin text-base">⟳</span>
-                : '✓'}
+              {isVerified
+                ? '✓'
+                : <span className="inline-block animate-spin text-base">⟳</span>}
             </div>
 
             {/* Message */}
             <div className="flex-1 min-w-0">
-              <div className={`font-semibold ${isVerifying ? 'text-blue-900' : 'text-emerald-900'}`}>
-                {isVerifying
-                  ? 'Activating your plan…'
-                  : displayLabel ? `Welcome to ${displayLabel}!` : 'Payment received!'}
+              <div className={`font-semibold ${isVerified ? 'text-emerald-900' : 'text-blue-900'}`}>
+                {isVerified
+                  ? displayLabel ? `Welcome to ${displayLabel}!` : 'Payment confirmed!'
+                  : 'Activating your plan…'}
               </div>
-              <p className={`mt-1 text-sm leading-6 ${isVerifying ? 'text-blue-700' : 'text-emerald-700'}`}>
-                {isVerifying
-                  ? 'Confirming with Stripe (this only takes a moment).'
-                  : isVerified
-                    ? 'Verified with Stripe. Your paid features are active now.'
-                    : 'Your payment went through. Your plan will update momentarily. Refresh if it takes more than a minute.'}
+              <p className={`mt-1 text-sm leading-6 ${isVerified ? 'text-emerald-700' : 'text-blue-700'}`}>
+                {isVerified
+                  ? 'Verified with Stripe. Your paid features are active now.'
+                  : isVerifying
+                    ? 'Confirming with Stripe (this only takes a moment).'
+                    : 'Stripe has not confirmed yet. Your plan activates automatically as soon as confirmation lands, and this page refreshes on its own. If it takes more than a few minutes, reach out and we will check on it.'}
               </p>
             </div>
 
@@ -162,6 +165,12 @@ export default function Billing() {
           )}
         </div>
       </section>
+
+      {portal.isError && (
+        <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-700">
+          {portal.error?.response?.data?.detail || 'Could not open the billing portal. Try again.'}
+        </div>
+      )}
 
       <section className="grid gap-5 xl:grid-cols-2">
         {plans.map((plan) => {

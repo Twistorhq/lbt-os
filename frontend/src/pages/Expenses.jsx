@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { expensesApi } from '../lib/api'
+import { SAMPLE_WRITE_BLOCKED } from '../lib/sampleMode'
 import DataTable from '../components/ui/DataTable'
 import Modal from '../components/ui/Modal'
 import { format } from 'date-fns'
@@ -129,6 +130,13 @@ export default function Expenses() {
               )}
             </div>
           </div>
+          {/* TW-1322: surface save failures (was silent). Entries stay in
+              the form; sample-mode blocks route to sign-in instead. */}
+          {save.isError && save.error?.code !== SAMPLE_WRITE_BLOCKED && (
+            <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-700">
+              {save.error?.response?.data?.detail || 'Could not save. Your entries are still here. Check your connection and try again.'}
+            </div>
+          )}
           <div className="flex gap-3 justify-end pt-2">
             <button type="button" className="btn-secondary" onClick={closeModal}>Cancel</button>
             <button type="submit" className="btn-primary" disabled={save.isPending}>

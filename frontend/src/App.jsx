@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom'
+import { Routes, Route, Navigate, Link, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth, SignIn, SignUp } from '@clerk/clerk-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { setAuthToken } from './lib/api'
@@ -47,13 +47,16 @@ function AuthSync() {
   return null
 }
 
-function RequireAuth({ children }) {
+export function RequireAuth({ children }) {
   const { getToken, isLoaded, isSignedIn } = useAuth()
   const [tokenReady, setTokenReady] = useState(false)
+  const [tokenError, setTokenError] = useState(false)
+  const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
     let cancelled = false
     setTokenReady(false)
+    setTokenError(false)
 
     if (!isLoaded || !isSignedIn) return
 
@@ -64,13 +67,15 @@ function RequireAuth({ children }) {
         setTokenReady(true)
       })
       .catch(() => {
-        if (!cancelled) setTokenReady(false)
+        // TW-1322: this catch used to just reset tokenReady, leaving the
+        // user on an endless "Loading..." with no way out. Surface it.
+        if (!cancelled) setTokenError(true)
       })
 
     return () => {
       cancelled = true
     }
-  }, [getToken, isLoaded, isSignedIn])
+  }, [getToken, isLoaded, isSignedIn, attempt])
 
   if (!isLoaded) {
     return (
@@ -80,6 +85,33 @@ function RequireAuth({ children }) {
     )
   }
   if (!isSignedIn) return <Navigate to="/sign-in" replace />
+  if (tokenError) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-gray-50 p-6">
+        <div className="w-full max-w-sm rounded-2xl border border-rose-200 bg-white p-6 text-center shadow-sm">
+          <h1 className="text-base font-semibold text-gray-900">We could not finish signing you in</h1>
+          <p className="mt-2 text-sm leading-6 text-gray-500">
+            Your session token did not load. Nothing was changed. Try again, or sign in once more.
+          </p>
+          <div className="mt-5 flex flex-wrap justify-center gap-3">
+            <button
+              type="button"
+              onClick={() => setAttempt((a) => a + 1)}
+              className="rounded-full bg-slate-950 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800"
+            >
+              Try again
+            </button>
+            <Link
+              to="/sign-in"
+              className="rounded-full border border-slate-200 px-5 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+            >
+              Back to sign in
+            </Link>
+          </div>
+        </div>
+      </div>
+    )
+  }
   if (!tokenReady) {
     return (
       <div className="flex h-screen items-center justify-center text-gray-400 text-sm">

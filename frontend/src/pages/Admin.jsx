@@ -50,35 +50,47 @@ function StatusBadge({ status }) {
 function PlanEditor({ org, onSave }) {
   const [plan, setPlan] = useState(org.plan ?? 'basic')
   const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
 
   async function save() {
     setSaving(true)
+    setError('')
     try {
       await adminApi.updatePlan(org.id, plan)
       onSave(org.id, { plan })
     } catch {
-      /* errors surfaced by parent */
+      // TW-1322: the old comment claimed the parent surfaces this error —
+      // it never did, and the select kept showing the unsaved plan as if
+      // it had stuck. Roll the select back to the server's plan and say
+      // the save failed, inline.
+      setPlan(org.plan ?? 'basic')
+      setError('Save failed. Plan unchanged.')
     } finally {
       setSaving(false)
     }
   }
 
   return (
-    <div className="flex items-center gap-2">
-      <select
-        className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-brand-500"
-        value={plan}
-        onChange={(e) => setPlan(e.target.value)}
-      >
-        {PLAN_OPTIONS.map((p) => <option key={p} value={p}>{p}</option>)}
-      </select>
-      <button
-        onClick={save}
-        disabled={saving || plan === org.plan}
-        className="rounded-lg bg-brand-600 px-2.5 py-1 text-xs font-semibold text-white disabled:opacity-40 hover:bg-brand-700 transition-colors"
-      >
-        {saving ? '…' : 'Save'}
-      </button>
+    <div>
+      <div className="flex items-center gap-2">
+        <select
+          className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-brand-500"
+          value={plan}
+          onChange={(e) => setPlan(e.target.value)}
+        >
+          {PLAN_OPTIONS.map((p) => <option key={p} value={p}>{p}</option>)}
+        </select>
+        <button
+          onClick={save}
+          disabled={saving || plan === org.plan}
+          className="rounded-lg bg-brand-600 px-2.5 py-1 text-xs font-semibold text-white disabled:opacity-40 hover:bg-brand-700 transition-colors"
+        >
+          {saving ? '…' : 'Save'}
+        </button>
+      </div>
+      {error && (
+        <p role="alert" className="mt-1 text-xs font-medium text-rose-600">{error}</p>
+      )}
     </div>
   )
 }

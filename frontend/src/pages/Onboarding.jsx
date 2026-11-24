@@ -101,6 +101,18 @@ export default function Onboarding() {
     enabled: Boolean(industry) && industry !== 'other',
   })
 
+  // TW-1322: AuthCallback sends a returning user with no stored
+  // return-to back here. If their workspace already exists, offering the
+  // create form again invites a duplicate-workspace submit — replace the
+  // form with a straight path into the app. Fail-open: any doubt (query
+  // pending or failed) shows the normal form. Demo mode is left alone:
+  // replacing a demo is a designed flow with its own confirm step.
+  const { data: workspaceStatus } = useQuery({
+    queryKey: ['workspace-status'],
+    queryFn: () => orgApi.workspaceStatus().then((r) => r.data),
+  })
+  const hasLiveWorkspace = workspaceStatus?.workspace_mode === 'live'
+
   const create = useMutation({
     mutationFn: async () => {
       // Always get a fresh token right before the call — avoids race with AuthSync
@@ -136,6 +148,29 @@ export default function Onboarding() {
       navigate('/app/brief')
     },
   })
+
+  if (hasLiveWorkspace) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-gray-50 p-6">
+        <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+          <div className="flex justify-center">
+            <TwistorMark className="h-10 w-10" />
+          </div>
+          <h1 className="mt-4 text-xl font-semibold text-slate-950">Your workspace is already set up</h1>
+          <p className="mt-2 text-sm leading-6 text-slate-500">
+            You do not need to create it again. Head straight to your Morning Brief.
+          </p>
+          <button
+            type="button"
+            onClick={() => navigate('/app/brief')}
+            className="mt-6 w-full rounded-full bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
+          >
+            Go to my Morning Brief
+          </button>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-screen flex">
@@ -342,7 +377,7 @@ export default function Onboarding() {
               )}
               {create.isError && (
                 <div className="rounded-xl bg-red-50 border border-red-200 p-4 text-sm text-red-700">
-                  {create.error?.response?.data?.detail || 'Could not connect to backend. Is it running on port 8002?'}
+                  {create.error?.response?.data?.detail || 'We could not reach the server. Your entries are still here. Check your connection and try again.'}
                 </div>
               )}
               {launchDemo.isError && (
