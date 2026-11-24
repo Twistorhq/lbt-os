@@ -25,11 +25,21 @@ EXPORT_ROOT="${QUANTUM_EXPORT_ROOT:-$HOME/workspace/twistor-lab/data-layer/vault
 ALERTS_JSONL="${QUANTUM_ALERTS_JSONL:-$HOME/workspace/twistor-lab/data-layer/vault/quantum/_alerts.jsonl}"
 URL="${QUANTUM_CUSTODY_DATABASE_URL:-}"
 
+json_escape() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\r'/\\r}"
+  s="${s//$'\t'/\\t}"
+  printf '%s' "$s"
+}
+
 fail() {
   echo "quantum_custody_export: FAIL: $1" >&2
   mkdir -p "$(dirname "$ALERTS_JSONL")"
   printf '{"channel":"twistor-family-board","owner":"Marcus","technical_responder":"Dre Coleman","provider":"supabase","kind":"export_failure","detail":{"error":"%s"},"raised_at":"%s"}\n' \
-    "$1" "$(date -u +%FT%TZ)" >> "$ALERTS_JSONL"
+    "$(json_escape "$1")" "$(date -u +%FT%TZ)" >> "$ALERTS_JSONL"
   exit 1
 }
 

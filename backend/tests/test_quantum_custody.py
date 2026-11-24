@@ -25,8 +25,11 @@ No network, no real DB: SQLite via the SQLAlchemy mirrors, fixture
 transports, fake boto clients.
 """
 
+import hashlib
 import json
 import os  # noqa: F401  (kept for env-shaped tests)
+import subprocess
+from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine
@@ -399,6 +402,77 @@ def test_alert_kind_constraint(session):
     with pytest.raises(IntegrityError):
         session.commit()
     session.rollback()
+
+
+# ---------------------------------------------------------------------------
+# Mechanic 11: weekly export verification fails on a SHORT dump
+# (TW-1329 Rosa fix round: the count check was one-sided — it failed
+# only when the export held MORE jobs than the live store, so a dump
+# missing rows that existed at export time passed silently.)
+# ---------------------------------------------------------------------------
+def _write_export(root: Path, stamp: str, job_rows: int) -> Path:
+    export_dir = root / f"export-{stamp}"
+    export_dir.mkdir(parents=True)
+    lines = ["COPY public.sci_quantum_jobs (id) FROM stdin;"]
+    lines += [f"job-{i}" for i in range(job_rows)]
+    lines.append("\\.")
+    dump = export_dir / "dump.sql"
+    dump.write_text("\n".join(lines) + "\n")
+    digest = hashlib.sha256(dump.read_bytes()).hexdigest()
+    (export_dir / "SHA256SUMS").write_text(f"{digest}  dump.sql\n")
+    return export_dir
+
+
+def _run_verify_export(root: Path, *, as_of: int, live: int, dump_jobs: int):
+    root.mkdir(parents=True, exist_ok=True)
+    bin_dir = root / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    stub = bin_dir / "psql"
+    stub.write_text(
+        "#!/bin/bash\n"
+        'for a in "$@"; do\n'
+        '  case "$a" in\n'
+        '    *created_at*) echo "$FAKE_AS_OF_COUNT"; exit 0 ;;\n'
+        "  esac\n"
+        "done\n"
+        'echo "$FAKE_LIVE_COUNT"\n'
+    )
+    stub.chmod(0o755)
+    export_root = root / "exports"
+    _write_export(export_root, "20261124T120000Z", dump_jobs)
+    alerts = root / "_alerts.jsonl"
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "quantum_custody_verify_export.sh"
+    )
+    env = dict(os.environ)
+    env.update(
+        PATH=f"{bin_dir}:{env['PATH']}",
+        QUANTUM_EXPORT_ROOT=str(export_root),
+        QUANTUM_ALERTS_JSONL=str(alerts),
+        QUANTUM_CUSTODY_DATABASE_URL="postgres://stub.invalid/custody",
+        FAKE_AS_OF_COUNT=str(as_of),
+        FAKE_LIVE_COUNT=str(live),
+    )
+    proc = subprocess.run(
+        ["bash", str(script)], env=env, capture_output=True, text=True
+    )
+    return proc, alerts
+
+
+def test_verify_export_fails_on_short_dump(tmp_path):
+    # 5 jobs existed when the export was taken; the dump holds only 3.
+    # The old one-sided check passed this silently (3 <= live). It must
+    # exit nonzero and raise the export_failure alert.
+    proc, alerts = _run_verify_export(tmp_path / "short", as_of=5, live=5, dump_jobs=3)
+    assert proc.returncode != 0
+    assert "export_failure" in alerts.read_text()
+    # Control: a complete dump (5 of 5 as of export) that merely trails
+    # the CURRENT live count (8; the store grew after the nightly
+    # export) is healthy and must pass.
+    proc, _ = _run_verify_export(tmp_path / "full", as_of=5, live=8, dump_jobs=5)
+    assert proc.returncode == 0
 
 
 def test_no_hardcoded_credentials_in_job_transports():
