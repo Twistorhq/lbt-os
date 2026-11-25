@@ -16,7 +16,13 @@ from pathlib import Path
 
 import pytest
 
-from app.data_layer.speedstd import corpus, engine, layout, transform
+# TW-1352: the speedstd deps (duckdb, polars) are an optional extra kept in
+# requirements-speedstd.txt. Skip this module cleanly when they are missing
+# instead of erroring collection for the entire backend suite.
+pytest.importorskip("duckdb", reason="requires requirements-speedstd.txt")
+pytest.importorskip("polars", reason="requires requirements-speedstd.txt")
+
+from app.data_layer.speedstd import corpus, engine, layout, transform  # noqa: E402
 
 DEVICES = ["Ames, IA", "Greeley, CO"]
 

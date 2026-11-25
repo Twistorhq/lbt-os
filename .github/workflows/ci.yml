@@ -24,7 +24,10 @@ jobs:
           cache: pip
       - name: Install
         # Ruff is pinned so the lint bar can't drift under future PRs.
-        run: pip install -r requirements.txt pytest ruff==0.16.8
+        # requirements-speedstd.txt carries the TW-840 columnar deps (duckdb,
+        # polars) that tests/test_speedstd.py imports; without it the Test
+        # step dies at collection and zero backend tests run (TW-1352).
+        run: pip install -r requirements.txt -r requirements-speedstd.txt pytest ruff==0.16.8
       - name: Lint
         run: ruff check app tests
       - name: Lint research harvester
